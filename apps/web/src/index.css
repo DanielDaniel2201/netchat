@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #0f172a;
+  background-color: #f3f5f9;
+  font-family:
+    "SF Pro Display",
+    "Aptos",
+    "Segoe UI",
+    "Helvetica Neue",
+    sans-serif;
+  --font-body:
+    "SF Pro Display",
+    "Aptos",
+    "Segoe UI",
+    "Helvetica Neue",
+    sans-serif;
+  --font-mono:
+    "SFMono-Regular",
+    "Cascadia Code",
+    "JetBrains Mono",
+    "Consolas",
+    monospace;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.98), rgba(243, 245, 249, 0.78) 42%, rgba(243, 245, 249, 1) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(243, 245, 249, 0));
+  font-family: var(--font-body);
+  overscroll-behavior: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+#root {
+  height: 100vh;
+  width: 100vw;
+}
+
+.netchat-flow .react-flow__pane {
+  cursor: grab;
+}
+
+.netchat-flow .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+.netchat-flow .react-flow__node {
+  cursor: default;
+}
+
+.canvas-flow .react-flow__node:focus,
+.canvas-flow .react-flow__node:focus-visible {
+  outline: none;
+}
+
+.canvas-flow .react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.canvas-flow .react-flow__background {
+  opacity: 0.86;
+}
+
+.canvas-flow .react-flow__attribution {
+  display: none;
+}

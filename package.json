@@ -1,0 +1,16 @@
+{
+  "name": "netchat",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @netchat/web",
+    "dev:server": "npm run dev --workspace @netchat/server",
+    "dev:daemon": "npm run dev --workspace @netchat/daemon",
+    "check": "npm run check --workspace @netchat/shared && npm run check --workspace @netchat/server && npm run check --workspace @netchat/daemon && npm run check --workspace @netchat/web",
+    "build:web": "npm run build --workspace @netchat/web"
+  }
+}
