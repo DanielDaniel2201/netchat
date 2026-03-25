@@ -1,0 +1,130 @@
+# netchat
+
+## Project Summary
+
+netchat is a Claude Code chat interface built around graph-shaped, non-linear branching.  
+Users can fork from any part of a reply, and each branch is bound to its own Claude session, turning a linear chat into an explorable conversation canvas.
+
+The project is currently moving toward a `local-first localhost web app` model:
+
+- the UI remains a web interface
+- Claude Code runs on the user's local machine
+- important data is stored locally by default
+- a local controller / daemon serves APIs and the UI over `localhost`
+
+## Technical Direction
+
+### Product Shape
+
+- UI: React + Vite
+- Canvas interaction: `@xyflow/react`
+- Local API / controller: Fastify
+- Local runtime bridge: daemon + Claude CLI
+- Shared contracts: `packages/shared`
+- Local persistence: SQLite
+
+### Current Architecture
+
+- `apps/web`
+  - frontend UI
+  - renders the conversation graph, message bubbles, and machine diagnostics
+- `apps/server`
+  - local controller
+  - serves `/api/*`
+  - serves the built web UI
+  - persists the local conversation graph
+- `apps/daemon`
+  - connects to the local Claude Code runtime
+  - handles machine registration, job claiming, and Claude turn execution
+- `packages/shared`
+  - shared schemas, types, graph model, and runtime contracts
+
+### Local-First Storage
+
+Default directory:
+
+```text
+~/.netchat/
+```
+
+Key files:
+
+- `app.db`
+  - conversation history
+  - branches
+  - message graph
+  - branch-to-local-Claude session / machine mapping
+- `machine.json`
+  - daemon machine registration state
+
+## How to Start the Project
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Recommended startup: one-command local app
+
+```bash
+npm run app:local
+```
+
+This command will:
+
+- build the web UI
+- start the local controller
+- start the local daemon
+- prepare local pairing automatically
+- serve the full UI on `localhost`
+
+Default ports:
+
+- controller: `3001`
+- daemon: `4318`
+
+### 3. Optional environment variables
+
+- `PORT`
+  - local controller port
+- `DAEMON_PORT`
+  - local daemon port
+- `NETCHAT_NO_BROWSER=true`
+  - do not open the browser automatically after startup
+- `NETCHAT_SKIP_WEB_BUILD=true`
+  - skip the web build step during repeated local runs
+- `NETCHAT_APP_DB_PATH`
+  - custom path for the local SQLite database
+- `NETCHAT_MACHINE_STATE_PATH`
+  - custom path for local machine state
+
+Example:
+
+```bash
+NETCHAT_NO_BROWSER=true npm run app:local
+```
+
+### 4. Development mode
+
+Start the parts separately:
+
+```bash
+npm run dev:web
+npm run dev:server
+npm run dev:daemon
+```
+
+This is useful when working on a single module, but the recommended day-to-day flow is still:
+
+```bash
+npm run app:local
+```
+
+## Recommended Direction
+
+- prioritize a `localhost web app`
+- prioritize a `local-first` product shape
+- keep the UI on a web stack
+- store data locally by default
+- consider a fuller desktop-style packaging and distribution model later
