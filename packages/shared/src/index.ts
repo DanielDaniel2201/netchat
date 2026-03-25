@@ -84,6 +84,19 @@ export type DaemonDiagnostics = {
   logs: DaemonLogEntry[];
 };
 
+export type ServerDiagnostics = {
+  startedAt: string;
+  jobTimeoutMs: number;
+  onlineThresholdMs: number;
+  pollingIntervalMs: number;
+  machineCount: number;
+  onlineMachineCount: number;
+  pendingJobCount: number;
+  inFlightJobCount: number;
+  lastError: string | null;
+  logs: DaemonLogEntry[];
+};
+
 export type MachineStatus = "online" | "offline";
 
 export type MachineRecord = {

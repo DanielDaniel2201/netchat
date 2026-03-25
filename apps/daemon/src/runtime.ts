@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import {
   ContinueBranchRuntimeRequest,
@@ -13,8 +12,6 @@ import {
 } from "@netchat/shared";
 
 import { resolveClaudeBinaryPath, resolveClaudeWorkingDirectory } from "./claude-config.js";
-
-const execFileAsync = promisify(execFile);
 
 type SessionState = {
   id: string;
@@ -65,11 +62,12 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private readonly cwdResolution = resolveClaudeWorkingDirectory();
   private readonly cwd = this.cwdResolution.workingDirectory;
   private readonly binaryPath = this.binaryResolution.binaryPath;
-  private readonly permissionMode = process.env.NETCHAT_PERMISSION_MODE ?? "bypassPermissions";
+  private readonly permissionMode = process.env.NETCHAT_PERMISSION_MODE?.trim() || null;
   private readonly allowDangerouslySkipPermissions =
-    (process.env.NETCHAT_ALLOW_DANGEROUS ?? "true").toLowerCase() === "true";
-  private readonly settingSources = process.env.NETCHAT_SETTING_SOURCES ?? "user,project,local";
+    process.env.NETCHAT_ALLOW_DANGEROUS?.trim().toLowerCase() === "true";
+  private readonly settingSources = process.env.NETCHAT_SETTING_SOURCES?.trim() || null;
   private readonly machineId = process.env.NETCHAT_MACHINE_ID?.trim() || "machine_local";
+  private readonly timeoutMs = resolveRuntimeTimeoutMs();
 
   getMode(): "claude" {
     return "claude";
@@ -80,25 +78,26 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   }
 
   async runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse> {
-    return this.executePrompt(input.prompt, {
+    return this.executePrompt("root-turn", input.prompt, {
       resume: input.sessionId ?? undefined,
     });
   }
 
   async forkBranch(input: ForkBranchRuntimeRequest): Promise<RuntimeResponse> {
-    return this.executePrompt(input.prompt, {
+    return this.executePrompt("fork-branch", input.prompt, {
       forkSession: true,
       resume: input.sourceSessionId,
     });
   }
 
   async continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse> {
-    return this.executePrompt(input.prompt, {
+    return this.executePrompt("branch-turn", input.prompt, {
       resume: input.sessionId,
     });
   }
 
   private async executePrompt(
+    kind: "root-turn" | "fork-branch" | "branch-turn",
     prompt: string,
     options: {
       resume?: string;
@@ -116,12 +115,26 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     }
 
     const args = this.buildCliArgs(prompt, options);
-    const { stdout, stderr } = await execFileAsync(this.binaryPath, args, {
-      cwd: this.cwd,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-      windowsHide: true,
-    });
+    const startedAtMs = Date.now();
+
+    logRuntime(
+      "info",
+      `Starting ${kind} via Claude CLI (cwd=${this.cwd}, resume=${options.resume ?? "new"}, fork=${options.forkSession ? "yes" : "no"}, timeout=${formatDuration(this.timeoutMs)}, config=${this.describeCliConfig()}).`,
+    );
+
+    let stdout = "";
+    let stderr = "";
+    try {
+      const result = await this.executeCli(args);
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (error) {
+      throw this.formatExecutionError(error, {
+        kind,
+        startedAtMs,
+        options,
+      });
+    }
 
     const parsed = this.parsePrintResult(stdout, stderr);
     if (parsed.type !== "result") {
@@ -143,6 +156,11 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       throw new Error("Claude CLI completed, but no assistant message was available in stdout or transcript.");
     }
 
+    logRuntime(
+      "info",
+      `Claude CLI finished ${kind} in ${formatDuration(Date.now() - startedAtMs)} with session ${sessionId}.`,
+    );
+
     return {
       assistantMessage,
       machineId: this.machineId,
@@ -157,7 +175,11 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       forkSession?: boolean;
     },
   ) {
-    const args = ["-p", "--output-format", "json", "--setting-sources", this.settingSources];
+    const args = ["-p", "--output-format", "json"];
+
+    if (this.settingSources) {
+      args.push("--setting-sources", this.settingSources);
+    }
 
     if (this.permissionMode) {
       args.push("--permission-mode", this.permissionMode);
@@ -179,6 +201,117 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     return args;
   }
 
+  private executeCli(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    if (!this.binaryPath) {
+      throw new Error("Claude binary path is required.");
+    }
+
+    const binaryPath = this.binaryPath;
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(binaryPath, args, {
+        cwd: this.cwd,
+        env: process.env,
+        windowsHide: true,
+      });
+      child.stdin.end();
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      let timedOut = false;
+      const maxBufferBytes = 8 * 1024 * 1024;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, this.timeoutMs);
+
+      const fail = (error: Error & { stdout?: string; stderr?: string; killed?: boolean; signal?: NodeJS.Signals | null; timedOut?: boolean }) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+      };
+
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (Buffer.byteLength(stdout, "utf8") > maxBufferBytes) {
+          const error = new Error("Claude CLI stdout exceeded the maximum buffer size.") as Error & {
+            stdout?: string;
+            stderr?: string;
+          };
+          child.kill();
+          fail(error);
+        }
+      });
+
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+        if (Buffer.byteLength(stderr, "utf8") > maxBufferBytes) {
+          const error = new Error("Claude CLI stderr exceeded the maximum buffer size.") as Error & {
+            stdout?: string;
+            stderr?: string;
+          };
+          child.kill();
+          fail(error);
+        }
+      });
+
+      child.on("error", (error) => {
+        fail(error as Error & { stdout?: string; stderr?: string });
+      });
+
+      child.on("close", (code, signal) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+        if (timedOut) {
+          const error = new Error("Claude CLI execution timed out.") as Error & {
+            stdout?: string;
+            stderr?: string;
+            killed?: boolean;
+            signal?: NodeJS.Signals | null;
+            timedOut?: boolean;
+          };
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.killed = true;
+          error.signal = signal;
+          error.timedOut = true;
+          reject(error);
+          return;
+        }
+
+        if (code === 0) {
+          resolve({ stdout, stderr });
+          return;
+        }
+
+        const error = new Error(
+          `Claude CLI exited with code ${code ?? "unknown"}${signal ? ` (signal: ${signal})` : ""}.`,
+        ) as Error & {
+          stdout?: string;
+          stderr?: string;
+          signal?: NodeJS.Signals | null;
+        };
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.signal = signal;
+        reject(error);
+      });
+    });
+  }
+
   private parsePrintResult(stdout: string, stderr: string): ClaudePrintResult {
     const output = stdout.trim();
     if (!output) {
@@ -190,6 +323,54 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     } catch {
       throw new Error(`Claude CLI returned non-JSON output: ${output}`);
     }
+  }
+
+  private formatExecutionError(
+    error: unknown,
+    context: {
+      kind: "root-turn" | "fork-branch" | "branch-turn";
+      startedAtMs: number;
+      options: {
+        resume?: string;
+        forkSession?: boolean;
+      };
+    },
+  ) {
+    const duration = formatDuration(Date.now() - context.startedAtMs);
+    const execError = error as NodeJS.ErrnoException & {
+      killed?: boolean;
+      signal?: NodeJS.Signals | null;
+      stderr?: string;
+      stdout?: string;
+      timedOut?: boolean;
+    };
+    const stderr = execError.stderr?.trim();
+    const stdout = execError.stdout?.trim();
+    const didTimeout =
+      Boolean(execError.timedOut) ||
+      Boolean(execError.killed && execError.signal) ||
+      /timed out/i.test(execError.message ?? "");
+
+    const message = didTimeout
+      ? [
+          `Claude CLI timed out after ${formatDuration(this.timeoutMs)} while running ${context.kind}.`,
+          `The daemon detected the Claude binary and auth state, but \`claude -p\` did not return any output within the timeout.`,
+          `Try running \`${this.binaryPath} -p "Reply with exactly: ping"\` manually from ${this.cwd} to verify the local Claude Code runtime.`,
+        ].join(" ")
+      : [
+          `Claude CLI failed during ${context.kind} after ${duration}.`,
+          execError.message?.trim() || "Unknown Claude CLI error.",
+          stderr || stdout || "",
+        ]
+          .join(" ")
+          .trim();
+
+    logRuntime(
+      didTimeout ? "error" : "warn",
+      `${message} (resume=${context.options.resume ?? "new"}, fork=${context.options.forkSession ? "yes" : "no"}).`,
+    );
+
+    return new Error(message);
   }
 
   private readAssistantMessageFromTranscript(sessionId: string): string {
@@ -242,6 +423,19 @@ class ClaudeCliRuntime implements RuntimeAdapter {
 
     const fallbackPath = path.join(projectDir, `${sessionId}.jsonl`);
     return existsSync(fallbackPath) ? fallbackPath : null;
+  }
+
+  private describeCliConfig() {
+    const parts = [
+      this.settingSources ? `setting-sources=${this.settingSources}` : "setting-sources=claude-default",
+      this.permissionMode ? `permission-mode=${this.permissionMode}` : "permission-mode=claude-default",
+    ];
+
+    if (this.allowDangerouslySkipPermissions) {
+      parts.push("dangerously-skip-permissions=true");
+    }
+
+    return parts.join(", ");
   }
 }
 
@@ -333,4 +527,41 @@ class MockRuntimeAdapter implements RuntimeAdapter {
 
 function sanitizeProjectPath(value: string) {
   return value.replace(/[^A-Za-z0-9]/g, "-");
+}
+
+function resolveRuntimeTimeoutMs() {
+  const rawValue = Number(process.env.NETCHAT_RUNTIME_TIMEOUT_MS ?? 60000);
+  if (!Number.isFinite(rawValue) || rawValue <= 0) {
+    return 60000;
+  }
+
+  return rawValue;
+}
+
+function logRuntime(level: "info" | "warn" | "error", message: string) {
+  const formatted = `[netchat-daemon][runtime][${level}] ${message}`;
+  if (level === "error") {
+    console.error(formatted);
+    return;
+  }
+
+  if (level === "warn") {
+    console.warn(formatted);
+    return;
+  }
+
+  console.info(formatted);
+}
+
+function formatDuration(durationMs: number) {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+
+  const seconds = durationMs / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+
+  return `${(seconds / 60).toFixed(1)}m`;
 }

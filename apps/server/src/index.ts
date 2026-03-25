@@ -12,6 +12,7 @@ import {
   CreateRootTurnInput,
   ForkBranchRuntimeRequest,
   RootTurnRuntimeRequest,
+  ServerDiagnostics,
   buildForkPrompt,
   completeMachineJobInputSchema,
   createMachineClaimJobInputSchema,
@@ -25,15 +26,29 @@ import {
 } from "@netchat/shared";
 
 import { GraphStore } from "./store.js";
+import { ServerDiagnosticsStore } from "./diagnostics.js";
 import { MachineStore } from "./machine-store.js";
 import { loadLocalEnv } from "./load-env.js";
 
 loadLocalEnv();
 
-const app = Fastify({ logger: true });
+const app = Fastify({
+  logger: false,
+});
 const store = new GraphStore();
 const machines = new MachineStore();
+const diagnostics = new ServerDiagnosticsStore({
+  jobTimeoutMs: machines.getJobTimeoutMs(),
+  onlineThresholdMs: machines.getOnlineThresholdMs(),
+  pollingIntervalMs: machines.getPollingIntervalMs(),
+});
+machines.attachDiagnostics(diagnostics);
 const port = Number(process.env.PORT ?? 3001);
+
+diagnostics.log(
+  "info",
+  `Server booting with job timeout ${machines.getJobTimeoutMs()}ms and machine polling interval ${machines.getPollingIntervalMs()}ms.`,
+);
 
 await app.register(cors, {
   origin: true,
@@ -49,13 +64,20 @@ app.get("/api/machines", async () => {
   return machines.listMachines();
 });
 
+app.get("/api/diagnostics", async (): Promise<ServerDiagnostics> => diagnostics.getSnapshot());
+
 app.post("/api/machines/pairing-sessions", async (request, reply) => {
   const input = createPairingSessionInputSchema.safeParse(request.body);
   if (!input.success) {
     return reply.status(400).send({ error: input.error.flatten() });
   }
 
-  return machines.createPairingSession(input.data.label);
+  const session = machines.createPairingSession(input.data.label);
+  diagnostics.log(
+    "info",
+    `Created pairing code ${session.pairingCode} for ${input.data.label || "unnamed daemon"}.`,
+  );
+  return session;
 });
 
 app.post("/api/daemon/register", async (request, reply) => {
@@ -67,6 +89,10 @@ app.post("/api/daemon/register", async (request, reply) => {
   try {
     return machines.registerMachine(input.data as CreateMachineRegisterInput);
   } catch (error) {
+    diagnostics.log(
+      "warn",
+      `Rejected machine registration for ${input.data.machineName}: ${formatError(error)}`,
+    );
     return reply.status(400).send({ message: formatError(error) });
   }
 });
@@ -126,6 +152,10 @@ app.post("/api/root-turn", async (request, reply) => {
   const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   try {
     const machine = machines.resolveMachine(input.data.machineId ?? rootBranch?.machineId ?? null);
+    diagnostics.log(
+      "info",
+      `Received root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`,
+    );
     const runtime = await machines.enqueueJob(machine.id, {
       kind: "root-turn",
       payload: {
@@ -134,8 +164,14 @@ app.post("/api/root-turn", async (request, reply) => {
       },
     });
 
-    return store.applyRootTurn(input.data.prompt, runtime);
+    const nextSnapshot = store.applyRootTurn(input.data.prompt, runtime);
+    diagnostics.log(
+      "info",
+      `Root turn completed on ${formatMachineLabel(runtime.machineId, machine.name)}. Graph now has ${nextSnapshot.messages.length} messages across ${nextSnapshot.branches.length} branches.`,
+    );
+    return nextSnapshot;
   } catch (error) {
+    diagnostics.log("error", `Root turn failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });
@@ -152,6 +188,10 @@ app.post("/api/branches", async (request, reply) => {
   }
 
   try {
+    diagnostics.log(
+      "info",
+      `Received fork request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${input.data.selectedText.length} selected chars, prompt ${input.data.prompt.length} chars).`,
+    );
     const runtime = await machines.enqueueJob(sourceMessage.machineId, {
       kind: "fork-branch",
       payload: {
@@ -161,8 +201,14 @@ app.post("/api/branches", async (request, reply) => {
       },
     });
 
-    return store.applyBranchCreation(input.data as CreateBranchInput, runtime);
+    const nextSnapshot = store.applyBranchCreation(input.data as CreateBranchInput, runtime);
+    diagnostics.log(
+      "info",
+      `Branch fork completed as session ${runtime.sessionId} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
+    );
+    return nextSnapshot;
   } catch (error) {
+    diagnostics.log("error", `Fork request failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });
@@ -180,6 +226,10 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
   }
 
   try {
+    diagnostics.log(
+      "info",
+      `Received branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`,
+    );
     const runtime = await machines.enqueueJob(branch.machineId, {
       kind: "branch-turn",
       payload: {
@@ -188,14 +238,25 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
       },
     });
 
-    return store.applyBranchTurn(branchId, input.data.prompt, runtime);
+    const nextSnapshot = store.applyBranchTurn(branchId, input.data.prompt, runtime);
+    diagnostics.log(
+      "info",
+      `Branch turn ${branchId} completed on machine ${runtime.machineId}. Branch now has ${nextSnapshot.messages.filter((message) => message.branchId === branchId).length} messages.`,
+    );
+    return nextSnapshot;
   } catch (error) {
+    diagnostics.log("error", `Branch turn failed for ${branchId}: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });
 
 await app.listen({ host: "0.0.0.0", port });
+diagnostics.log("info", `Server listening on port ${port}.`);
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : "Unknown server error";
+}
+
+function formatMachineLabel(machineId: string, machineName: string) {
+  return `${machineName} (${machineId})`;
 }

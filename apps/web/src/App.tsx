@@ -36,6 +36,7 @@ const daemonBaseUrl = import.meta.env.VITE_DAEMON_BASE_URL ?? "http://127.0.0.1:
 const branchMessageGap = 184;
 const branchLaneWidth = 560;
 const branchDrop = 312;
+const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
   sourceMessageId: string;
@@ -143,25 +144,46 @@ function NetchatApp() {
       : Boolean(rootMachine);
 
   const rootTurnMutation = useMutation({
-    mutationFn: (input: CreateRootTurnInput) =>
-      request<GraphSnapshot>("/api/root-turn", {
+    mutationFn: async (input: CreateRootTurnInput) => {
+      logWeb(
+        "info",
+        `Sending root turn (${input.prompt.length} chars) to ${input.machineId ?? "auto-selected machine"}.`,
+      );
+      return request<GraphSnapshot>("/api/root-turn", {
         method: "POST",
         body: JSON.stringify(input),
-      }),
+      });
+    },
     onSuccess: (nextSnapshot) => {
+      logWeb(
+        "info",
+        `Root turn completed. Graph now has ${nextSnapshot.messages.length} messages across ${nextSnapshot.branches.length} branches.`,
+      );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
       setSelectedBranchId(rootBranchId);
     },
+    onError: (error) => {
+      logWeb("error", `Root turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
   });
 
   const branchMutation = useMutation({
-    mutationFn: (input: CreateBranchInput) =>
-      request<GraphSnapshot>("/api/branches", {
+    mutationFn: async (input: CreateBranchInput) => {
+      logWeb(
+        "info",
+        `Forking from message ${input.sourceMessageId} with ${input.selectedText.length} selected chars and ${input.prompt.length} prompt chars.`,
+      );
+      return request<GraphSnapshot>("/api/branches", {
         method: "POST",
         body: JSON.stringify(input),
-      }),
+      });
+    },
     onSuccess: (nextSnapshot) => {
+      logWeb(
+        "info",
+        `Branch fork completed. Graph now has ${nextSnapshot.branches.length} branches.`,
+      );
       queryClient.setQueryData(["graph"], nextSnapshot);
       const newestBranch = nextSnapshot.branches.at(-1);
       if (newestBranch) {
@@ -170,27 +192,50 @@ function NetchatApp() {
       setSelectionMenu(null);
       clearBrowserSelection();
     },
+    onError: (error) => {
+      logWeb("error", `Branch fork failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
   });
 
   const branchTurnMutation = useMutation({
-    mutationFn: (variables: { branchId: string; input: CreateBranchTurnInput }) =>
-      request<GraphSnapshot>(`/api/branches/${variables.branchId}/turns`, {
+    mutationFn: async (variables: { branchId: string; input: CreateBranchTurnInput }) => {
+      logWeb(
+        "info",
+        `Sending branch turn for ${variables.branchId} (${variables.input.prompt.length} chars).`,
+      );
+      return request<GraphSnapshot>(`/api/branches/${variables.branchId}/turns`, {
         method: "POST",
         body: JSON.stringify(variables.input),
-      }),
+      });
+    },
     onSuccess: (nextSnapshot) => {
+      logWeb(
+        "info",
+        `Branch turn completed. Graph now has ${nextSnapshot.messages.length} messages.`,
+      );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
     },
+    onError: (error) => {
+      logWeb("error", `Branch turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
   });
   const pairingMutation = useMutation({
-    mutationFn: () =>
-      request<PairingSession>("/api/machines/pairing-sessions", {
+    mutationFn: async () => {
+      logWeb("info", "Requesting a new daemon pairing code.");
+      return request<PairingSession>("/api/machines/pairing-sessions", {
         method: "POST",
         body: JSON.stringify({
           label: "Local daemon",
         }),
-      }),
+      });
+    },
+    onSuccess: (session) => {
+      logWeb("info", `Generated pairing code ${session.pairingCode} (expires ${session.expiresAt}).`);
+    },
+    onError: (error) => {
+      logWeb("error", `Pairing code generation failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
   });
 
   const isThinking =
@@ -1052,7 +1097,7 @@ function buildRuntimeBadges(
   const statusLabel = machine.status === "online" ? "Online" : "Offline";
   const modeLabel =
     machine.environment.runtimeMode === "claude" ? "Claude Code" : "Mock runtime";
-  const claudeLabel = machine.environment.claudeInstalled ? "Claude ready" : "Claude missing";
+  const claudeLabel = machine.environment.claudeInstalled ? "Claude detected" : "Claude missing";
 
   return [statusLabel, onlineLabel, formatPlatform(machine.environment.platform), modeLabel, claudeLabel];
 }
@@ -1061,7 +1106,7 @@ function buildDaemonBadges(diagnostics: DaemonDiagnostics) {
   return [
     formatDaemonStatus(diagnostics.status),
     `${diagnostics.environment.runtimeMode === "claude" ? "Claude Code" : "Mock runtime"}`,
-    diagnostics.environment.claudeInstalled ? "Claude ready" : "Claude missing",
+    diagnostics.environment.claudeInstalled ? "Claude detected" : "Claude missing",
     diagnostics.serverUrl ? "Server linked" : "Server URL missing",
     diagnostics.pairingCodeConfigured ? "Pairing code set" : "Pairing code missing",
   ];
@@ -1096,14 +1141,14 @@ function buildDaemonSummary(diagnostics: DaemonDiagnostics | undefined, error: u
     return "The daemon is trying to register this machine with the server.";
   }
 
+  if (diagnostics.lastError) {
+    return diagnostics.lastError;
+  }
+
   if (diagnostics.status === "registered" || diagnostics.status === "online") {
     return diagnostics.machineId
       ? `Daemon is registered as ${diagnostics.machineId} and polling the server.`
       : "Daemon is registered and polling the server.";
-  }
-
-  if (diagnostics.lastError) {
-    return diagnostics.lastError;
   }
 
   return "Daemon diagnostics are available.";
@@ -1228,8 +1273,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const payload = await response.text();
-    throw new Error(payload || "Request failed");
+    throw new Error(await readErrorMessage(response, "Request failed"));
   }
 
   return response.json() as Promise<T>;
@@ -1245,9 +1289,48 @@ async function requestDaemon<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const payload = await response.text();
-    throw new Error(payload || "Daemon request failed");
+    throw new Error(await readErrorMessage(response, "Daemon request failed"));
   }
 
   return response.json() as Promise<T>;
+}
+
+async function readErrorMessage(response: Response, fallback: string) {
+  const payload = (await response.text()).trim();
+  if (!payload) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as {
+      error?: unknown;
+      message?: unknown;
+    };
+    if (typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+      return parsed.message.trim();
+    }
+
+    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+      return parsed.error.trim();
+    }
+  } catch {
+    return payload;
+  }
+
+  return payload;
+}
+
+function logWeb(level: "info" | "warn" | "error", message: string) {
+  const formatted = `${webLogPrefix}[${level}] ${message}`;
+  if (level === "error") {
+    console.error(formatted);
+    return;
+  }
+
+  if (level === "warn") {
+    console.warn(formatted);
+    return;
+  }
+
+  console.info(formatted);
 }

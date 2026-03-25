@@ -1,6 +1,7 @@
 import { DaemonDiagnostics, DaemonLogEntry, DaemonLogLevel, DaemonStatus, RuntimeEnvironment, makeId, nowIso } from "@netchat/shared";
 
 const maxLogEntries = 120;
+const daemonLogPrefix = "[netchat-daemon]";
 
 export class DaemonDiagnosticsStore {
   private snapshot: DaemonDiagnostics;
@@ -58,10 +59,6 @@ export class DaemonDiagnosticsStore {
 
   setStatus(status: DaemonStatus, message?: string, level: DaemonLogLevel = "info") {
     this.snapshot.status = status;
-    if (status !== "error") {
-      this.snapshot.lastError = null;
-    }
-
     if (message) {
       this.appendLog(level, message);
     }
@@ -93,6 +90,11 @@ export class DaemonDiagnosticsStore {
     return this.getSnapshot();
   }
 
+  clearError() {
+    this.snapshot.lastError = null;
+    return this.getSnapshot();
+  }
+
   log(level: DaemonLogLevel, message: string) {
     this.appendLog(level, message);
     return this.getSnapshot();
@@ -114,5 +116,21 @@ export class DaemonDiagnosticsStore {
     };
 
     this.snapshot.logs = [entry, ...this.snapshot.logs].slice(0, maxLogEntries);
+    emitConsoleLog(level, message);
   }
+}
+
+function emitConsoleLog(level: DaemonLogLevel, message: string) {
+  const formatted = `${daemonLogPrefix}[${level}] ${message}`;
+  if (level === "error") {
+    console.error(formatted);
+    return;
+  }
+
+  if (level === "warn") {
+    console.warn(formatted);
+    return;
+  }
+
+  console.info(formatted);
 }

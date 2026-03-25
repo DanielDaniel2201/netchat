@@ -17,7 +17,7 @@ import { createRuntimeAdapter } from "./runtime.js";
 applyCliEnvOverrides();
 loadLocalEnv();
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: false });
 const runtime = createRuntimeAdapter();
 const initialEnvironment = await detectRuntimeEnvironment(runtime.getMode(), runtime.getWorkingDirectory());
 const diagnostics = new DaemonDiagnosticsStore(initialEnvironment);

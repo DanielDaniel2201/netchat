@@ -30,7 +30,9 @@ export class MachineClient {
     process.env.NETCHAT_MACHINE_STATE_PATH?.trim() ||
     path.join(os.homedir(), ".netchat", "machine.json");
   private state: MachineState | null = null;
-  private pollTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private claimTimer: NodeJS.Timeout | null = null;
+  private isExecutingJob = false;
 
   constructor(
     private readonly runtime: {
@@ -54,6 +56,7 @@ export class MachineClient {
       recordHeartbeat: (message?: string) => void;
       setStatus: (status: "starting" | "local_only" | "waiting_for_pairing" | "registering" | "registered" | "online" | "error", message?: string, level?: "info" | "warn" | "error") => void;
       recordError: (message: string) => void;
+      clearError: () => void;
     },
   ) {
     this.state = this.readState();
@@ -82,7 +85,8 @@ export class MachineClient {
 
     this.diagnostics?.setStatus("starting", "Daemon machine client starting.");
     await this.ensureRegistration();
-    await this.tick();
+    this.scheduleHeartbeat(0);
+    this.scheduleClaim(0);
   }
 
   private async ensureRegistration() {
@@ -130,7 +134,7 @@ export class MachineClient {
     this.diagnostics?.setStatus("registered");
   }
 
-  private async tick() {
+  private async sendHeartbeat() {
     if (!this.state) {
       return;
     }
@@ -145,8 +149,28 @@ export class MachineClient {
           environment,
         } satisfies CreateMachineHeartbeatInput),
       });
-      this.diagnostics?.recordHeartbeat(`Heartbeat ok for ${this.state.machineId}.`);
+      this.diagnostics?.recordHeartbeat();
       this.diagnostics?.setStatus("online");
+    } catch (error) {
+      await this.handleMachineError(error, "heartbeat");
+    } finally {
+      if (!this.state) {
+        return;
+      }
+
+      this.scheduleHeartbeat(this.state.pollingIntervalMs);
+    }
+  }
+
+  private async pollForJob() {
+    if (!this.state) {
+      return;
+    }
+
+    try {
+      if (this.isExecutingJob) {
+        return;
+      }
 
       const claimed = await this.request<{ job: MachineJob | null }>("/api/daemon/jobs/claim", {
         method: "POST",
@@ -156,43 +180,26 @@ export class MachineClient {
         }),
       });
       this.diagnostics?.recordServerContact(
-        claimed.job
-          ? `Claimed job ${claimed.job.id} (${claimed.job.kind}).`
-          : `Polling server. No queued job for ${this.state.machineId}.`,
+        claimed.job ? `Claimed job ${claimed.job.id} (${claimed.job.kind}).` : undefined,
       );
 
       if (claimed.job) {
-        console.info(`[netchat-daemon] claimed job ${claimed.job.id} (${claimed.job.kind})`);
-        await this.executeJob(claimed.job);
+        this.isExecutingJob = true;
+        this.diagnostics?.log("info", `Executing job ${claimed.job.id} (${claimed.job.kind}) on local runtime.`);
+        try {
+          await this.executeJob(claimed.job);
+        } finally {
+          this.isExecutingJob = false;
+        }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[netchat-daemon] polling error:", message);
-      if (this.shouldResetRegistration(error)) {
-        this.diagnostics?.log(
-          "warn",
-          "Server rejected the cached machine registration. Clearing local machine state.",
-        );
-        this.clearState();
-
-        try {
-          await this.ensureRegistration();
-        } catch (registrationError) {
-          const registrationMessage =
-            registrationError instanceof Error ? registrationError.message : String(registrationError);
-          this.diagnostics?.recordError(registrationMessage);
-        }
-      } else {
-        this.diagnostics?.recordError(message);
-      }
+      await this.handleMachineError(error, "job-poll");
     } finally {
       if (!this.state) {
         return;
       }
 
-      this.pollTimer = setTimeout(() => {
-        void this.tick();
-      }, this.state.pollingIntervalMs);
+      this.scheduleClaim(this.state.pollingIntervalMs);
     }
   }
 
@@ -216,6 +223,10 @@ export class MachineClient {
           break;
       }
 
+      this.diagnostics?.log(
+        "info",
+        `Local runtime finished job ${job.id} (${job.kind}). Reporting completion to server.`,
+      );
       await this.request(`/api/daemon/jobs/${job.id}/complete`, {
         method: "POST",
         body: JSON.stringify({
@@ -228,25 +239,33 @@ export class MachineClient {
           },
         } satisfies CompleteMachineJobInput),
       });
-      console.info(`[netchat-daemon] completed job ${job.id}`);
+      this.diagnostics?.clearError();
       this.diagnostics?.recordServerContact(`Completed job ${job.id}.`);
     } catch (error) {
-      console.error(
-        `[netchat-daemon] job ${job.id} failed:`,
-        error instanceof Error ? error.message : error,
-      );
-      await this.request(`/api/daemon/jobs/${job.id}/complete`, {
-        method: "POST",
-        body: JSON.stringify({
-          machineId: this.state.machineId,
-          machineSecret: this.state.machineSecret,
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown daemon execution error",
-        } satisfies CompleteMachineJobInput),
-      });
+      const message =
+        error instanceof Error ? error.message : "Unknown daemon execution error";
       this.diagnostics?.recordError(
-        `Job ${job.id} failed: ${error instanceof Error ? error.message : "Unknown daemon execution error"}`,
+        `Job ${job.id} (${job.kind}) failed on local runtime: ${message}`,
       );
+      try {
+        await this.request(`/api/daemon/jobs/${job.id}/complete`, {
+          method: "POST",
+          body: JSON.stringify({
+            machineId: this.state.machineId,
+            machineSecret: this.state.machineSecret,
+            success: false,
+            error: message,
+          } satisfies CompleteMachineJobInput),
+        });
+        this.diagnostics?.recordServerContact(`Reported failure for job ${job.id}.`);
+      } catch (reportError) {
+        const reportMessage =
+          reportError instanceof Error ? reportError.message : "Unknown completion reporting error";
+        this.diagnostics?.recordError(
+          `Job ${job.id} failed and the daemon could not report that failure back to the server: ${reportMessage}`,
+        );
+        throw reportError;
+      }
     }
   }
 
@@ -285,10 +304,22 @@ export class MachineClient {
   }
 
   private clearState() {
+    if (this.heartbeatTimer) {
+      clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
+    if (this.claimTimer) {
+      clearTimeout(this.claimTimer);
+      this.claimTimer = null;
+    }
+
     if (existsSync(this.statePath)) {
       rmSync(this.statePath, { force: true });
     }
+
     this.state = null;
+    this.isExecutingJob = false;
     this.diagnostics?.recordMachineConfig({
       machineId: null,
     });
@@ -296,5 +327,50 @@ export class MachineClient {
 
   private shouldResetRegistration(error: unknown) {
     return error instanceof Error && /Machine authentication failed/i.test(error.message);
+  }
+
+  private scheduleHeartbeat(delayMs: number) {
+    if (this.heartbeatTimer) {
+      clearTimeout(this.heartbeatTimer);
+    }
+
+    this.heartbeatTimer = setTimeout(() => {
+      this.heartbeatTimer = null;
+      void this.sendHeartbeat();
+    }, delayMs);
+  }
+
+  private scheduleClaim(delayMs: number) {
+    if (this.claimTimer) {
+      clearTimeout(this.claimTimer);
+    }
+
+    this.claimTimer = setTimeout(() => {
+      this.claimTimer = null;
+      void this.pollForJob();
+    }, delayMs);
+  }
+
+  private async handleMachineError(error: unknown, stage: "heartbeat" | "job-poll") {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (this.shouldResetRegistration(error)) {
+      this.diagnostics?.log(
+        "warn",
+        "Server rejected the cached machine registration. Clearing local machine state.",
+      );
+      this.clearState();
+
+      try {
+        await this.ensureRegistration();
+      } catch (registrationError) {
+        const registrationMessage =
+          registrationError instanceof Error ? registrationError.message : String(registrationError);
+        this.diagnostics?.recordError(registrationMessage);
+      }
+      return;
+    }
+
+    this.diagnostics?.recordError(`${stage} error: ${message}`);
   }
 }
