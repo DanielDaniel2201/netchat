@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "check": "tsc --noEmit -p tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json",
+    "local-app": "tsx src/local-app.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

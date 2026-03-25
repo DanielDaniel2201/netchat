@@ -72,6 +72,7 @@ export type DaemonStatus =
 export type DaemonDiagnostics = {
   startedAt: string;
   status: DaemonStatus;
+  localMode: boolean;
   environment: RuntimeEnvironment;
   serverUrl: string | null;
   pairingCodeConfigured: boolean;

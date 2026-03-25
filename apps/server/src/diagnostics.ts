@@ -2,6 +2,12 @@ import { DaemonLogEntry, DaemonLogLevel, ServerDiagnostics, makeId, nowIso } fro
 
 const maxLogEntries = 160;
 const serverLogPrefix = "[netchat-server]";
+const serverLogColors = {
+  error: "\x1b[31m",
+  info: "\x1b[37m",
+  warn: "\x1b[33m",
+} satisfies Record<DaemonLogLevel, string>;
+const ansiReset = "\x1b[0m";
 
 export class ServerDiagnosticsStore {
   private snapshot: ServerDiagnostics;
@@ -73,7 +79,7 @@ export class ServerDiagnosticsStore {
 }
 
 function emitConsoleLog(level: DaemonLogLevel, message: string) {
-  const formatted = `${serverLogPrefix}[${level}] ${message}`;
+  const formatted = `${serverLogColors[level]}${serverLogPrefix}[${level}] ${message}${ansiReset}`;
   if (level === "error") {
     console.error(formatted);
     return;

@@ -29,6 +29,7 @@ import { GraphStore } from "./store.js";
 import { ServerDiagnosticsStore } from "./diagnostics.js";
 import { MachineStore } from "./machine-store.js";
 import { loadLocalEnv } from "./load-env.js";
+import { registerLocalWebUi } from "./web-ui.js";
 
 loadLocalEnv();
 
@@ -249,6 +250,8 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
     return reply.status(400).send({ message: formatError(error) });
   }
 });
+
+registerLocalWebUi(app, diagnostics);
 
 await app.listen({ host: "0.0.0.0", port });
 diagnostics.log("info", `Server listening on port ${port}.`);

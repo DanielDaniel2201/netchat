@@ -539,7 +539,9 @@ function resolveRuntimeTimeoutMs() {
 }
 
 function logRuntime(level: "info" | "warn" | "error", message: string) {
-  const formatted = `[netchat-daemon][runtime][${level}] ${message}`;
+  const color =
+    level === "error" ? "\x1b[31m" : level === "warn" ? "\x1b[33m" : "\x1b[37m";
+  const formatted = `${color}[netchat-daemon][runtime][${level}] ${message}\x1b[0m`;
   if (level === "error") {
     console.error(formatted);
     return;

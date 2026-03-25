@@ -24,6 +24,7 @@ type MachineState = {
 export class MachineClient {
   private readonly serverUrl = process.env.NETCHAT_SERVER_URL?.trim() || "";
   private readonly pairingCode = process.env.NETCHAT_PAIRING_CODE?.trim() || "";
+  private readonly localMode = (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true";
   private readonly machineName =
     process.env.NETCHAT_MACHINE_NAME?.trim() || `${os.hostname()} (${process.platform})`;
   private readonly statePath =
@@ -33,6 +34,7 @@ export class MachineClient {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private claimTimer: NodeJS.Timeout | null = null;
   private isExecutingJob = false;
+  private registrationPromise: Promise<void> | null = null;
 
   constructor(
     private readonly runtime: {
@@ -101,7 +103,19 @@ export class MachineClient {
       return;
     }
 
-    if (!this.pairingCode) {
+    if (this.registrationPromise) {
+      await this.registrationPromise;
+      return;
+    }
+
+    this.registrationPromise = this.registerMachine().finally(() => {
+      this.registrationPromise = null;
+    });
+    await this.registrationPromise;
+  }
+
+  private async registerMachine() {
+    if (!this.localMode && !this.pairingCode) {
       this.diagnostics?.setStatus(
         "waiting_for_pairing",
         "NETCHAT_PAIRING_CODE is required for the first daemon registration.",
@@ -112,10 +126,11 @@ export class MachineClient {
 
     this.diagnostics?.setStatus("registering", `Registering machine "${this.machineName}" with server.`);
     const environment = await this.detectEnvironment();
+    const pairingCode = this.localMode ? this.pairingCode || "local" : this.pairingCode;
     const registration = await this.request<MachineRegistration>("/api/daemon/register", {
       method: "POST",
       body: JSON.stringify({
-        pairingCode: this.pairingCode,
+        pairingCode,
         machineName: this.machineName,
         environment,
       } satisfies CreateMachineRegisterInput),
@@ -279,8 +294,7 @@ export class MachineClient {
     });
 
     if (!response.ok) {
-      const payload = await response.text();
-      throw new Error(payload || `Daemon server request failed: ${response.status}`);
+      throw new Error(await readErrorMessage(response, `Daemon server request failed: ${response.status}`));
     }
 
     return response.json() as Promise<T>;
@@ -355,6 +369,17 @@ export class MachineClient {
     const message = error instanceof Error ? error.message : String(error);
 
     if (this.shouldResetRegistration(error)) {
+      if (!this.state) {
+        try {
+          await this.ensureRegistration();
+        } catch (registrationError) {
+          const registrationMessage =
+            registrationError instanceof Error ? registrationError.message : String(registrationError);
+          this.diagnostics?.recordError(registrationMessage);
+        }
+        return;
+      }
+
       this.diagnostics?.log(
         "warn",
         "Server rejected the cached machine registration. Clearing local machine state.",
@@ -373,4 +398,26 @@ export class MachineClient {
 
     this.diagnostics?.recordError(`${stage} error: ${message}`);
   }
+}
+
+async function readErrorMessage(response: Response, fallback: string) {
+  const payload = (await response.text()).trim();
+  if (!payload) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as { error?: unknown; message?: unknown };
+    if (typeof parsed.message === "string" && parsed.message.trim().length > 0) {
+      return parsed.message.trim();
+    }
+
+    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+      return parsed.error.trim();
+    }
+  } catch {
+    return payload;
+  }
+
+  return payload;
 }

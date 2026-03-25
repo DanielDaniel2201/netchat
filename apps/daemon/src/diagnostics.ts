@@ -2,6 +2,12 @@ import { DaemonDiagnostics, DaemonLogEntry, DaemonLogLevel, DaemonStatus, Runtim
 
 const maxLogEntries = 120;
 const daemonLogPrefix = "[netchat-daemon]";
+const daemonLogColors = {
+  error: "\x1b[31m",
+  info: "\x1b[37m",
+  warn: "\x1b[33m",
+} satisfies Record<DaemonLogLevel, string>;
+const ansiReset = "\x1b[0m";
 
 export class DaemonDiagnosticsStore {
   private snapshot: DaemonDiagnostics;
@@ -10,6 +16,7 @@ export class DaemonDiagnosticsStore {
     this.snapshot = {
       startedAt: nowIso(),
       status: "starting",
+      localMode: (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true",
       environment: initialEnvironment,
       serverUrl: process.env.NETCHAT_SERVER_URL?.trim() || null,
       pairingCodeConfigured: Boolean(process.env.NETCHAT_PAIRING_CODE?.trim()),
@@ -121,7 +128,7 @@ export class DaemonDiagnosticsStore {
 }
 
 function emitConsoleLog(level: DaemonLogLevel, message: string) {
-  const formatted = `${daemonLogPrefix}[${level}] ${message}`;
+  const formatted = `${daemonLogColors[level]}${daemonLogPrefix}[${level}] ${message}${ansiReset}`;
   if (level === "error") {
     console.error(formatted);
     return;

@@ -557,7 +557,7 @@ function NetchatApp() {
               </div>
             )}
 
-            {!runtimeMachine ? (
+            {!runtimeMachine && !daemonDiagnostics?.localMode ? (
               <div className="mt-3 rounded-[18px] border border-slate-200/80 bg-white/90 px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -1103,13 +1103,15 @@ function buildRuntimeBadges(
 }
 
 function buildDaemonBadges(diagnostics: DaemonDiagnostics) {
-  return [
+  const badges = [
     formatDaemonStatus(diagnostics.status),
     `${diagnostics.environment.runtimeMode === "claude" ? "Claude Code" : "Mock runtime"}`,
     diagnostics.environment.claudeInstalled ? "Claude detected" : "Claude missing",
     diagnostics.serverUrl ? "Server linked" : "Server URL missing",
-    diagnostics.pairingCodeConfigured ? "Pairing code set" : "Pairing code missing",
   ];
+
+  badges.push(diagnostics.localMode ? "Local-first mode" : diagnostics.pairingCodeConfigured ? "Pairing code set" : "Pairing code missing");
+  return badges;
 }
 
 function buildDaemonSummary(diagnostics: DaemonDiagnostics | undefined, error: unknown) {
@@ -1121,12 +1123,16 @@ function buildDaemonSummary(diagnostics: DaemonDiagnostics | undefined, error: u
     return `The web app cannot reach the local daemon at ${daemonBaseUrl}.`;
   }
 
-  if (diagnostics.lastError && /invalid pairing code/i.test(diagnostics.lastError)) {
+  if (!diagnostics.localMode && diagnostics.lastError && /invalid pairing code/i.test(diagnostics.lastError)) {
     return "The pairing code is stale or no longer exists on the current server process. Generate a fresh code and restart the daemon with the new command.";
   }
 
   if (!diagnostics.serverUrl) {
     return "Claude can be detected locally, but NETCHAT_SERVER_URL is not configured, so the daemon is not trying to register a machine.";
+  }
+
+  if (diagnostics.localMode && !diagnostics.machineId) {
+    return "The daemon is running in local-first mode and will register itself with the local controller automatically.";
   }
 
   if (!diagnostics.machineId && !diagnostics.pairingCodeConfigured) {

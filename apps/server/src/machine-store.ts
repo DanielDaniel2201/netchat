@@ -61,6 +61,7 @@ export class MachineStore {
   private readonly machines = new Map<string, RegisteredMachine>();
   private readonly pendingJobs = new Map<string, PendingJob[]>();
   private readonly inFlightJobs = new Map<string, InFlightJob>();
+  private readonly localMode = (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true";
   private readonly onlineThresholdMs = Number(process.env.NETCHAT_MACHINE_ONLINE_THRESHOLD_MS ?? 30000);
   private readonly jobTimeoutMs = Number(process.env.NETCHAT_JOB_TIMEOUT_MS ?? 600000);
   private readonly pollingIntervalMs = Number(process.env.NETCHAT_MACHINE_POLL_MS ?? 1200);
@@ -99,17 +100,19 @@ export class MachineStore {
   }
 
   registerMachine(input: CreateMachineRegisterInput): MachineRegistration {
-    const pairing = this.pairingSessions.get(input.pairingCode);
-    if (!pairing) {
-      throw new Error("Invalid pairing code.");
-    }
+    if (!this.localMode) {
+      const pairing = this.pairingSessions.get(input.pairingCode);
+      if (!pairing) {
+        throw new Error("Invalid pairing code.");
+      }
 
-    if (Date.parse(pairing.expiresAt) < Date.now()) {
+      if (Date.parse(pairing.expiresAt) < Date.now()) {
+        this.pairingSessions.delete(input.pairingCode);
+        throw new Error("Pairing code expired.");
+      }
+
       this.pairingSessions.delete(input.pairingCode);
-      throw new Error("Pairing code expired.");
     }
-
-    this.pairingSessions.delete(input.pairingCode);
 
     const machineId = makeId("machine");
     const machineSecret = crypto.randomUUID();
@@ -152,15 +155,23 @@ export class MachineStore {
   resolveMachine(preferredMachineId?: string | null): MachineRecord {
     if (preferredMachineId) {
       const preferred = this.machines.get(preferredMachineId);
+      if (preferred) {
+        const record = this.toPublicRecord(preferred);
+        if (record.status === "online") {
+          return record;
+        }
+      }
+
+      const fallback = this.resolveSingleLocalMachineFallback(preferredMachineId);
+      if (fallback) {
+        return fallback;
+      }
+
       if (!preferred) {
         throw new Error("Selected machine does not exist.");
       }
 
-      const record = this.toPublicRecord(preferred);
-      if (record.status !== "online") {
-        throw new Error("Selected machine is offline.");
-      }
-      return record;
+      throw new Error("Selected machine is offline.");
     }
 
     const online = this.listMachines().filter((machine) => machine.status === "online");
@@ -338,6 +349,28 @@ export class MachineStore {
       ),
       inFlightJobCount: this.inFlightJobs.size,
     });
+  }
+
+  private resolveSingleLocalMachineFallback(staleMachineId: string) {
+    if (!this.localMode) {
+      return null;
+    }
+
+    const online = this.listMachines().filter((machine) => machine.status === "online");
+    if (online.length !== 1) {
+      return null;
+    }
+
+    const fallback = online[0];
+    if (fallback.id === staleMachineId) {
+      return fallback;
+    }
+
+    this.diagnostics?.log(
+      "warn",
+      `Falling back from stale machine ${staleMachineId} to the active local machine ${fallback.id}.`,
+    );
+    return fallback;
   }
 }
 
