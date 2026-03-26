@@ -358,7 +358,6 @@ function NetchatApp() {
   const workingDirectoryDisplay = truncateMiddle(workingDirectoryPath, 44);
   const workspaceName = resolveWorkspaceName(workingDirectoryPath);
   const runtimeLabel = resolveRuntimeLabel(runtimeMachine, daemonDiagnostics);
-  const composerLabel = selectedMessage ? "Replying from selected bubble" : "Start a conversation";
   const composerHint = selectedMessage
     ? runtimeMachine && runtimeMachine.status !== "online"
       ? "Reconnect the local runtime to send from this bubble."
@@ -368,18 +367,7 @@ function NetchatApp() {
     : rootMachine
       ? "Your next message starts the main branch."
       : "Bring one local runtime online to start chatting.";
-  const composerPlaceholder =
-    sendMode === "branch-from-message"
-      ? runtimeMachine?.status === "online"
-        ? "Reply from this bubble..."
-        : "Bring this bubble's machine back online to branch here..."
-      : selectedMessage
-        ? runtimeMachine?.status === "online"
-          ? "Continue from this bubble..."
-          : "Bring this branch's machine back online to continue..."
-        : !rootMachine
-          ? "Bring one local daemon online first..."
-        : "Ask anything...";
+  const composerPlaceholder = composerHint;
   const composerErrorMessage = formatErrorMessage(
     rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
   );
@@ -537,18 +525,13 @@ function NetchatApp() {
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-5">
         <form
-          className="pointer-events-auto w-full max-w-[920px] rounded-[26px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_18px_34px_-26px_rgba(15,23,42,0.16)]"
+          className="pointer-events-auto w-full max-w-[920px]"
           onSubmit={handleSubmit}
         >
-          <div className="border-b border-slate-200/70 px-1 pb-3">
-            <div className="text-sm font-medium text-slate-900">{composerLabel}</div>
-            <div className="mt-1 text-xs leading-6 text-slate-500">{composerHint}</div>
-          </div>
-
-          <div className="mt-3 flex items-end gap-3">
+          <div className="relative rounded-[26px] border border-slate-300 bg-[#fffdf8] shadow-[0_18px_34px_-26px_rgba(15,23,42,0.16)] transition-colors focus-within:border-slate-950">
             <Textarea
               ref={composerRef}
-              className="min-h-[104px] resize-none rounded-[24px] border border-white/90 bg-white/78 px-4 py-3 text-[15px] leading-7 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.14)] focus:border-slate-950 focus:bg-white"
+              className="min-h-[112px] resize-none rounded-[26px] border-0 bg-transparent px-5 py-4 pb-14 pr-16 text-[15px] leading-7 shadow-none placeholder:text-slate-500 focus:border-0 focus:bg-transparent"
               placeholder={composerPlaceholder}
               value={composerValue}
               onChange={(event) => setComposerValue(event.target.value)}
@@ -563,7 +546,7 @@ function NetchatApp() {
               }}
             />
             <Button
-              className="mb-1 h-11 min-w-11 rounded-full bg-slate-950 px-0 shadow-[0_20px_50px_-24px_rgba(15,23,42,0.7)] hover:bg-slate-800"
+              className="absolute bottom-3 right-3 h-10 w-10 rounded-full bg-slate-950 px-0 shadow-[0_20px_50px_-24px_rgba(15,23,42,0.7)] hover:bg-slate-800"
               disabled={sendDisabled}
               type="submit"
             >
