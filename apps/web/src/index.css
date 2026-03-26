@@ -73,9 +73,15 @@ textarea {
 }
 
 .netchat-flow .react-flow__node.message-node-shell {
+  pointer-events: all !important;
   cursor: default !important;
   -webkit-user-select: text !important;
   user-select: text !important;
+}
+
+.netchat-flow .react-flow__node.message-node-shell,
+.netchat-flow .react-flow__node.message-node-shell * {
+  cursor: default !important;
 }
 
 .netchat-flow .react-flow__node.message-node-shell:hover {

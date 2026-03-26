@@ -127,6 +127,17 @@ export class GraphStore {
       throw new Error(`Unknown source message: ${input.sourceMessageId}`);
     }
 
+    const isSelectionBranch = input.mode === "selection";
+    const normalizedPrompt = input.prompt.trim();
+    const branchTitle = isSelectionBranch
+      ? input.selectedText!.trim()
+      : normalizedPrompt || `Alternate path from ${sourceMessage.role}`;
+    const userMessageContent = isSelectionBranch
+      ? normalizedPrompt.length > 0
+        ? normalizedPrompt
+        : `Explain "${input.selectedText!}" in context.`
+      : normalizedPrompt;
+
     this.runInTransaction(() => {
       const branchId = makeId("branch");
       this.database
@@ -150,15 +161,12 @@ export class GraphStore {
           sourceMessage.id,
           runtime.sessionId,
           runtime.machineId,
-          input.selectedText,
-          input.selectedText,
-          input.startOffset,
-          input.endOffset,
+          branchTitle,
+          isSelectionBranch ? input.selectedText! : null,
+          isSelectionBranch ? input.startOffset! : null,
+          isSelectionBranch ? input.endOffset! : null,
           nowIso(),
         );
-
-      const userMessageContent =
-        input.prompt.trim().length > 0 ? input.prompt.trim() : `Explain "${input.selectedText}" in context.`;
 
       this.insertMessage({
         id: makeId("msg"),

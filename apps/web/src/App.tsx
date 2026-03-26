@@ -52,19 +52,10 @@ type SelectionMenu = SelectionDraft & {
 
 type BranchDirection = "center" | "left" | "right" | "down";
 
-type ChildSelection = {
-  branchId: string;
-  selectedText: string;
-  startOffset: number | null;
-  endOffset: number | null;
-  isActive: boolean;
-};
-
 type MessageNodeData = {
   message: MessageNode;
-  isActiveBranch: boolean;
-  childSelections: ChildSelection[];
-  onPickBranch: (branchId: string) => void;
+  isActiveMessage: boolean;
+  onPickMessage: (messageId: string) => void;
   onSelectionDraft: (draft: SelectionMenu) => void;
 };
 
@@ -75,11 +66,11 @@ type PositionedBranch = {
 };
 
 const useComposerStore = create<{
-  selectedBranchId: string;
-  setSelectedBranchId: (branchId: string) => void;
+  selectedMessageId: string | null;
+  setSelectedMessageId: (messageId: string | null) => void;
 }>((set) => ({
-  selectedBranchId: rootBranchId,
-  setSelectedBranchId: (selectedBranchId) => set({ selectedBranchId }),
+  selectedMessageId: null,
+  setSelectedMessageId: (selectedMessageId) => set({ selectedMessageId }),
 }));
 
 export default function App() {
@@ -93,8 +84,8 @@ export default function App() {
 function NetchatApp() {
   const queryClient = useQueryClient();
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const selectedBranchId = useComposerStore((state) => state.selectedBranchId);
-  const setSelectedBranchId = useComposerStore((state) => state.setSelectedBranchId);
+  const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
+  const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
   const [composerValue, setComposerValue] = useState("");
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu | null>(null);
 
@@ -118,13 +109,12 @@ function NetchatApp() {
   const machines = machinesQuery.data ?? [];
   const onlineMachines = machines.filter((machine) => machine.status === "online");
   const daemonDiagnostics = daemonDiagnosticsQuery.data;
-  const activeBranch = snapshot?.branches.find((branch) => branch.id === selectedBranchId) ?? null;
   const machinesById = useMemo(() => new Map(machines.map((machine) => [machine.id, machine])), [machines]);
-  const activeBranchMachine =
-    activeBranch?.machineId ? (machinesById.get(activeBranch.machineId) ?? undefined) : undefined;
   const rootMachine = onlineMachines[0];
-  const runtimeMachine =
-    activeBranch && activeBranch.id !== rootBranchId ? activeBranchMachine : rootMachine;
+  const branchesById = useMemo(
+    () => new Map((snapshot?.branches ?? []).map((branch) => [branch.id, branch])),
+    [snapshot],
+  );
 
   const messagesByBranch = useMemo(() => {
     const buckets = new Map<string, MessageNode[]>();
@@ -136,11 +126,42 @@ function NetchatApp() {
     return buckets;
   }, [snapshot]);
 
-  const activeBranchMessages = activeBranch ? messagesByBranch.get(activeBranch.id) ?? [] : [];
-  const activeBranchHasMessages = activeBranchMessages.length > 0;
+  const messagesById = useMemo(
+    () => new Map((snapshot?.messages ?? []).map((message) => [message.id, message])),
+    [snapshot],
+  );
+  const selectedMessage =
+    selectedMessageId && messagesById.get(selectedMessageId)?.role === "assistant"
+      ? (messagesById.get(selectedMessageId) ?? null)
+      : null;
+  const selectedBranch = selectedMessage ? (branchesById.get(selectedMessage.branchId) ?? null) : null;
+  const selectedBranchMessages = selectedMessage ? messagesByBranch.get(selectedMessage.branchId) ?? [] : [];
+  const selectedMessageIsTail = selectedMessage
+    ? selectedBranchMessages.at(-1)?.id === selectedMessage.id
+    : true;
+  const selectedBranchMachine =
+    selectedBranch?.machineId ? (machinesById.get(selectedBranch.machineId) ?? undefined) : undefined;
+  const selectedMessageMachine =
+    selectedMessage?.machineId ? (machinesById.get(selectedMessage.machineId) ?? undefined) : undefined;
+  const sendMode: "root" | "continue-root" | "continue-branch" | "branch-from-message" =
+    !selectedMessage
+      ? "root"
+      : !selectedMessageIsTail
+        ? "branch-from-message"
+        : selectedBranch?.id === rootBranchId
+          ? "continue-root"
+          : "continue-branch";
+  const runtimeMachine =
+    sendMode === "branch-from-message"
+      ? selectedMessageMachine
+      : sendMode === "continue-branch"
+        ? selectedBranchMachine ?? selectedMessageMachine
+        : rootMachine;
   const canSendOnActiveLane =
-    activeBranch && activeBranch.id !== rootBranchId
-      ? runtimeMachine?.status === "online"
+    sendMode === "branch-from-message" || sendMode === "continue-branch"
+      ? runtimeMachine
+        ? runtimeMachine.status === "online"
+        : true
       : Boolean(rootMachine);
 
   const rootTurnMutation = useMutation({
@@ -161,7 +182,7 @@ function NetchatApp() {
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
-      setSelectedBranchId(rootBranchId);
+      setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
     },
     onError: (error) => {
       logWeb("error", `Root turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -172,7 +193,9 @@ function NetchatApp() {
     mutationFn: async (input: CreateBranchInput) => {
       logWeb(
         "info",
-        `Forking from message ${input.sourceMessageId} with ${input.selectedText.length} selected chars and ${input.prompt.length} prompt chars.`,
+        input.mode === "message"
+          ? `Branching from bubble ${input.sourceMessageId} with ${input.prompt.length} prompt chars.`
+          : `Forking from message ${input.sourceMessageId} with ${(input.selectedText ?? "").length} selected chars and ${input.prompt.length} prompt chars.`,
       );
       return request<GraphSnapshot>("/api/branches", {
         method: "POST",
@@ -185,10 +208,8 @@ function NetchatApp() {
         `Branch fork completed. Graph now has ${nextSnapshot.branches.length} branches.`,
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
-      const newestBranch = nextSnapshot.branches.at(-1);
-      if (newestBranch) {
-        setSelectedBranchId(newestBranch.id);
-      }
+      setComposerValue("");
+      setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
       setSelectionMenu(null);
       clearBrowserSelection();
     },
@@ -215,6 +236,7 @@ function NetchatApp() {
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
+      setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
     },
     onError: (error) => {
       logWeb("error", `Branch turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -245,15 +267,8 @@ function NetchatApp() {
     composerRef.current?.focus();
   }
 
-  function pickBranch(branchId: string) {
-    setSelectedBranchId(branchId);
-    window.setTimeout(() => {
-      composerRef.current?.focus();
-    }, 0);
-  }
-
-  function enableNodePointerEvents() {
-    return;
+  function pickMessage(messageId: string) {
+    setSelectedMessageId(messageId);
   }
 
   const graph = useMemo(() => {
@@ -263,11 +278,35 @@ function NetchatApp() {
 
     return buildFlowGraph({
       snapshot,
-      selectedBranchId,
-      onPickBranch: pickBranch,
+      selectedMessageId,
+      onPickMessage: pickMessage,
       onSelectionDraft: setSelectionMenu,
     });
-  }, [selectedBranchId, snapshot]);
+  }, [selectedMessageId, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+
+    const latestAssistantMessageId = getLatestAssistantMessageId(snapshot);
+
+    if (snapshot.messages.length === 0 || !latestAssistantMessageId) {
+      if (selectedMessageId !== null) {
+        setSelectedMessageId(null);
+      }
+      return;
+    }
+
+    if (
+      selectedMessageId &&
+      snapshot.messages.some((message) => message.id === selectedMessageId && message.role === "assistant")
+    ) {
+      return;
+    }
+
+    setSelectedMessageId(latestAssistantMessageId);
+  }, [selectedMessageId, setSelectedMessageId, snapshot]);
 
   useEffect(() => {
     function onSelectionChange() {
@@ -302,15 +341,26 @@ function NetchatApp() {
       return;
     }
 
-    if (!activeBranch || activeBranch.id === rootBranchId) {
+    if (sendMode === "root" || sendMode === "continue-root") {
       rootTurnMutation.mutate({ prompt, machineId: rootMachine?.id });
       return;
     }
 
-    branchTurnMutation.mutate({
-      branchId: activeBranch.id,
-      input: { prompt },
-    });
+    if (sendMode === "continue-branch" && selectedBranch) {
+      branchTurnMutation.mutate({
+        branchId: selectedBranch.id,
+        input: { prompt },
+      });
+      return;
+    }
+
+    if (sendMode === "branch-from-message" && selectedMessage) {
+      branchMutation.mutate({
+        sourceMessageId: selectedMessage.id,
+        mode: "message",
+        prompt,
+      });
+    }
   }
 
   function handleSubmit(event: FormEvent) {
@@ -318,29 +368,34 @@ function NetchatApp() {
     submitCurrentPrompt();
   }
 
-  const composerBadge = activeBranch && activeBranch.id !== rootBranchId ? "Branch" : "Main";
+  const selectedMessagePreview = selectedMessage ? summarizeMessage(selectedMessage.content) : null;
+  const composerBadge =
+    sendMode === "branch-from-message" ? "Branch" : snapshot?.messages.length ? "Continue" : "Start";
   const composerLabel =
-    activeBranch && activeBranch.id !== rootBranchId
-      ? truncate(activeBranch.title, 48)
-      : activeBranchHasMessages
-        ? "Continue the main explanation"
-        : "Start the main explanation";
-  const composerContext =
-    activeBranch && activeBranch.id !== rootBranchId && activeBranch.selectedText
-      ? `Forked from "${truncate(activeBranch.selectedText, 78)}"`
-      : rootMachine
-        ? `Root turns route through ${rootMachine.name}`
-        : "Pair a local daemon so the app can use the user's own Claude Code runtime.";
+    sendMode === "branch-from-message"
+      ? "Next send forks from the selected bubble"
+      : selectedMessage
+        ? "Next send appends after the selected bubble"
+        : "Start the main conversation";
+  const composerContext = selectedMessage
+    ? `${selectedMessage.role === "assistant" ? "Claude Code" : "You"} · ${formatMessageTime(selectedMessage.createdAt)} · ${truncate(selectedMessagePreview ?? "", 92)}`
+    : rootMachine
+      ? `Root turns route through ${rootMachine.name}.`
+      : "Pair a local daemon so the app can use the user's own Claude Code runtime.";
   const composerPlaceholder =
-    activeBranch && activeBranch.id !== rootBranchId
+    sendMode === "branch-from-message"
       ? runtimeMachine?.status === "online"
-        ? "Continue this branch..."
-        : "Bring this branch's machine back online to continue..."
-      : !rootMachine
-        ? "Bring one local daemon online first..."
-      : activeBranchHasMessages
-        ? "Continue the main conversation..."
-        : "Start the walkthrough...";
+        ? "Branch from the selected bubble..."
+        : "Bring this bubble's machine back online to branch here..."
+      : sendMode === "continue-branch"
+        ? runtimeMachine?.status === "online"
+          ? "Continue after the selected bubble..."
+          : "Bring this branch's machine back online to continue..."
+        : !rootMachine
+          ? "Bring one local daemon online first..."
+          : snapshot?.messages.length
+            ? "Continue after the selected bubble..."
+            : "Start the walkthrough...";
   const composerErrorMessage = formatErrorMessage(
     rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
   );
@@ -357,15 +412,23 @@ function NetchatApp() {
   const machineBadges = buildRuntimeBadges(runtimeMachine, onlineMachines.length, daemonDiagnostics);
   const machineDescription = runtimeMachine
     ? runtimeMachine.status === "online"
-      ? `Routing this lane through ${runtimeMachine.name}.`
-      : `This lane belongs to ${runtimeMachine.name}, which is currently offline.`
+      ? sendMode === "branch-from-message"
+        ? `The next send will fork a new branch from the selected bubble on ${runtimeMachine.name}.`
+        : `The next send will continue the selected lane on ${runtimeMachine.name}.`
+      : sendMode === "branch-from-message"
+        ? `The selected bubble belongs to ${runtimeMachine.name}, which is currently offline, so branching is paused.`
+        : `The selected lane belongs to ${runtimeMachine.name}, which is currently offline.`
     : buildDaemonSummary(daemonDiagnostics, daemonDiagnosticsQuery.error);
   const footerMessage = isThinking
     ? "Claude is writing the next message bubble..."
-    : runtimeMachine
-      ? runtimeMachine.status === "online"
-        ? `Active lane: ${runtimeMachine.name} on ${formatPlatform(runtimeMachine.environment.platform)}.`
-        : `Selected lane paused until ${runtimeMachine.name} reconnects.`
+    : selectedMessage
+      ? sendMode === "branch-from-message"
+        ? "The selected bubble sits in the middle of a lane, so the next send creates an alternate path."
+        : "The selected bubble is the end of its lane, so the next send continues it."
+      : runtimeMachine
+        ? runtimeMachine.status === "online"
+          ? `Ready on ${runtimeMachine.name} (${formatPlatform(runtimeMachine.environment.platform)}).`
+          : `Waiting for ${runtimeMachine.name} to reconnect.`
       : daemonDiagnosticsQuery.isSuccess
         ? "Local daemon reachable, but no machine is registered with the server yet."
         : "No local runtime paired yet.";
@@ -401,6 +464,7 @@ function NetchatApp() {
               onClick={() =>
                 branchMutation.mutate({
                   sourceMessageId: selectionMenu.sourceMessageId,
+                  mode: "selection",
                   selectedText: selectionMenu.selectedText,
                   startOffset: selectionMenu.startOffset,
                   endOffset: selectionMenu.endOffset,
@@ -452,7 +516,12 @@ function NetchatApp() {
         fitViewOptions={{ padding: 0.24, minZoom: 0.45, maxZoom: 1 }}
         nodes={graph.nodes}
         edges={graph.edges}
-        onNodeMouseEnter={enableNodePointerEvents}
+        onNodeClick={(_event, node) => {
+          const message = (node.data as MessageNodeData | undefined)?.message;
+          if (message?.role === "assistant") {
+            pickMessage(node.id);
+          }
+        }}
         nodeTypes={{
           message: MessageGraphNode,
         }}
@@ -715,8 +784,8 @@ function NetchatApp() {
           <div className="mt-3 flex items-center justify-between gap-3 px-1 text-xs text-slate-500">
             <div>
               {runtimeMachine?.status === "online"
-                ? "Click any bubble to continue that lane."
-                : "Lane selection stays local to the canvas."}
+                ? "Click any bubble to choose where the next turn lands."
+                : "Bubble selection stays local to the canvas."}
             </div>
             <button
               type="button"
@@ -727,7 +796,7 @@ function NetchatApp() {
                 focusComposer();
               }}
             >
-              Clear selection
+              Clear text selection
             </button>
           </div>
         </form>
@@ -743,15 +812,31 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   return (
     <div
       className={cn(
-        "group relative overflow-hidden border bg-[#fffefb] px-5 py-4 text-left shadow-[0_12px_26px_-22px_rgba(15,23,42,0.14)] transition-colors",
-        isUser ? "w-[320px] rounded-[24px]" : "w-[476px] rounded-[28px]",
-        data.isActiveBranch
-          ? "border-slate-950 bg-white"
-          : "border-slate-300/90 hover:border-slate-400",
+        "group relative w-[476px] overflow-hidden rounded-[28px] border px-5 py-4 text-left shadow-[0_12px_26px_-22px_rgba(15,23,42,0.14)] transition-all",
+        isUser
+          ? "border-slate-300/90 bg-[#fffefb]"
+          : data.isActiveMessage
+            ? "border-slate-950 bg-[#fff7fb] shadow-[0_22px_40px_-28px_rgba(15,23,42,0.28)] ring-1 ring-slate-950/10"
+            : "border-[#efcfda] bg-[#fffafd] hover:border-[#e5b8cb]",
       )}
-      onClickCapture={(event) => event.stopPropagation()}
-      onMouseDownCapture={(event) => event.stopPropagation()}
-      onPointerDownCapture={(event) => event.stopPropagation()}
+      onClickCapture={(event) => {
+        if (!isUser) {
+          data.onPickMessage(data.message.id);
+        }
+        event.stopPropagation();
+      }}
+      onMouseDownCapture={(event) => {
+        if (!isUser) {
+          data.onPickMessage(data.message.id);
+        }
+        event.stopPropagation();
+      }}
+      onPointerDownCapture={(event) => {
+        if (!isUser) {
+          data.onPickMessage(data.message.id);
+        }
+        event.stopPropagation();
+      }}
     >
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-slate-900/10 to-transparent" />
 
@@ -767,33 +852,8 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
       <SelectableMessage
         content={data.message.content}
         disabled={isUser}
-        childSelections={data.childSelections}
         onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
       />
-
-      {!isUser ? (
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-200/70 pt-3">
-          <div className="text-xs leading-5 text-slate-500">
-            {data.childSelections.length > 0
-              ? `${data.childSelections.length} ${data.childSelections.length === 1 ? "branch" : "branches"} fork from this reply.`
-              : "Select a phrase in this reply to branch deeper."}
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant={data.isActiveBranch ? "default" : "outline"}
-            className={cn(
-              "nodrag nopan min-w-[118px] shadow-none",
-              data.isActiveBranch
-                ? "bg-slate-950 hover:bg-slate-800"
-                : "border-slate-300 bg-white text-slate-900 hover:bg-slate-100",
-            )}
-            onClick={() => data.onPickBranch(data.message.branchId)}
-          >
-            {data.isActiveBranch ? "Active lane" : "Continue chat"}
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -801,16 +861,12 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
 function SelectableMessage({
   content,
   disabled,
-  childSelections,
   onSelection,
 }: {
   content: string;
   disabled: boolean;
-  childSelections: ChildSelection[];
   onSelection: (draft: Omit<SelectionMenu, "sourceMessageId">) => void;
 }) {
-  const segments = buildHighlightedSegments(content, childSelections);
-
   return (
     <div
       className={cn(
@@ -869,52 +925,47 @@ function SelectableMessage({
         });
       }}
     >
-      {segments.map((segment, index) => (
-        <span
-          key={`${segment.start}-${segment.end}-${index}`}
-          className={
-            segment.highlighted
-              ? cn(
-                  "rounded-[10px] px-1.5 py-0.5",
-                  segment.active
-                    ? "bg-[#fff6df] text-slate-950 ring-1 ring-amber-400"
-                    : "bg-slate-100 text-slate-950 ring-1 ring-slate-200",
-                )
-              : undefined
-          }
-        >
-          {segment.text}
-        </span>
-      ))}
+      {content}
     </div>
   );
 }
 
 function buildFlowGraph({
   snapshot,
-  selectedBranchId,
-  onPickBranch,
+  selectedMessageId,
+  onPickMessage,
   onSelectionDraft,
 }: {
   snapshot: GraphSnapshot;
-  selectedBranchId: string;
-  onPickBranch: (branchId: string) => void;
+  selectedMessageId: string | null;
+  onPickMessage: (messageId: string) => void;
   onSelectionDraft: (draft: SelectionMenu) => void;
 }) {
+  const activeEdgeIds = getActiveEdgeIds(snapshot, selectedMessageId);
   const nodes: Node[] = [];
   const edges: Edge[] = snapshot.edges.map((edge) => ({
     id: edge.id,
     source: edge.source,
     target: edge.target,
     type: "smoothstep",
+    zIndex: activeEdgeIds.has(edge.id) ? 5 : 1,
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: edge.kind === "fork" ? "#475569" : "#94a3b8",
+      color: activeEdgeIds.has(edge.id)
+        ? "#0f172a"
+        : edge.kind === "fork"
+          ? "#94a3b8"
+          : "#cbd5e1",
     },
     style: {
-      stroke: edge.kind === "fork" ? "#475569" : "#94a3b8",
+      stroke: activeEdgeIds.has(edge.id)
+        ? "#0f172a"
+        : edge.kind === "fork"
+          ? "#94a3b8"
+          : "#cbd5e1",
       strokeDasharray: edge.kind === "fork" ? "8 8" : undefined,
-      strokeWidth: edge.kind === "fork" ? 1.5 : 1.15,
+      strokeWidth: activeEdgeIds.has(edge.id) ? 2.15 : edge.kind === "fork" ? 1.5 : 1.15,
+      opacity: activeEdgeIds.has(edge.id) ? 1 : edge.kind === "fork" ? 0.8 : 0.48,
     },
   }));
 
@@ -952,15 +1003,6 @@ function buildFlowGraph({
       const messageX = placement.x;
       const messageY = placement.y + index * branchMessageGap;
 
-      const childBranches = childBranchesBySource.get(message.id) ?? [];
-      const childSelections = childBranches.map((childBranch) => ({
-        branchId: childBranch.id,
-        selectedText: childBranch.selectedText ?? childBranch.title,
-        startOffset: childBranch.startOffset,
-        endOffset: childBranch.endOffset,
-        isActive: childBranch.id === selectedBranchId,
-      }));
-
       nodes.push({
         id: message.id,
         type: "message",
@@ -973,12 +1015,13 @@ function buildFlowGraph({
         targetPosition: Position.Top,
         data: {
           message,
-          isActiveBranch: branch.id === selectedBranchId,
-          childSelections,
-          onPickBranch,
+          isActiveMessage: message.id === selectedMessageId,
+          onPickMessage,
           onSelectionDraft,
         } satisfies MessageNodeData,
       });
+
+      const childBranches = childBranchesBySource.get(message.id) ?? [];
 
       childBranches.forEach((childBranch, childIndex) => {
         placeBranch(childBranch, getChildPlacement(placement, messageX, messageY, childIndex));
@@ -1035,88 +1078,26 @@ function getPlacementPattern(direction: BranchDirection) {
   }
 }
 
-function buildHighlightedSegments(content: string, childSelections: ChildSelection[]) {
-  const ranges = childSelections
-    .map((selection) => {
-      if (
-        typeof selection.startOffset === "number" &&
-        typeof selection.endOffset === "number" &&
-        selection.startOffset >= 0 &&
-        selection.endOffset > selection.startOffset &&
-        selection.endOffset <= content.length
-      ) {
-        return {
-          start: selection.startOffset,
-          end: selection.endOffset,
-          active: selection.isActive,
-        };
-      }
-
-      const fallbackIndex = content.indexOf(selection.selectedText);
-      if (fallbackIndex < 0) {
-        return null;
-      }
-
-      return {
-        start: fallbackIndex,
-        end: fallbackIndex + selection.selectedText.length,
-        active: selection.isActive,
-      };
-    })
-    .filter((range): range is { start: number; end: number; active: boolean } => Boolean(range))
-    .sort((left, right) => left.start - right.start || Number(right.active) - Number(left.active));
-
-  const nonOverlapping: Array<{ start: number; end: number; active: boolean }> = [];
-  let currentEnd = -1;
-
-  for (const range of ranges) {
-    if (range.start >= currentEnd) {
-      nonOverlapping.push(range);
-      currentEnd = range.end;
-    }
+function getActiveEdgeIds(snapshot: GraphSnapshot, selectedMessageId: string | null) {
+  if (!selectedMessageId) {
+    return new Set<string>();
   }
 
-  const segments: Array<{
-    active: boolean;
-    end: number;
-    highlighted: boolean;
-    start: number;
-    text: string;
-  }> = [];
+  const edgeByTarget = new Map(snapshot.edges.map((edge) => [edge.target, edge]));
+  const activeEdgeIds = new Set<string>();
+  let currentMessageId: string | null = selectedMessageId;
 
-  let cursor = 0;
-  for (const range of nonOverlapping) {
-    if (range.start > cursor) {
-      segments.push({
-        active: false,
-        end: range.start,
-        highlighted: false,
-        start: cursor,
-        text: content.slice(cursor, range.start),
-      });
+  while (currentMessageId) {
+    const edge = edgeByTarget.get(currentMessageId);
+    if (!edge) {
+      break;
     }
 
-    segments.push({
-      active: range.active,
-      end: range.end,
-      highlighted: true,
-      start: range.start,
-      text: content.slice(range.start, range.end),
-    });
-    cursor = range.end;
+    activeEdgeIds.add(edge.id);
+    currentMessageId = edge.source;
   }
 
-  if (cursor < content.length) {
-    segments.push({
-      active: false,
-      end: content.length,
-      highlighted: false,
-      start: cursor,
-      text: content.slice(cursor),
-    });
-  }
-
-  return segments;
+  return activeEdgeIds;
 }
 
 function clearBrowserSelection() {
@@ -1277,6 +1258,20 @@ function processPathHint(value: string) {
   const homeRewritten = normalized.replace(/^[A-Za-z]:\/Users\/[^/]+/i, "~");
 
   return truncateMiddle(homeRewritten, 46);
+}
+
+function getLatestAssistantMessageId(snapshot: GraphSnapshot) {
+  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
+    if (snapshot.messages[index]?.role === "assistant") {
+      return snapshot.messages[index]!.id;
+    }
+  }
+
+  return null;
+}
+
+function summarizeMessage(value: string) {
+  return value.replace(/\s+/g, " ").trim() || "(empty message)";
 }
 
 /*

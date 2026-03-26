@@ -14,6 +14,7 @@ import {
   RootTurnRuntimeRequest,
   ServerDiagnostics,
   buildForkPrompt,
+  buildMessageBranchPrompt,
   completeMachineJobInputSchema,
   createMachineClaimJobInputSchema,
   createMachineHeartbeatInputSchema,
@@ -189,16 +190,25 @@ app.post("/api/branches", async (request, reply) => {
   }
 
   try {
+    const branchPrompt =
+      input.data.mode === "message"
+        ? buildMessageBranchPrompt(sourceMessage, input.data.prompt)
+        : buildForkPrompt(input.data.selectedText!, input.data.prompt);
     diagnostics.log(
       "info",
-      `Received fork request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${input.data.selectedText.length} selected chars, prompt ${input.data.prompt.length} chars).`,
+      input.data.mode === "message"
+        ? `Received branch-from-message request from ${sourceMessage.id} on machine ${sourceMessage.machineId} (${input.data.prompt.length} prompt chars).`
+        : `Received fork request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars).`,
     );
     const runtime = await machines.enqueueJob(sourceMessage.machineId, {
       kind: "fork-branch",
       payload: {
         sourceSessionId: sourceMessage.sessionId,
-        selectedText: input.data.selectedText,
-        prompt: buildForkPrompt(input.data.selectedText, input.data.prompt),
+        selectedText:
+          input.data.mode === "message"
+            ? sourceMessage.content.slice(0, 160).trim() || sourceMessage.role
+            : input.data.selectedText!,
+        prompt: branchPrompt,
       },
     });
 

@@ -188,13 +188,62 @@ export const createRootTurnInputSchema = z.object({
 
 export type CreateRootTurnInput = z.infer<typeof createRootTurnInputSchema>;
 
-export const createBranchInputSchema = z.object({
-  sourceMessageId: z.string().min(1),
-  selectedText: z.string().trim().min(1).max(1000),
-  startOffset: z.number().int().nonnegative(),
-  endOffset: z.number().int().positive(),
-  prompt: z.string().trim().max(4000).default(""),
-});
+export const createBranchInputSchema = z
+  .object({
+    sourceMessageId: z.string().min(1),
+    mode: z.enum(["selection", "message"]).default("selection"),
+    selectedText: z.string().trim().max(1000).optional(),
+    startOffset: z.number().int().nonnegative().optional(),
+    endOffset: z.number().int().positive().optional(),
+    prompt: z.string().trim().max(4000).default(""),
+  })
+  .superRefine((input, ctx) => {
+    if (input.mode === "selection") {
+      if (!input.selectedText || input.selectedText.trim().length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "selectedText is required when branching from a text selection.",
+          path: ["selectedText"],
+        });
+      }
+
+      if (typeof input.startOffset !== "number") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "startOffset is required when branching from a text selection.",
+          path: ["startOffset"],
+        });
+      }
+
+      if (typeof input.endOffset !== "number") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "endOffset is required when branching from a text selection.",
+          path: ["endOffset"],
+        });
+      }
+
+      if (
+        typeof input.startOffset === "number" &&
+        typeof input.endOffset === "number" &&
+        input.endOffset <= input.startOffset
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "endOffset must be greater than startOffset.",
+          path: ["endOffset"],
+        });
+      }
+    }
+
+    if (input.mode === "message" && input.prompt.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "prompt is required when branching from a bubble.",
+        path: ["prompt"],
+      });
+    }
+  });
 
 export type CreateBranchInput = z.infer<typeof createBranchInputSchema>;
 
@@ -248,6 +297,24 @@ export function buildForkPrompt(selectedText: string, userPrompt: string): strin
   ].join("\n");
 }
 
+export function buildMessageBranchPrompt(
+  sourceMessage: Pick<MessageNode, "role" | "content">,
+  userPrompt: string,
+): string {
+  const anchorContent = truncatePromptContext(sourceMessage.content.trim() || "(empty message)", 1600);
+
+  return [
+    "The user wants to branch the conversation from an earlier message in this session.",
+    `Anchor message role: ${sourceMessage.role}`,
+    "Anchor message content:",
+    `"""${anchorContent}"""`,
+    "Treat later messages in the original session as a different path, and continue from this anchor point instead.",
+    "",
+    "User follow-up:",
+    userPrompt.trim(),
+  ].join("\n");
+}
+
 export function buildGraphEdges(snapshot: Pick<GraphSnapshot, "branches" | "messages">): GraphEdge[] {
   const edges: GraphEdge[] = [];
   const messagesByBranch = new Map<string, MessageNode[]>();
@@ -283,4 +350,12 @@ export function buildGraphEdges(snapshot: Pick<GraphSnapshot, "branches" | "mess
   }
 
   return edges;
+}
+
+function truncatePromptContext(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
