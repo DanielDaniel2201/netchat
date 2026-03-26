@@ -2,6 +2,9 @@
   "name": "netchat",
   "private": true,
   "version": "0.1.0",
+  "bin": {
+    "netchat": "./bin/netchat.mjs"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -10,7 +13,7 @@
     "dev:web": "npm run dev --workspace @netchat/web",
     "dev:server": "npm run dev --workspace @netchat/server",
     "dev:daemon": "npm run dev --workspace @netchat/daemon",
-    "app:local": "npm run local-app --workspace @netchat/server",
+    "app:local": "node ./bin/netchat.mjs",
     "check": "npm run check --workspace @netchat/shared && npm run check --workspace @netchat/server && npm run check --workspace @netchat/daemon && npm run check --workspace @netchat/web",
     "build:web": "npm run build --workspace @netchat/web"
   }

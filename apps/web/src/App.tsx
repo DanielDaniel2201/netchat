@@ -1266,7 +1266,7 @@ function buildPairingCommand({
   pairingCode: string;
   serverUrl: string;
 }) {
-  return `npx tsx apps/daemon/src/index.ts --server ${serverUrl} --pair ${pairingCode}`;
+  return `npx netchat daemon --server ${serverUrl} --pair ${pairingCode}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
