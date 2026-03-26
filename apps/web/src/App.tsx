@@ -252,6 +252,10 @@ function NetchatApp() {
     }, 0);
   }
 
+  function enableNodePointerEvents() {
+    return;
+  }
+
   const graph = useMemo(() => {
     if (!snapshot) {
       return { nodes: [], edges: [] };
@@ -372,45 +376,63 @@ function NetchatApp() {
         serverUrl: apiBaseUrl,
       })
     : null;
+  const selectionToolbarPosition = selectionMenu ? resolveSelectionToolbarPosition(selectionMenu) : null;
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#f3f5f9] text-slate-950">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.96),rgba(243,245,249,0.84)_42%,rgba(243,245,249,0.96)_100%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(148,163,184,0.12),transparent_34%),radial-gradient(circle_at_top_right,rgba(15,23,42,0.08),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.4),rgba(243,245,249,0))]" />
+    <div className="relative h-screen w-screen overflow-hidden bg-[#f5f4ef] text-slate-950">
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(245,244,239,1))]" />
 
-      {selectionMenu ? (
-        <button
-          type="button"
-          disabled={branchMutation.isPending}
-          className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-full border border-slate-950/10 bg-slate-950 px-3 py-1.5 text-xs font-medium text-white shadow-[0_18px_45px_-18px_rgba(15,23,42,0.55)] transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-700"
-          style={{
-            top: Math.max(selectionMenu.top - 12, 16),
-            left: selectionMenu.left,
-          }}
+      {selectionMenu && selectionToolbarPosition ? (
+        <div
+          className="fixed z-30 -translate-x-1/2 -translate-y-[calc(100%+10px)]"
+          style={selectionToolbarPosition}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() =>
-            branchMutation.mutate({
-              sourceMessageId: selectionMenu.sourceMessageId,
-              selectedText: selectionMenu.selectedText,
-              startOffset: selectionMenu.startOffset,
-              endOffset: selectionMenu.endOffset,
-              prompt: "",
-            })
-          }
         >
-          {branchMutation.isPending ? (
-            <span className="inline-flex items-center gap-2">
-              <LoaderCircle className="size-3 animate-spin" />
-              Asking...
-            </span>
-          ) : (
-            "Ask more"
-          )}
-        </button>
+          <div className="selection-toolbar inline-flex max-w-[min(70vw,420px)] items-center gap-2 rounded-full border border-slate-950 bg-[#fffdf7] px-2 py-2 shadow-[0_14px_28px_-22px_rgba(15,23,42,0.35)]">
+            <div className="max-w-[220px] truncate rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-500">
+              {truncate(selectionMenu.selectedText, 42)}
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={branchMutation.isPending}
+              className="nodrag nopan border-slate-950 bg-slate-950 text-white shadow-none hover:bg-slate-800"
+              onClick={() =>
+                branchMutation.mutate({
+                  sourceMessageId: selectionMenu.sourceMessageId,
+                  selectedText: selectionMenu.selectedText,
+                  startOffset: selectionMenu.startOffset,
+                  endOffset: selectionMenu.endOffset,
+                  prompt: "",
+                })
+              }
+            >
+              {branchMutation.isPending ? (
+                <span className="inline-flex items-center gap-2">
+                  <LoaderCircle className="size-3 animate-spin" />
+                  Asking...
+                </span>
+              ) : (
+                "Ask more"
+              )}
+            </Button>
+            <button
+              type="button"
+              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500 transition-colors hover:border-slate-950 hover:text-slate-950"
+              onClick={() => {
+                setSelectionMenu(null);
+                clearBrowserSelection();
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
       ) : null}
 
       <div className="pointer-events-none absolute left-5 top-5 z-20 max-w-[420px]">
-        <div className="pointer-events-auto rounded-[24px] border border-white/70 bg-white/76 px-4 py-3 shadow-[0_28px_70px_-42px_rgba(15,23,42,0.32)] backdrop-blur-xl">
+        <div className="pointer-events-auto rounded-[22px] border border-slate-300 bg-[#fffdf8] px-4 py-3 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)]">
           <div className="flex items-center gap-2">
             <div className="rounded-full border border-slate-200/80 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
               netchat
@@ -430,6 +452,7 @@ function NetchatApp() {
         fitViewOptions={{ padding: 0.24, minZoom: 0.45, maxZoom: 1 }}
         nodes={graph.nodes}
         edges={graph.edges}
+        onNodeMouseEnter={enableNodePointerEvents}
         nodeTypes={{
           message: MessageGraphNode,
         }}
@@ -449,7 +472,7 @@ function NetchatApp() {
       </ReactFlow>
 
       <div className="pointer-events-none absolute right-5 top-5 z-20 max-w-[520px]">
-        <div className="pointer-events-auto rounded-[24px] border border-white/70 bg-white/76 px-4 py-3 shadow-[0_28px_70px_-42px_rgba(15,23,42,0.32)] backdrop-blur-xl">
+        <div className="pointer-events-auto rounded-[22px] border border-slate-300 bg-[#fffdf8] px-4 py-3 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)]">
           <div className="flex items-center gap-2">
             <span
               className={cn(
@@ -479,7 +502,7 @@ function NetchatApp() {
 
       {!runtimeMachine || daemonDiagnosticsQuery.isSuccess || daemonDiagnosticsQuery.isError ? (
         <div className="pointer-events-none absolute bottom-40 left-5 z-20 w-[min(440px,calc(100vw-2.5rem))]">
-          <div className="pointer-events-auto rounded-[24px] border border-white/70 bg-white/80 p-4 shadow-[0_28px_70px_-42px_rgba(15,23,42,0.32)] backdrop-blur-xl">
+          <div className="pointer-events-auto rounded-[22px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)]">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
@@ -620,7 +643,7 @@ function NetchatApp() {
 
       {!graphQuery.isLoading && (!snapshot || snapshot.messages.length === 0) ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
-          <div className="max-w-xl rounded-[28px] border border-white/80 bg-white/76 px-6 py-5 shadow-[0_35px_90px_-48px_rgba(15,23,42,0.35)] backdrop-blur-xl">
+          <div className="max-w-xl rounded-[24px] border border-slate-300 bg-[#fffdf8] px-6 py-5 shadow-[0_16px_30px_-22px_rgba(15,23,42,0.16)]">
             <div className="text-sm font-medium uppercase tracking-[0.28em] text-slate-400">
               Start here
             </div>
@@ -637,7 +660,7 @@ function NetchatApp() {
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-5">
         <form
-          className="pointer-events-auto w-full max-w-[920px] rounded-[30px] border border-white/75 bg-[rgba(255,255,255,0.8)] p-4 shadow-[0_35px_90px_-48px_rgba(15,23,42,0.4)] backdrop-blur-xl"
+          className="pointer-events-auto w-full max-w-[920px] rounded-[26px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_18px_34px_-26px_rgba(15,23,42,0.16)]"
           onSubmit={handleSubmit}
         >
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-1 pb-3">
@@ -720,18 +743,20 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   return (
     <div
       className={cn(
-        "group relative overflow-hidden border bg-white/78 px-5 py-4 text-left shadow-[0_28px_70px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all",
-        isUser ? "w-[320px] rounded-[26px]" : "w-[468px] rounded-[30px]",
+        "group relative overflow-hidden border bg-[#fffefb] px-5 py-4 text-left shadow-[0_12px_26px_-22px_rgba(15,23,42,0.14)] transition-colors",
+        isUser ? "w-[320px] rounded-[24px]" : "w-[476px] rounded-[28px]",
         data.isActiveBranch
-          ? "border-slate-950 shadow-[0_34px_90px_-46px_rgba(15,23,42,0.46)]"
-          : "border-slate-200/80 hover:-translate-y-0.5 hover:border-slate-300",
+          ? "border-slate-950 bg-white"
+          : "border-slate-300/90 hover:border-slate-400",
       )}
-      onClick={() => data.onPickBranch(data.message.branchId)}
+      onClickCapture={(event) => event.stopPropagation()}
+      onMouseDownCapture={(event) => event.stopPropagation()}
+      onPointerDownCapture={(event) => event.stopPropagation()}
     >
-      <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-slate-900/12 to-transparent" />
+      <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-slate-900/10 to-transparent" />
 
       <div className="mb-3 flex items-center justify-between gap-4">
-        <div className="inline-flex rounded-full border border-slate-200/80 bg-white/90 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <div className="inline-flex rounded-full border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
           {roleLabel}
         </div>
         <div className="font-mono text-[11px] text-slate-400">
@@ -753,16 +778,20 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               ? `${data.childSelections.length} ${data.childSelections.length === 1 ? "branch" : "branches"} fork from this reply.`
               : "Select a phrase in this reply to branch deeper."}
           </div>
-          <div
+          <Button
+            type="button"
+            size="sm"
+            variant={data.isActiveBranch ? "default" : "outline"}
             className={cn(
-              "rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]",
+              "nodrag nopan min-w-[118px] shadow-none",
               data.isActiveBranch
-                ? "border-slate-950 bg-slate-950 text-white"
-                : "border-slate-200 bg-white text-slate-500",
+                ? "bg-slate-950 hover:bg-slate-800"
+                : "border-slate-300 bg-white text-slate-900 hover:bg-slate-100",
             )}
+            onClick={() => data.onPickBranch(data.message.branchId)}
           >
-            {data.isActiveBranch ? "Active lane" : "Click to continue"}
-          </div>
+            {data.isActiveBranch ? "Active lane" : "Continue chat"}
+          </Button>
         </div>
       ) : null}
     </div>
@@ -785,10 +814,20 @@ function SelectableMessage({
   return (
     <div
       className={cn(
-        "whitespace-pre-wrap text-[15px] leading-7 text-slate-700 selection:bg-slate-900/12 selection:text-slate-950",
-        disabled ? "cursor-default" : "cursor-text",
+        "message-copy whitespace-pre-wrap text-[15px] leading-7 text-slate-700 selection:bg-amber-200 selection:text-slate-950",
+        disabled ? "cursor-default" : "nodrag nopan cursor-text select-text",
       )}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
       onMouseUp={(event) => {
+        event.stopPropagation();
         if (disabled) {
           return;
         }
@@ -838,7 +877,7 @@ function SelectableMessage({
               ? cn(
                   "rounded-[10px] px-1.5 py-0.5",
                   segment.active
-                    ? "bg-slate-950 text-white shadow-[0_8px_24px_-14px_rgba(15,23,42,0.8)]"
+                    ? "bg-[#fff6df] text-slate-950 ring-1 ring-amber-400"
                     : "bg-slate-100 text-slate-950 ring-1 ring-slate-200",
                 )
               : undefined
@@ -925,6 +964,10 @@ function buildFlowGraph({
       nodes.push({
         id: message.id,
         type: "message",
+        className: cn(
+          "message-node-shell nopan",
+          message.role === "assistant" ? "message-node-shell--assistant" : "message-node-shell--user",
+        ),
         position: { x: messageX, y: messageY },
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
@@ -1078,6 +1121,22 @@ function buildHighlightedSegments(content: string, childSelections: ChildSelecti
 
 function clearBrowserSelection() {
   window.getSelection()?.removeAllRanges();
+}
+
+function resolveSelectionToolbarPosition(selectionMenu: SelectionMenu) {
+  const viewportWidth = typeof window === "undefined" ? 0 : window.innerWidth;
+  const gutter = 120;
+  const minLeft = gutter;
+  const maxLeft = viewportWidth > 0 ? Math.max(minLeft, viewportWidth - gutter) : selectionMenu.left;
+
+  return {
+    top: Math.max(selectionMenu.top - 14, 18),
+    left: clamp(selectionMenu.left, minLeft, maxLeft),
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function buildRuntimeBadges(

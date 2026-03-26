@@ -1,5 +1,5 @@
 import { ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,15 @@ const tsxCliPath = path.join(
 const webDistPath = path.join(repoRoot, "apps", "web", "dist");
 const webDistIndexPath = path.join(webDistPath, "index.html");
 const webBuildMarkerPath = path.join(webDistPath, ".netchat-local-build.json");
+const webSourceRoots = [
+  path.join(repoRoot, "apps", "web", "src"),
+  path.join(repoRoot, "apps", "web", "index.html"),
+  path.join(repoRoot, "apps", "web", "package.json"),
+  path.join(repoRoot, "apps", "web", "tsconfig.json"),
+  path.join(repoRoot, "apps", "web", "vite.config.ts"),
+  path.join(repoRoot, "apps", "web", "tailwind.config.ts"),
+  path.join(repoRoot, "apps", "web", "postcss.config.cjs"),
+];
 const managedChildren: ChildProcess[] = [];
 
 let shuttingDown = false;
@@ -444,7 +453,10 @@ function isPortAvailable(port: number) {
     probe.once("listening", () => {
       probe.close(() => resolve(true));
     });
-    probe.listen(port, "127.0.0.1");
+    probe.listen({
+      port,
+      host: "0.0.0.0",
+    });
   });
 }
 
@@ -469,6 +481,10 @@ function resolveWebBuildReason(config: LocalAppConfig) {
     return "Building the web UI because the local API endpoints changed.";
   }
 
+  if (isWebBuildOutdated()) {
+    return "Building the web UI because the frontend sources changed since the last local build.";
+  }
+
   return null;
 }
 
@@ -491,6 +507,53 @@ function writeWebBuildMarker(config: LocalAppConfig) {
     daemonBaseUrl: config.daemonUrl,
   };
   writeFileSync(webBuildMarkerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
+}
+
+function isWebBuildOutdated() {
+  if (!existsSync(webDistIndexPath)) {
+    return true;
+  }
+
+  let buildTimestamp = 0;
+  try {
+    buildTimestamp = statSync(webDistIndexPath).mtimeMs;
+  } catch {
+    return true;
+  }
+
+  return getLatestModifiedTime(webSourceRoots) > buildTimestamp;
+}
+
+function getLatestModifiedTime(pathsToInspect: string[]) {
+  let latest = 0;
+
+  for (const targetPath of pathsToInspect) {
+    latest = Math.max(latest, getPathModifiedTime(targetPath));
+  }
+
+  return latest;
+}
+
+function getPathModifiedTime(targetPath: string): number {
+  if (!existsSync(targetPath)) {
+    return 0;
+  }
+
+  const stats = statSync(targetPath);
+  if (!stats.isDirectory()) {
+    return stats.mtimeMs;
+  }
+
+  let latest = stats.mtimeMs;
+  for (const entry of readdirSync(targetPath, { withFileTypes: true })) {
+    if (entry.name === "dist" || entry.name === "node_modules") {
+      continue;
+    }
+
+    latest = Math.max(latest, getPathModifiedTime(path.join(targetPath, entry.name)));
+  }
+
+  return latest;
 }
 
 function resolveNpmCommand() {

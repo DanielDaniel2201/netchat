@@ -72,6 +72,36 @@ textarea {
   cursor: default;
 }
 
+.netchat-flow .react-flow__node.message-node-shell {
+  cursor: default !important;
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.netchat-flow .react-flow__node.message-node-shell:hover {
+  cursor: default !important;
+}
+
+.netchat-flow .message-copy,
+.netchat-flow .message-copy * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.netchat-flow .message-copy {
+  cursor: text !important;
+}
+
+.netchat-flow .react-flow__node.message-node-shell button,
+.netchat-flow .react-flow__node.message-node-shell button * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.selection-toolbar {
+  backdrop-filter: none;
+}
+
 .canvas-flow .react-flow__node:focus,
 .canvas-flow .react-flow__node:focus-visible {
   outline: none;
