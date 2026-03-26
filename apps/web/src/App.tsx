@@ -19,10 +19,8 @@ import {
   CreateBranchTurnInput,
   CreateRootTurnInput,
   GraphSnapshot,
-  HostPlatform,
   MachineRecord,
   MessageNode,
-  PairingSession,
   rootBranchId,
 } from "@netchat/shared";
 import { create } from "zustand";
@@ -88,6 +86,7 @@ function NetchatApp() {
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
   const [composerValue, setComposerValue] = useState("");
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu | null>(null);
+  const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
 
   const graphQuery = useQuery({
     queryKey: ["graph"],
@@ -242,24 +241,6 @@ function NetchatApp() {
       logWeb("error", `Branch turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
-  const pairingMutation = useMutation({
-    mutationFn: async () => {
-      logWeb("info", "Requesting a new daemon pairing code.");
-      return request<PairingSession>("/api/machines/pairing-sessions", {
-        method: "POST",
-        body: JSON.stringify({
-          label: "Local daemon",
-        }),
-      });
-    },
-    onSuccess: (session) => {
-      logWeb("info", `Generated pairing code ${session.pairingCode} (expires ${session.expiresAt}).`);
-    },
-    onError: (error) => {
-      logWeb("error", `Pairing code generation failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
-    },
-  });
-
   const isThinking =
     rootTurnMutation.isPending || branchMutation.isPending || branchTurnMutation.isPending;
 
@@ -368,77 +349,40 @@ function NetchatApp() {
     submitCurrentPrompt();
   }
 
-  const selectedMessagePreview = selectedMessage ? summarizeMessage(selectedMessage.content) : null;
-  const composerBadge =
-    sendMode === "branch-from-message" ? "Branch" : snapshot?.messages.length ? "Continue" : "Start";
-  const composerLabel =
-    sendMode === "branch-from-message"
-      ? "Next send forks from the selected bubble"
-      : selectedMessage
-        ? "Next send appends after the selected bubble"
-        : "Start the main conversation";
-  const composerContext = selectedMessage
-    ? `${selectedMessage.role === "assistant" ? "Claude Code" : "You"} · ${formatMessageTime(selectedMessage.createdAt)} · ${truncate(selectedMessagePreview ?? "", 92)}`
+  const connectionStatus = buildConnectionStatus(runtimeMachine, daemonDiagnostics, daemonDiagnosticsQuery.error);
+  const workingDirectoryValue =
+    runtimeMachine?.environment.workingDirectory ??
+    daemonDiagnostics?.environment.workingDirectory ??
+    null;
+  const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
+  const workingDirectoryDisplay = truncateMiddle(workingDirectoryPath, 44);
+  const workspaceName = resolveWorkspaceName(workingDirectoryPath);
+  const runtimeLabel = resolveRuntimeLabel(runtimeMachine, daemonDiagnostics);
+  const composerLabel = selectedMessage ? "Replying from selected bubble" : "Start a conversation";
+  const composerHint = selectedMessage
+    ? runtimeMachine && runtimeMachine.status !== "online"
+      ? "Reconnect the local runtime to send from this bubble."
+      : sendMode === "branch-from-message"
+        ? "Next message creates a new branch."
+        : "Next message continues this branch."
     : rootMachine
-      ? `Root turns route through ${rootMachine.name}.`
-      : "Pair a local daemon so the app can use the user's own Claude Code runtime.";
+      ? "Your next message starts the main branch."
+      : "Bring one local runtime online to start chatting.";
   const composerPlaceholder =
     sendMode === "branch-from-message"
       ? runtimeMachine?.status === "online"
-        ? "Branch from the selected bubble..."
+        ? "Reply from this bubble..."
         : "Bring this bubble's machine back online to branch here..."
-      : sendMode === "continue-branch"
+      : selectedMessage
         ? runtimeMachine?.status === "online"
-          ? "Continue after the selected bubble..."
+          ? "Continue from this bubble..."
           : "Bring this branch's machine back online to continue..."
         : !rootMachine
           ? "Bring one local daemon online first..."
-          : snapshot?.messages.length
-            ? "Continue after the selected bubble..."
-            : "Start the walkthrough...";
+        : "Ask anything...";
   const composerErrorMessage = formatErrorMessage(
     rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
   );
-  const workingDirectoryHint = processPathHint(
-    runtimeMachine?.environment.workingDirectory ??
-      daemonDiagnostics?.environment.workingDirectory ??
-      "Waiting for local runtime",
-  );
-  const machineHeading = runtimeMachine
-    ? runtimeMachine.name
-    : daemonDiagnosticsQuery.isSuccess
-      ? "Local daemon detected"
-      : "No machine online";
-  const machineBadges = buildRuntimeBadges(runtimeMachine, onlineMachines.length, daemonDiagnostics);
-  const machineDescription = runtimeMachine
-    ? runtimeMachine.status === "online"
-      ? sendMode === "branch-from-message"
-        ? `The next send will fork a new branch from the selected bubble on ${runtimeMachine.name}.`
-        : `The next send will continue the selected lane on ${runtimeMachine.name}.`
-      : sendMode === "branch-from-message"
-        ? `The selected bubble belongs to ${runtimeMachine.name}, which is currently offline, so branching is paused.`
-        : `The selected lane belongs to ${runtimeMachine.name}, which is currently offline.`
-    : buildDaemonSummary(daemonDiagnostics, daemonDiagnosticsQuery.error);
-  const footerMessage = isThinking
-    ? "Claude is writing the next message bubble..."
-    : selectedMessage
-      ? sendMode === "branch-from-message"
-        ? "The selected bubble sits in the middle of a lane, so the next send creates an alternate path."
-        : "The selected bubble is the end of its lane, so the next send continues it."
-      : runtimeMachine
-        ? runtimeMachine.status === "online"
-          ? `Ready on ${runtimeMachine.name} (${formatPlatform(runtimeMachine.environment.platform)}).`
-          : `Waiting for ${runtimeMachine.name} to reconnect.`
-      : daemonDiagnosticsQuery.isSuccess
-        ? "Local daemon reachable, but no machine is registered with the server yet."
-        : "No local runtime paired yet.";
-  const daemonLogs = daemonDiagnostics?.logs.slice(0, 6) ?? [];
-  const pairingCommand = pairingMutation.data
-    ? buildPairingCommand({
-        pairingCode: pairingMutation.data.pairingCode,
-        serverUrl: apiBaseUrl,
-      })
-    : null;
   const selectionToolbarPosition = selectionMenu ? resolveSelectionToolbarPosition(selectionMenu) : null;
 
   return (
@@ -495,19 +439,53 @@ function NetchatApp() {
         </div>
       ) : null}
 
-      <div className="pointer-events-none absolute left-5 top-5 z-20 max-w-[420px]">
-        <div className="pointer-events-auto rounded-[22px] border border-slate-300 bg-[#fffdf8] px-4 py-3 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)]">
+      <div className="pointer-events-none absolute right-5 top-5 z-20 flex flex-col items-end gap-3">
+        <button
+          type="button"
+          className="pointer-events-auto rounded-[18px] border border-slate-300 bg-[#fffdf8] px-4 py-3 text-left shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)] transition-colors hover:border-slate-400"
+          onClick={() => setShowRuntimeDetails((open) => !open)}
+        >
           <div className="flex items-center gap-2">
-            <div className="rounded-full border border-slate-200/80 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
-              netchat
+            <span
+              className={cn(
+                "inline-flex size-2.5 rounded-full",
+                connectionStatus.tone === "connected"
+                  ? "bg-emerald-500"
+                  : connectionStatus.tone === "connecting"
+                    ? "bg-amber-400"
+                    : "bg-slate-400",
+              )}
+            />
+            <span className="text-sm font-medium text-slate-900">{connectionStatus.label}</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">Workspace: {workspaceName}</div>
+        </button>
+
+        {showRuntimeDetails ? (
+          <div className="pointer-events-auto w-[min(320px,calc(100vw-2.5rem))] rounded-[18px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.16)]">
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-500">Status</span>
+                <span className="font-medium text-slate-900">{connectionStatus.label}</span>
+              </div>
+
+              <div className="flex items-start justify-between gap-3">
+                <span className="pt-0.5 text-slate-500">Working directory</span>
+                <span
+                  className="max-w-[190px] font-mono text-right text-[12px] leading-5 text-slate-700"
+                  title={workingDirectoryPath}
+                >
+                  {workingDirectoryDisplay}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-500">Runtime</span>
+                <span className="font-medium text-slate-900">{runtimeLabel}</span>
+              </div>
             </div>
-            <div className="text-xs text-slate-500">canvas-first local runtime routing</div>
           </div>
-          <div className="mt-3 text-[11px] uppercase tracking-[0.24em] text-slate-400">
-            Working directory
-          </div>
-          <div className="mt-1 font-mono text-sm text-slate-700">{workingDirectoryHint}</div>
-        </div>
+        ) : null}
       </div>
 
       <ReactFlow
@@ -540,176 +518,6 @@ function NetchatApp() {
         <Background gap={32} size={1} color="#d5dbe6" />
       </ReactFlow>
 
-      <div className="pointer-events-none absolute right-5 top-5 z-20 max-w-[520px]">
-        <div className="pointer-events-auto rounded-[22px] border border-slate-300 bg-[#fffdf8] px-4 py-3 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)]">
-          <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "inline-flex size-2.5 rounded-full",
-                runtimeMachine
-                  ? runtimeMachine.status === "online"
-                    ? "bg-emerald-500"
-                    : "bg-amber-400"
-                  : "bg-slate-300",
-              )}
-            />
-            <div className="text-sm font-medium text-slate-900">{machineHeading}</div>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {machineBadges.map((badge) => (
-              <span
-                key={badge}
-                className="inline-flex rounded-full border border-slate-200/80 bg-white/84 px-3 py-1 text-xs font-medium text-slate-600"
-              >
-                {badge}
-              </span>
-            ))}
-          </div>
-          <div className="mt-3 text-xs leading-6 text-slate-500">{machineDescription}</div>
-        </div>
-      </div>
-
-      {!runtimeMachine || daemonDiagnosticsQuery.isSuccess || daemonDiagnosticsQuery.isError ? (
-        <div className="pointer-events-none absolute bottom-40 left-5 z-20 w-[min(440px,calc(100vw-2.5rem))]">
-          <div className="pointer-events-auto rounded-[22px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)]">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                  Local daemon
-                </div>
-                <div className="mt-1 text-sm font-medium text-slate-900">
-                  {daemonDiagnosticsQuery.isSuccess ? "Diagnostics available" : "Diagnostics unavailable"}
-                </div>
-              </div>
-              <div
-                className={cn(
-                  "rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]",
-                  daemonDiagnosticsQuery.isSuccess
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border-amber-200 bg-amber-50 text-amber-700",
-                )}
-              >
-                {daemonDiagnosticsQuery.isSuccess ? "Reachable" : "Unreachable"}
-              </div>
-            </div>
-
-            {daemonDiagnosticsQuery.isSuccess ? (
-              <>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {buildDaemonBadges(daemonDiagnostics!).map((badge) => (
-                    <span
-                      key={badge}
-                      className="inline-flex rounded-full border border-slate-200/80 bg-white px-3 py-1 text-xs font-medium text-slate-600"
-                    >
-                      {badge}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="mt-3 rounded-[18px] border border-slate-200/80 bg-slate-50/80 px-4 py-3 text-sm leading-6 text-slate-600">
-                  {buildDaemonSummary(daemonDiagnostics!, null)}
-                  {daemonDiagnostics?.lastError ? (
-                    <div className="mt-2 text-rose-600">Last error: {daemonDiagnostics.lastError}</div>
-                  ) : null}
-                </div>
-
-                <div className="mt-3 rounded-[18px] border border-slate-200/80 bg-white/90 px-4 py-3">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                    Recent log
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    {daemonLogs.length > 0 ? (
-                      daemonLogs.map((entry) => (
-                        <div key={entry.id} className="font-mono text-[12px] leading-5 text-slate-600">
-                          <span className="text-slate-400">{formatLogTime(entry.timestamp)}</span>{" "}
-                          <span
-                            className={cn(
-                              entry.level === "error"
-                                ? "text-rose-600"
-                                : entry.level === "warn"
-                                  ? "text-amber-600"
-                                  : "text-slate-500",
-                            )}
-                          >
-                            [{entry.level}]
-                          </span>{" "}
-                          {entry.message}
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-sm text-slate-500">No daemon log entries yet.</div>
-                    )}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="mt-3 rounded-[18px] border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm leading-6 text-amber-700">
-                Web could not reach the local daemon at {daemonBaseUrl}. Start or restart
-                the daemon process to see runtime detection and registration diagnostics here.
-              </div>
-            )}
-
-            {!runtimeMachine && !daemonDiagnostics?.localMode ? (
-              <div className="mt-3 rounded-[18px] border border-slate-200/80 bg-white/90 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                      Pair local daemon
-                    </div>
-                    <div className="mt-1 text-sm text-slate-600">
-                      Generate a one-time pairing code and restart the daemon with it.
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-full"
-                    disabled={pairingMutation.isPending}
-                    onClick={() => pairingMutation.mutate()}
-                  >
-                    {pairingMutation.isPending ? "Generating..." : "Generate code"}
-                  </Button>
-                </div>
-
-                {pairingMutation.data ? (
-                  <div className="mt-3 space-y-3">
-                    <div className="rounded-[16px] border border-slate-200 bg-slate-50/90 px-4 py-3">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                        Pairing code
-                      </div>
-                      <div className="mt-2 font-mono text-lg font-semibold text-slate-950">
-                        {pairingMutation.data.pairingCode}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Expires at {new Date(pairingMutation.data.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </div>
-                      <div className="mt-2 text-xs leading-5 text-slate-500">
-                        Codes are tied to the current dev server process. If the server restarts or the code expires, generate a fresh one.
-                      </div>
-                    </div>
-
-                    <div className="rounded-[16px] border border-slate-200 bg-slate-950 px-4 py-3 text-[12px] leading-6 text-slate-100">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                        PowerShell
-                      </div>
-                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono">
-                        {pairingCommand}
-                      </pre>
-                    </div>
-                  </div>
-                ) : null}
-
-                {pairingMutation.error ? (
-                  <div className="mt-3 text-sm text-rose-600">
-                    {formatErrorMessage(pairingMutation.error)}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       {!graphQuery.isLoading && (!snapshot || snapshot.messages.length === 0) ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
           <div className="max-w-xl rounded-[24px] border border-slate-300 bg-[#fffdf8] px-6 py-5 shadow-[0_16px_30px_-22px_rgba(15,23,42,0.16)]">
@@ -732,17 +540,9 @@ function NetchatApp() {
           className="pointer-events-auto w-full max-w-[920px] rounded-[26px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_18px_34px_-26px_rgba(15,23,42,0.16)]"
           onSubmit={handleSubmit}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-1 pb-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex rounded-full border border-slate-200/80 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  {composerBadge}
-                </span>
-                <span className="text-sm font-medium text-slate-900">{composerLabel}</span>
-              </div>
-              <div className="mt-2 text-sm leading-6 text-slate-500">{composerContext}</div>
-            </div>
-            <div className="text-xs text-slate-500">{footerMessage}</div>
+          <div className="border-b border-slate-200/70 px-1 pb-3">
+            <div className="text-sm font-medium text-slate-900">{composerLabel}</div>
+            <div className="mt-1 text-xs leading-6 text-slate-500">{composerHint}</div>
           </div>
 
           <div className="mt-3 flex items-end gap-3">
@@ -781,24 +581,21 @@ function NetchatApp() {
             </div>
           ) : null}
 
-          <div className="mt-3 flex items-center justify-between gap-3 px-1 text-xs text-slate-500">
-            <div>
-              {runtimeMachine?.status === "online"
-                ? "Click any bubble to choose where the next turn lands."
-                : "Bubble selection stays local to the canvas."}
+          {selectionMenu ? (
+            <div className="mt-3 flex justify-end px-1">
+              <button
+                type="button"
+                className="pointer-events-auto rounded-full border border-slate-200/80 bg-white px-3 py-1 text-xs text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+                onClick={() => {
+                  setSelectionMenu(null);
+                  clearBrowserSelection();
+                  focusComposer();
+                }}
+              >
+                Clear text selection
+              </button>
             </div>
-            <button
-              type="button"
-              className="pointer-events-auto rounded-full border border-slate-200/80 bg-white px-3 py-1 transition-colors hover:border-slate-300 hover:text-slate-900"
-              onClick={() => {
-                setSelectionMenu(null);
-                clearBrowserSelection();
-                focusComposer();
-              }}
-            >
-              Clear text selection
-            </button>
-          </div>
+          ) : null}
         </form>
       </div>
     </div>
@@ -1120,125 +917,62 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function buildRuntimeBadges(
+function buildConnectionStatus(
   machine: MachineRecord | undefined,
-  onlineCount: number,
-  daemonDiagnostics?: DaemonDiagnostics,
+  diagnostics: DaemonDiagnostics | undefined,
+  error: unknown,
 ) {
-  if (!machine) {
-    if (daemonDiagnostics) {
-      return buildDaemonBadges(daemonDiagnostics);
-    }
-
-    return ["Waiting for daemon", "User-local runtime", `${onlineCount} online`];
+  if (machine?.status === "online") {
+    return {
+      label: "Connected",
+      tone: "connected" as const,
+    };
   }
 
-  const onlineLabel = `${onlineCount} ${onlineCount === 1 ? "machine" : "machines"} online`;
-  const statusLabel = machine.status === "online" ? "Online" : "Offline";
-  const modeLabel =
-    machine.environment.runtimeMode === "claude" ? "Claude Code" : "Mock runtime";
-  const claudeLabel = machine.environment.claudeInstalled ? "Claude detected" : "Claude missing";
+  if (machine?.status === "offline") {
+    return {
+      label: "Disconnected",
+      tone: "offline" as const,
+    };
+  }
 
-  return [statusLabel, onlineLabel, formatPlatform(machine.environment.platform), modeLabel, claudeLabel];
-}
-
-function buildDaemonBadges(diagnostics: DaemonDiagnostics) {
-  const badges = [
-    formatDaemonStatus(diagnostics.status),
-    `${diagnostics.environment.runtimeMode === "claude" ? "Claude Code" : "Mock runtime"}`,
-    diagnostics.environment.claudeInstalled ? "Claude detected" : "Claude missing",
-    diagnostics.serverUrl ? "Server linked" : "Server URL missing",
-  ];
-
-  badges.push(diagnostics.localMode ? "Local-first mode" : diagnostics.pairingCodeConfigured ? "Pairing code set" : "Pairing code missing");
-  return badges;
-}
-
-function buildDaemonSummary(diagnostics: DaemonDiagnostics | undefined, error: unknown) {
   if (!diagnostics) {
-    if (error instanceof Error && error.message.trim()) {
-      return error.message.trim();
-    }
-
-    return `The web app cannot reach the local daemon at ${daemonBaseUrl}.`;
+    const disconnected = error instanceof Error && error.message.trim().length > 0;
+    return {
+      label: disconnected ? "Disconnected" : "Connecting",
+      tone: disconnected ? ("offline" as const) : ("connecting" as const),
+    };
   }
 
-  if (!diagnostics.localMode && diagnostics.lastError && /invalid pairing code/i.test(diagnostics.lastError)) {
-    return "The pairing code is stale or no longer exists on the current server process. Generate a fresh code and restart the daemon with the new command.";
+  if (
+    diagnostics.status === "starting" ||
+    diagnostics.status === "registering" ||
+    diagnostics.status === "registered"
+  ) {
+    return {
+      label: "Connecting",
+      tone: "connecting" as const,
+    };
   }
 
-  if (!diagnostics.serverUrl) {
-    return "Claude can be detected locally, but NETCHAT_SERVER_URL is not configured, so the daemon is not trying to register a machine.";
+  if (diagnostics.machineId || diagnostics.status === "online") {
+    return {
+      label: "Connected",
+      tone: "connected" as const,
+    };
   }
 
-  if (diagnostics.localMode && !diagnostics.machineId) {
-    return "The daemon is running in local-first mode and will register itself with the local controller automatically.";
-  }
-
-  if (!diagnostics.machineId && !diagnostics.pairingCodeConfigured) {
-    return "The daemon can talk to the server, but it has no stored machine identity and no pairing code yet. Generate a pairing code and restart the daemon with it.";
-  }
-
-  if (diagnostics.status === "waiting_for_pairing") {
-    return "The daemon is waiting for a pairing code before it can register a machine with the server.";
-  }
-
-  if (diagnostics.status === "registering") {
-    return "The daemon is trying to register this machine with the server.";
-  }
-
-  if (diagnostics.lastError) {
-    return diagnostics.lastError;
-  }
-
-  if (diagnostics.status === "registered" || diagnostics.status === "online") {
-    return diagnostics.machineId
-      ? `Daemon is registered as ${diagnostics.machineId} and polling the server.`
-      : "Daemon is registered and polling the server.";
-  }
-
-  return "Daemon diagnostics are available.";
-}
-
-function formatDaemonStatus(status: DaemonDiagnostics["status"]) {
-  switch (status) {
-    case "local_only":
-      return "Local only";
-    case "waiting_for_pairing":
-      return "Waiting for pairing";
-    case "registering":
-      return "Registering";
-    case "registered":
-      return "Registered";
-    case "online":
-      return "Online";
-    case "error":
-      return "Error";
-    case "starting":
-    default:
-      return "Starting";
-  }
-}
-
-function formatPlatform(platform: HostPlatform) {
-  switch (platform) {
-    case "macos":
-      return "macOS";
-    case "windows":
-      return "Windows";
-    case "linux":
-      return "Linux";
-    default:
-      return "Unknown OS";
-  }
+  return {
+    label: diagnostics.status === "waiting_for_pairing" || diagnostics.status === "error" ? "Disconnected" : "Connecting",
+    tone:
+      diagnostics.status === "waiting_for_pairing" || diagnostics.status === "error"
+        ? ("offline" as const)
+        : ("connecting" as const),
+  };
 }
 
 function formatMessageTime(value: string) {
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatLogTime(value: string) {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function formatErrorMessage(error: unknown) {
@@ -1253,13 +987,6 @@ function formatErrorMessage(error: unknown) {
   return "The request failed. Check the daemon/server logs for more detail.";
 }
 
-function processPathHint(value: string) {
-  const normalized = value.replace(/\\/g, "/");
-  const homeRewritten = normalized.replace(/^[A-Za-z]:\/Users\/[^/]+/i, "~");
-
-  return truncateMiddle(homeRewritten, 46);
-}
-
 function getLatestAssistantMessageId(snapshot: GraphSnapshot) {
   for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
     if (snapshot.messages[index]?.role === "assistant") {
@@ -1270,8 +997,27 @@ function getLatestAssistantMessageId(snapshot: GraphSnapshot) {
   return null;
 }
 
-function summarizeMessage(value: string) {
-  return value.replace(/\s+/g, " ").trim() || "(empty message)";
+function formatWorkingDirectoryPath(value: string | null) {
+  if (!value) {
+    return "Unavailable";
+  }
+
+  const normalized = value.replace(/\\/g, "/");
+  return normalized.replace(/^[A-Za-z]:\/Users\/[^/]+/i, "~");
+}
+
+function resolveWorkspaceName(value: string) {
+  const normalized = value.replace(/\/+$/, "");
+  const parts = normalized.split("/");
+  return parts.at(-1) || value;
+}
+
+function resolveRuntimeLabel(
+  machine: MachineRecord | undefined,
+  diagnostics: DaemonDiagnostics | undefined,
+) {
+  const runtimeMode = machine?.environment.runtimeMode ?? diagnostics?.environment.runtimeMode;
+  return runtimeMode === "mock" ? "Mock runtime" : "Claude Code";
 }
 
 /*
@@ -1311,16 +1057,6 @@ function truncateMiddle(value: string, maxLength: number) {
   const leading = Math.ceil((maxLength - 3) / 2);
   const trailing = Math.floor((maxLength - 3) / 2);
   return `${value.slice(0, leading)}...${value.slice(value.length - trailing)}`;
-}
-
-function buildPairingCommand({
-  pairingCode,
-  serverUrl,
-}: {
-  pairingCode: string;
-  serverUrl: string;
-}) {
-  return `npx netchat daemon --server ${serverUrl} --pair ${pairingCode}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
