@@ -52,6 +52,7 @@ body {
   margin: 0;
   background-color: var(--bg-cream);
   font-family: var(--font-body);
+  font-weight: 450;
   overscroll-behavior: none;
 }
 
@@ -67,9 +68,9 @@ textarea {
 }
 
 .editorial-meta {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 

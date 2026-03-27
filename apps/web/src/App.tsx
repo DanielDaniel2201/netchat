@@ -40,8 +40,8 @@ const branchMessageGap = 96;
 const branchForkGap = 92;
 const bubbleComposerGap = 20;
 const bubbleComposerWidth = 560;
-const messageEstimateCharsPerLine = 32;
-const messageEstimateLineHeight = 30;
+const messageEstimateCharsPerLine = 30;
+const messageEstimateLineHeight = 34;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -361,7 +361,7 @@ function NetchatApp() {
           padding: 0.18,
           duration: 520,
           minZoom: 0.34,
-          maxZoom: 1.02,
+          maxZoom: 1.1,
         });
       }, 80);
     });
@@ -592,8 +592,8 @@ function NetchatApp() {
                     )}
                   />
                   <div className="min-w-0">
-                    <div className="text-lg leading-none text-white">{connectionStatus.label}</div>
-                    <div className="mt-2 text-[11px] uppercase tracking-[0.18em] text-white/68">
+                    <div className="text-[22px] font-medium leading-none text-white">{connectionStatus.label}</div>
+                    <div className="mt-2 text-[12px] uppercase tracking-[0.16em] text-white/72">
                       {runtimeLabel}
                     </div>
                   </div>
@@ -602,7 +602,7 @@ function NetchatApp() {
 
               <div className="max-w-[120px] text-right">
                 <div className="editorial-meta text-white/62">Workspace</div>
-                <div className="mt-3 break-words text-sm leading-5 text-white/84">{workspaceName}</div>
+                <div className="mt-3 break-words text-[15px] leading-6 text-white/88">{workspaceName}</div>
               </div>
             </div>
           </button>
@@ -611,11 +611,11 @@ function NetchatApp() {
             <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
               <div className="border-b border-[var(--node-border)] px-5 py-4">
                 <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Local runtime</div>
-                <div className="mt-3 text-base font-medium text-[var(--text-main)]">{runtimeLabel}</div>
+                <div className="mt-3 text-[17px] font-medium text-[var(--text-main)]">{runtimeLabel}</div>
               </div>
               <div className="border-b border-[var(--node-border)] px-5 py-4">
                 <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Status</div>
-                <div className="mt-2 text-sm leading-6 text-[var(--text-main)]">{connectionStatus.label}</div>
+                <div className="mt-2 text-[15px] leading-7 text-[var(--text-main)]">{connectionStatus.label}</div>
               </div>
               <div className="border-b border-[var(--node-border)] px-5 py-4">
                 <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Workspace</div>
@@ -625,7 +625,7 @@ function NetchatApp() {
               </div>
               <div className="px-5 py-4">
                 <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Engine</div>
-                <div className="mt-2 text-sm leading-6 text-[var(--text-main)]">{runtimeLabel}</div>
+                <div className="mt-2 text-[15px] leading-7 text-[var(--text-main)]">{runtimeLabel}</div>
               </div>
             </div>
           ) : null}
@@ -634,7 +634,7 @@ function NetchatApp() {
         <ReactFlow
           className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
           fitView
-          fitViewOptions={{ padding: 0.18, minZoom: 0.34, maxZoom: 1.02 }}
+          fitViewOptions={{ padding: 0.18, minZoom: 0.34, maxZoom: 1.1 }}
           nodes={graph.nodes}
           edges={graph.edges}
           onNodeClick={(_event, node) => {
@@ -648,7 +648,7 @@ function NetchatApp() {
             message: MessageGraphNode,
           }}
           minZoom={0.35}
-          maxZoom={1.2}
+          maxZoom={1.45}
           nodesDraggable={false}
           nodesConnectable={false}
           elementsSelectable={false}
@@ -686,7 +686,7 @@ function NetchatApp() {
                   >
                     Turn one prompt into a branchable canvas.
                   </h1>
-                  <p className="mt-5 max-w-[56ch] text-[15px] leading-8 text-[rgba(26,26,26,0.76)]">
+                  <p className="mt-5 max-w-[56ch] text-[16px] leading-8 text-[rgba(26,26,26,0.8)]">
                     Conversations read like an editorial layout instead of a chat feed. Click Claude replies or
                     highlight a passage later to open new lanes from the exact point you want to explore.
                   </p>
@@ -697,7 +697,7 @@ function NetchatApp() {
                   <div className="mt-4 text-[26px] leading-[1.08] tracking-[-0.03em]" style={{ fontFamily: "var(--font-display)" }}>
                     Local-first branching.
                   </div>
-                  <div className="mt-5 space-y-4 text-sm leading-7 text-white/78">
+                  <div className="mt-5 space-y-4 text-[15px] leading-8 text-white/82">
                     <p>{branchCount} branches archived on the canvas.</p>
                     <p>{messageCount} messages currently mapped.</p>
                     <p>The active machine determines where the next lane is written.</p>
@@ -710,7 +710,7 @@ function NetchatApp() {
                 <div className="relative mt-4">
                   <Textarea
                     ref={composerRef}
-                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[16px] leading-8 text-white shadow-none placeholder:text-white focus-visible:ring-0"
+                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[17px] font-medium leading-9 text-white shadow-none placeholder:text-white focus-visible:ring-0"
                     placeholder={composerPlaceholder}
                     value={composerValue}
                     onChange={(event) => setComposerValue(event.target.value)}
@@ -772,7 +772,7 @@ function NetchatApp() {
             >
               {selectionForSelectedMessage ? (
                 <div className="border-b border-white/24 px-6 py-4">
-                  <div className="break-words text-sm leading-7 text-white">
+                  <div className="break-words text-[15px] font-medium leading-8 text-white">
                     {truncate(selectionForSelectedMessage.selectedText, 160)}
                   </div>
                 </div>
@@ -781,7 +781,7 @@ function NetchatApp() {
               <div className="relative px-6 py-5">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[15px] leading-8 text-white shadow-none placeholder:text-white focus-visible:ring-0"
+                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[17px] font-medium leading-9 text-white shadow-none placeholder:text-white focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -930,7 +930,7 @@ function SelectableMessage({
   return (
     <div
       className={cn(
-        "message-copy whitespace-pre-wrap text-[15px] leading-8 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
+        "message-copy whitespace-pre-wrap text-[17px] font-medium leading-9 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
         disabled ? "cursor-default" : "nodrag nopan cursor-text select-text",
       )}
       onClick={(event) => {
@@ -1140,7 +1140,7 @@ function estimateMessageBubbleHeight(message: MessageNode) {
   }, 0);
   const codeBlockBonus = (normalized.match(/```/g)?.length ?? 0) * 48;
 
-  return Math.max(210, 142 + wrappedLines * messageEstimateLineHeight + codeBlockBonus);
+  return Math.max(230, 150 + wrappedLines * messageEstimateLineHeight + codeBlockBonus);
 }
 
 function getActiveEdgeIds(snapshot: GraphSnapshot, selectedMessageId: string | null) {
