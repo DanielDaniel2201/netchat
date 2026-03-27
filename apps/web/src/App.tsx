@@ -1,19 +1,22 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Edge,
+  Handle,
   MarkerType,
   Node,
   NodeProps,
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesInitialized,
+  useOnViewportChange,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, LoaderCircle } from "lucide-react";
 import {
-  Branch,
   DaemonDiagnostics,
   CreateBranchInput,
   CreateBranchTurnInput,
@@ -31,9 +34,14 @@ import { cn } from "./lib/cn";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3001";
 const daemonBaseUrl = import.meta.env.VITE_DAEMON_BASE_URL ?? "http://127.0.0.1:4318";
-const branchMessageGap = 184;
-const branchLaneWidth = 560;
-const branchDrop = 312;
+const messageNodeWidth = 420;
+const branchLaneWidth = 620;
+const branchMessageGap = 96;
+const branchForkGap = 92;
+const bubbleComposerGap = 20;
+const bubbleComposerWidth = 560;
+const messageEstimateCharsPerLine = 32;
+const messageEstimateLineHeight = 30;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -43,24 +51,26 @@ type SelectionDraft = {
   endOffset: number;
 };
 
-type SelectionMenu = SelectionDraft & {
-  top: number;
+type ComposerAnchor = {
   left: number;
+  top: number;
+  width: number;
 };
 
-type BranchDirection = "center" | "left" | "right" | "down";
+type BubbleComposerMode =
+  | "root"
+  | "continue-root"
+  | "continue-branch"
+  | "branch-from-message"
+  | "branch-from-selection";
 
 type MessageNodeData = {
   message: MessageNode;
   isActiveMessage: boolean;
+  hasSelectionDraft: boolean;
+  onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
-  onSelectionDraft: (draft: SelectionMenu) => void;
-};
-
-type PositionedBranch = {
-  x: number;
-  y: number;
-  direction: BranchDirection;
+  onSelectionDraft: (draft: SelectionDraft) => void;
 };
 
 const useComposerStore = create<{
@@ -81,11 +91,16 @@ export default function App() {
 
 function NetchatApp() {
   const queryClient = useQueryClient();
+  const reactFlow = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const lastAutoSelectedMessageIdRef = useRef<string | null>(null);
   const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
   const [composerValue, setComposerValue] = useState("");
-  const [selectionMenu, setSelectionMenu] = useState<SelectionMenu | null>(null);
+  const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
+  const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
+  const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
   const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
 
   const graphQuery = useQuery({
@@ -135,6 +150,8 @@ function NetchatApp() {
       : null;
   const selectedBranch = selectedMessage ? (branchesById.get(selectedMessage.branchId) ?? null) : null;
   const selectedBranchMessages = selectedMessage ? messagesByBranch.get(selectedMessage.branchId) ?? [] : [];
+  const selectionForSelectedMessage =
+    selectedMessage && selectionDraft?.sourceMessageId === selectedMessage.id ? selectionDraft : null;
   const selectedMessageIsTail = selectedMessage
     ? selectedBranchMessages.at(-1)?.id === selectedMessage.id
     : true;
@@ -142,22 +159,26 @@ function NetchatApp() {
     selectedBranch?.machineId ? (machinesById.get(selectedBranch.machineId) ?? undefined) : undefined;
   const selectedMessageMachine =
     selectedMessage?.machineId ? (machinesById.get(selectedMessage.machineId) ?? undefined) : undefined;
-  const sendMode: "root" | "continue-root" | "continue-branch" | "branch-from-message" =
+  const sendMode: BubbleComposerMode =
     !selectedMessage
       ? "root"
+      : selectionForSelectedMessage
+        ? "branch-from-selection"
       : !selectedMessageIsTail
         ? "branch-from-message"
         : selectedBranch?.id === rootBranchId
           ? "continue-root"
           : "continue-branch";
   const runtimeMachine =
-    sendMode === "branch-from-message"
+    sendMode === "branch-from-message" || sendMode === "branch-from-selection"
       ? selectedMessageMachine
       : sendMode === "continue-branch"
         ? selectedBranchMachine ?? selectedMessageMachine
         : rootMachine;
   const canSendOnActiveLane =
-    sendMode === "branch-from-message" || sendMode === "continue-branch"
+    sendMode === "branch-from-message" ||
+    sendMode === "branch-from-selection" ||
+    sendMode === "continue-branch"
       ? runtimeMachine
         ? runtimeMachine.status === "online"
         : true
@@ -181,6 +202,7 @@ function NetchatApp() {
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
+      setSelectionDraft(null);
       setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
     },
     onError: (error) => {
@@ -208,8 +230,8 @@ function NetchatApp() {
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
+      setSelectionDraft(null);
       setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
-      setSelectionMenu(null);
       clearBrowserSelection();
     },
     onError: (error) => {
@@ -235,6 +257,7 @@ function NetchatApp() {
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
+      setSelectionDraft(null);
       setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
     },
     onError: (error) => {
@@ -245,12 +268,59 @@ function NetchatApp() {
     rootTurnMutation.isPending || branchMutation.isPending || branchTurnMutation.isPending;
 
   function focusComposer() {
-    composerRef.current?.focus();
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+    });
   }
+
+  const syncBubbleComposerAnchor = useCallback(() => {
+    if (!selectedMessage) {
+      setComposerAnchor(null);
+      return;
+    }
+
+    const nodeElement = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectedMessage.id}"]`);
+    if (!nodeElement) {
+      setComposerAnchor(null);
+      return;
+    }
+
+    const rect = nodeElement.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const composerWidth = Math.min(bubbleComposerWidth, Math.max(320, viewportWidth - 32));
+    const maxTop = Math.max(16, viewportHeight - 320);
+
+    setComposerAnchor({
+      left: clamp(rect.left + rect.width / 2 - composerWidth / 2, 16, viewportWidth - composerWidth - 16),
+      top: clamp(rect.bottom + bubbleComposerGap, 16, maxTop),
+      width: composerWidth,
+    });
+  }, [selectedMessage]);
 
   function pickMessage(messageId: string) {
     setSelectedMessageId(messageId);
+    setSelectionDraft(null);
+    focusComposer();
   }
+
+  function applySelectionDraft(draft: SelectionDraft) {
+    setSelectedMessageId(draft.sourceMessageId);
+    setSelectionDraft(draft);
+    focusComposer();
+  }
+
+  const reportMessageNodeHeight = useCallback((messageId: string, height: number) => {
+    const normalizedHeight = Math.max(170, Math.ceil(height));
+    setMeasuredNodeHeights((current) =>
+      current[messageId] === normalizedHeight
+        ? current
+        : {
+            ...current,
+            [messageId]: normalizedHeight,
+          },
+    );
+  }, []);
 
   const graph = useMemo(() => {
     if (!snapshot) {
@@ -261,9 +331,56 @@ function NetchatApp() {
       snapshot,
       selectedMessageId,
       onPickMessage: pickMessage,
-      onSelectionDraft: setSelectionMenu,
+      selectionDraft,
+      measuredNodeHeights,
+      onMeasureHeight: reportMessageNodeHeight,
+      onSelectionDraft: applySelectionDraft,
     });
-  }, [selectedMessageId, snapshot]);
+  }, [measuredNodeHeights, reportMessageNodeHeight, selectedMessageId, selectionDraft, snapshot]);
+
+  useOnViewportChange({
+    onChange: syncBubbleComposerAnchor,
+    onEnd: syncBubbleComposerAnchor,
+  });
+
+  useEffect(() => {
+    if (!snapshot || snapshot.messages.length === 0 || !nodesInitialized) {
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const frame = window.requestAnimationFrame(() => {
+      timeoutId = window.setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+
+        void reactFlow.fitView({
+          padding: 0.18,
+          duration: 520,
+          minZoom: 0.34,
+          maxZoom: 1.02,
+        });
+      }, 80);
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [
+    measuredNodeHeights,
+    nodesInitialized,
+    reactFlow,
+    snapshot?.branches.length,
+    snapshot?.edges.length,
+    snapshot?.messages.length,
+  ]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -272,10 +389,13 @@ function NetchatApp() {
 
     const latestAssistantMessageId = getLatestAssistantMessageId(snapshot);
 
-    if (snapshot.messages.length === 0 || !latestAssistantMessageId) {
-      if (selectedMessageId !== null) {
-        setSelectedMessageId(null);
-      }
+    if (
+      !selectedMessageId &&
+      latestAssistantMessageId &&
+      latestAssistantMessageId !== lastAutoSelectedMessageIdRef.current
+    ) {
+      lastAutoSelectedMessageIdRef.current = latestAssistantMessageId;
+      setSelectedMessageId(latestAssistantMessageId);
       return;
     }
 
@@ -286,34 +406,78 @@ function NetchatApp() {
       return;
     }
 
-    setSelectedMessageId(latestAssistantMessageId);
+    if (!latestAssistantMessageId) {
+      lastAutoSelectedMessageIdRef.current = null;
+    }
+
+    if (selectedMessageId !== null) {
+      setSelectedMessageId(null);
+    }
+    setSelectionDraft(null);
   }, [selectedMessageId, setSelectedMessageId, snapshot]);
 
   useEffect(() => {
-    function onSelectionChange() {
-      const selection = window.getSelection();
-      if (!selection || selection.toString().trim().length > 0) {
-        return;
-      }
-
-      setSelectionMenu(null);
+    if (!snapshot) {
+      setMeasuredNodeHeights({});
+      return;
     }
 
+    const liveMessageIds = new Set(snapshot.messages.map((message) => message.id));
+    setMeasuredNodeHeights((current) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+
+      for (const [messageId, height] of Object.entries(current)) {
+        if (liveMessageIds.has(messageId)) {
+          next[messageId] = height;
+          continue;
+        }
+
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [snapshot]);
+
+  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setSelectionMenu(null);
+        setSelectedMessageId(null);
+        setSelectionDraft(null);
         clearBrowserSelection();
       }
     }
 
-    document.addEventListener("selectionchange", onSelectionChange);
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("selectionchange", onSelectionChange);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, []);
+  }, [setSelectedMessageId]);
 
+  useEffect(() => {
+    if (selectionDraft && selectionDraft.sourceMessageId !== selectedMessageId) {
+      setSelectionDraft(null);
+    }
+  }, [selectedMessageId, selectionDraft]);
+
+  useEffect(() => {
+    if (!selectedMessage) {
+      setComposerAnchor(null);
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(syncBubbleComposerAnchor);
+    window.addEventListener("resize", syncBubbleComposerAnchor);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", syncBubbleComposerAnchor);
+    };
+  }, [selectedMessage, syncBubbleComposerAnchor]);
+
+  const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
+  const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled = composerValue.trim().length === 0 || isThinking || !canSendOnActiveLane;
 
   function submitCurrentPrompt() {
@@ -331,6 +495,18 @@ function NetchatApp() {
       branchTurnMutation.mutate({
         branchId: selectedBranch.id,
         input: { prompt },
+      });
+      return;
+    }
+
+    if (sendMode === "branch-from-selection" && selectedMessage && selectionForSelectedMessage) {
+      branchMutation.mutate({
+        sourceMessageId: selectedMessage.id,
+        mode: "selection",
+        selectedText: selectionForSelectedMessage.selectedText,
+        startOffset: selectionForSelectedMessage.startOffset,
+        endOffset: selectionForSelectedMessage.endOffset,
+        prompt,
       });
       return;
     }
@@ -361,115 +537,101 @@ function NetchatApp() {
   const composerHint = selectedMessage
     ? runtimeMachine && runtimeMachine.status !== "online"
       ? "Reconnect the local runtime to send from this bubble."
+      : sendMode === "branch-from-selection"
+        ? "You are branching from a highlighted passage in this reply."
       : sendMode === "branch-from-message"
         ? "Next message creates a new branch."
         : "Next message continues this branch."
     : rootMachine
       ? "Your next message starts the main branch."
       : "Bring one local runtime online to start chatting.";
-  const composerPlaceholder = composerHint;
+  const composerPlaceholder = selectedMessage
+    ? sendMode === "branch-from-selection"
+      ? "Ask about the selected text in this context..."
+      : sendMode === "branch-from-message"
+        ? "Start a branch from this reply..."
+        : "Continue from this reply..."
+    : "Start the first turn...";
+  const composerMetaLabel =
+    sendMode === "branch-from-selection"
+      ? "Selected passage"
+      : sendMode === "branch-from-message"
+        ? "New branch"
+      : selectedMessage
+        ? "Continue lane"
+        : "Main canvas";
   const composerErrorMessage = formatErrorMessage(
     rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
   );
-  const selectionToolbarPosition = selectionMenu ? resolveSelectionToolbarPosition(selectionMenu) : null;
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#f5f4ef] text-slate-950">
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(245,244,239,1))]" />
-
-      {selectionMenu && selectionToolbarPosition ? (
-        <div
-          className="fixed z-30 -translate-x-1/2 -translate-y-[calc(100%+10px)]"
-          style={selectionToolbarPosition}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          <div className="selection-toolbar inline-flex max-w-[min(70vw,420px)] items-center gap-2 rounded-full border border-slate-950 bg-[#fffdf7] px-2 py-2 shadow-[0_14px_28px_-22px_rgba(15,23,42,0.35)]">
-            <div className="max-w-[220px] truncate rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-500">
-              {truncate(selectionMenu.selectedText, 42)}
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={branchMutation.isPending}
-              className="nodrag nopan border-slate-950 bg-slate-950 text-white shadow-none hover:bg-slate-800"
-              onClick={() =>
-                branchMutation.mutate({
-                  sourceMessageId: selectionMenu.sourceMessageId,
-                  mode: "selection",
-                  selectedText: selectionMenu.selectedText,
-                  startOffset: selectionMenu.startOffset,
-                  endOffset: selectionMenu.endOffset,
-                  prompt: "",
-                })
-              }
-            >
-              {branchMutation.isPending ? (
-                <span className="inline-flex items-center gap-2">
-                  <LoaderCircle className="size-3 animate-spin" />
-                  Asking...
-                </span>
-              ) : (
-                "Ask more"
-              )}
-            </Button>
-            <button
-              type="button"
-              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500 transition-colors hover:border-slate-950 hover:text-slate-950"
-              onClick={() => {
-                setSelectionMenu(null);
-                clearBrowserSelection();
-              }}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      ) : null}
+    <div className="relative h-screen w-screen overflow-hidden bg-[#ecf7f2] text-slate-950">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.98),transparent_34%),radial-gradient(circle_at_84%_12%,rgba(204,251,241,0.74),transparent_22%),radial-gradient(circle_at_50%_100%,rgba(219,234,254,0.62),transparent_28%),linear-gradient(180deg,#f8fffc_0%,#eef8f3_52%,#e7f2ee_100%)]" />
 
       <div className="pointer-events-none absolute right-5 top-5 z-20 flex flex-col items-end gap-3">
         <button
           type="button"
-          className="pointer-events-auto rounded-[18px] border border-slate-300 bg-[#fffdf8] px-4 py-3 text-left shadow-[0_12px_24px_-20px_rgba(15,23,42,0.14)] transition-colors hover:border-slate-400"
+          className="pointer-events-auto relative overflow-hidden rounded-[28px] border border-white/70 bg-white/60 px-4 py-3 text-left shadow-[0_30px_72px_-42px_rgba(15,23,42,0.38)] backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:border-white/90"
           onClick={() => setShowRuntimeDetails((open) => !open)}
         >
-          <div className="flex items-center gap-2">
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(240,253,250,0.86)_40%,rgba(239,246,255,0.82)_100%)]" />
+          <div className="relative flex items-start gap-3">
             <span
               className={cn(
-                "inline-flex size-2.5 rounded-full",
+                "mt-[7px] inline-flex size-2.5 rounded-full",
                 connectionStatus.tone === "connected"
-                  ? "bg-emerald-500"
+                  ? "bg-emerald-500 shadow-[0_0_0_6px_rgba(16,185,129,0.16)]"
                   : connectionStatus.tone === "connecting"
-                    ? "bg-amber-400"
-                    : "bg-slate-400",
+                    ? "animate-pulse bg-amber-400 shadow-[0_0_0_6px_rgba(251,191,36,0.16)]"
+                    : "bg-slate-400 shadow-[0_0_0_6px_rgba(148,163,184,0.16)]",
               )}
             />
-            <span className="text-sm font-medium text-slate-900">{connectionStatus.label}</span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">
+                  Runtime
+                </span>
+                <span className="rounded-full border border-slate-900/10 bg-white/72 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">
+                  {runtimeLabel}
+                </span>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-900">{connectionStatus.label}</span>
+                <span className="inline-flex size-1 rounded-full bg-slate-300" />
+                <span className="max-w-[180px] truncate text-sm text-slate-500">{workspaceName}</span>
+              </div>
+            </div>
           </div>
-          <div className="mt-1 text-xs text-slate-500">Workspace: {workspaceName}</div>
         </button>
 
         {showRuntimeDetails ? (
-          <div className="pointer-events-auto w-[min(320px,calc(100vw-2.5rem))] rounded-[18px] border border-slate-300 bg-[#fffdf8] p-4 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.16)]">
-            <div className="space-y-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-slate-500">Status</span>
-                <span className="font-medium text-slate-900">{connectionStatus.label}</span>
+          <div className="pointer-events-auto relative w-[min(340px,calc(100vw-2.5rem))] overflow-hidden rounded-[30px] border border-white/80 bg-white/62 p-4 shadow-[0_34px_90px_-52px_rgba(15,23,42,0.46)] backdrop-blur-xl">
+            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(160deg,rgba(255,255,255,0.94),rgba(240,253,250,0.78)_44%,rgba(239,246,255,0.82)_100%)]" />
+            <div className="relative space-y-3">
+              <div className="grid gap-1 rounded-[22px] border border-white/70 bg-white/62 px-4 py-3">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                  Status
+                </span>
+                <span className="text-base font-semibold text-slate-900">{connectionStatus.label}</span>
               </div>
 
-              <div className="flex items-start justify-between gap-3">
-                <span className="pt-0.5 text-slate-500">Working directory</span>
+              <div className="grid gap-1 rounded-[22px] border border-white/70 bg-white/62 px-4 py-3">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                  Workspace
+                </span>
                 <span
-                  className="max-w-[190px] font-mono text-right text-[12px] leading-5 text-slate-700"
+                  className="font-mono text-[12px] leading-5 text-slate-700"
                   title={workingDirectoryPath}
                 >
                   {workingDirectoryDisplay}
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-slate-500">Runtime</span>
-                <span className="font-medium text-slate-900">{runtimeLabel}</span>
+              <div className="grid gap-1 rounded-[22px] border border-white/70 bg-white/62 px-4 py-3">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                  Engine
+                </span>
+                <span className="text-sm font-medium text-slate-900">{runtimeLabel}</span>
               </div>
             </div>
           </div>
@@ -479,12 +641,13 @@ function NetchatApp() {
       <ReactFlow
         className="netchat-flow canvas-flow"
         fitView
-        fitViewOptions={{ padding: 0.24, minZoom: 0.45, maxZoom: 1 }}
+        fitViewOptions={{ padding: 0.18, minZoom: 0.34, maxZoom: 1.02 }}
         nodes={graph.nodes}
         edges={graph.edges}
         onNodeClick={(_event, node) => {
+          const selectedText = window.getSelection()?.toString().trim();
           const message = (node.data as MessageNodeData | undefined)?.message;
-          if (message?.role === "assistant") {
+          if (message?.role === "assistant" && !selectedText) {
             pickMessage(node.id);
           }
         }}
@@ -497,90 +660,182 @@ function NetchatApp() {
         nodesConnectable={false}
         elementsSelectable={false}
         onPaneClick={() => {
-          setSelectionMenu(null);
+          setSelectedMessageId(null);
+          setSelectionDraft(null);
           clearBrowserSelection();
         }}
         panOnDrag
         zoomOnDoubleClick={false}
       >
-        <Background gap={32} size={1} color="#d5dbe6" />
+        <Background gap={28} size={1.1} color="#c8ddd5" />
       </ReactFlow>
 
-      {!graphQuery.isLoading && (!snapshot || snapshot.messages.length === 0) ? (
+      {graphQuery.isLoading ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
-          <div className="max-w-xl rounded-[24px] border border-slate-300 bg-[#fffdf8] px-6 py-5 shadow-[0_16px_30px_-22px_rgba(15,23,42,0.16)]">
-            <div className="text-sm font-medium uppercase tracking-[0.28em] text-slate-400">
-              Start here
-            </div>
-            <div className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-slate-950">
-              Turn one prompt into a branchable canvas.
-            </div>
-            <div className="mt-3 text-sm leading-7 text-slate-600">
-              Each message becomes a bubble. Select any phrase in an assistant reply, click Ask more,
-              and continue that lane without polluting the main thread.
-            </div>
+          <div className="rounded-[28px] border border-white/80 bg-white/72 px-6 py-4 text-sm text-slate-500 shadow-[0_24px_56px_-40px_rgba(15,23,42,0.34)] backdrop-blur-xl">
+            Loading conversation canvas...
           </div>
         </div>
       ) : null}
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-5">
-        <form
-          className="pointer-events-auto w-full max-w-[920px]"
-          onSubmit={handleSubmit}
-        >
-          <div className="relative rounded-[26px] border border-slate-300 bg-[#fffdf8] shadow-[0_18px_34px_-26px_rgba(15,23,42,0.16)] transition-colors focus-within:border-slate-950">
-            <Textarea
-              ref={composerRef}
-              className="min-h-[112px] resize-none rounded-[26px] border-0 bg-transparent px-5 py-4 pb-14 pr-16 text-[15px] leading-7 shadow-none placeholder:text-slate-500 focus:border-0 focus:bg-transparent"
-              placeholder={composerPlaceholder}
-              value={composerValue}
-              onChange={(event) => setComposerValue(event.target.value)}
-              onFocus={() => setSelectionMenu(null)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  if (!sendDisabled) {
-                    submitCurrentPrompt();
+      {!graphQuery.isLoading && !hasMessages ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+          <form
+            className="pointer-events-auto max-w-2xl overflow-hidden rounded-[34px] border border-white/80 bg-white/70 shadow-[0_34px_84px_-48px_rgba(15,23,42,0.36)] backdrop-blur-xl"
+            onSubmit={handleSubmit}
+          >
+            <div className="border-b border-white/80 px-7 py-6">
+              <div className="text-sm font-medium uppercase tracking-[0.28em] text-slate-400">
+              Start here
+              </div>
+              <div className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
+                Turn one prompt into a branchable canvas.
+              </div>
+              <div className="mt-3 text-sm leading-7 text-slate-600">
+                Conversations stay readable as waterfalls. Later, click any Claude reply or select a passage
+                to branch right from that exact point.
+              </div>
+            </div>
+
+            <div className="relative px-7 py-6">
+              <Textarea
+                ref={composerRef}
+                className="min-h-[136px] resize-none rounded-[30px] border-0 bg-[rgba(255,255,255,0.72)] px-6 py-5 pb-16 pr-24 text-[15px] leading-7 text-slate-800 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)] placeholder:text-slate-400"
+                placeholder={composerPlaceholder}
+                value={composerValue}
+                onChange={(event) => setComposerValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    if (!sendDisabled) {
+                      submitCurrentPrompt();
+                    }
                   }
-                }
-              }}
-            />
-            <Button
-              className="absolute bottom-3 right-3 h-10 w-10 rounded-full bg-slate-950 px-0 shadow-[0_20px_50px_-24px_rgba(15,23,42,0.7)] hover:bg-slate-800"
-              disabled={sendDisabled}
-              type="submit"
-            >
-              {isThinking ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <ArrowUp className="size-4" />
-              )}
-            </Button>
-          </div>
-
-          {composerErrorMessage ? (
-            <div className="mt-3 rounded-[20px] border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm leading-6 text-rose-700">
-              {composerErrorMessage}
-            </div>
-          ) : null}
-
-          {selectionMenu ? (
-            <div className="mt-3 flex justify-end px-1">
-              <button
-                type="button"
-                className="pointer-events-auto rounded-full border border-slate-200/80 bg-white px-3 py-1 text-xs text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
-                onClick={() => {
-                  setSelectionMenu(null);
-                  clearBrowserSelection();
-                  focusComposer();
                 }}
+              />
+              <div className="pointer-events-none absolute bottom-[2.75rem] left-[3.25rem] flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                <span>{composerMetaLabel}</span>
+                <span className="inline-flex size-1 rounded-full bg-slate-300" />
+                <span>{composerHint}</span>
+              </div>
+              <Button
+                className="absolute bottom-10 right-[2.75rem] h-12 w-12 rounded-full bg-slate-950/92 px-0 shadow-[0_28px_60px_-30px_rgba(15,23,42,0.7)] backdrop-blur hover:bg-slate-800"
+                disabled={sendDisabled}
+                type="submit"
               >
-                Clear text selection
-              </button>
+                {isThinking ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <ArrowUp className="size-4" />
+                )}
+              </Button>
             </div>
-          ) : null}
-        </form>
-      </div>
+
+            {composerErrorMessage ? (
+              <div className="border-t border-rose-100 bg-rose-50/90 px-7 py-4 text-sm leading-6 text-rose-700">
+                {composerErrorMessage}
+              </div>
+            ) : null}
+          </form>
+        </div>
+      ) : null}
+
+      {hasMessages && !showBubbleComposer ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center px-4">
+          <div className="rounded-full border border-white/80 bg-white/72 px-4 py-2 text-xs text-slate-500 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.36)] backdrop-blur-xl">
+            Click a Claude bubble or select a passage to keep chatting from that exact context.
+          </div>
+        </div>
+      ) : null}
+
+      {showBubbleComposer ? (
+        <div className="pointer-events-none fixed inset-0 z-30">
+          <form
+            className="pointer-events-auto fixed"
+            style={{
+              left: composerAnchor?.left,
+              top: composerAnchor?.top,
+              width: composerAnchor?.width,
+            }}
+            onSubmit={handleSubmit}
+          >
+            <div className="relative overflow-hidden rounded-[32px] border border-white/80 bg-white/74 shadow-[0_42px_120px_-58px_rgba(15,23,42,0.54)] backdrop-blur-xl">
+              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(240,253,250,0.9)_38%,rgba(239,246,255,0.84)_100%)]" />
+
+              <div className="relative border-b border-white/80 px-6 py-4">
+                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                  <span>{composerMetaLabel}</span>
+                  <span className="inline-flex size-1 rounded-full bg-slate-300" />
+                  <span>{composerHint}</span>
+                </div>
+
+                {selectionForSelectedMessage ? (
+                  <div className="mt-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0 rounded-[20px] border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm leading-6 text-amber-950">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-700">
+                        Selected context
+                      </div>
+                      <div className="mt-2 break-words">{truncate(selectionForSelectedMessage.selectedText, 140)}</div>
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded-full border border-white/80 bg-white/80 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-900"
+                      onClick={() => {
+                        setSelectionDraft(null);
+                        clearBrowserSelection();
+                        focusComposer();
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="relative px-6 py-5">
+                <Textarea
+                  ref={composerRef}
+                  className="min-h-[118px] resize-none rounded-[28px] border-0 bg-[rgba(255,255,255,0.64)] px-5 py-4 pb-14 pr-20 text-[15px] leading-7 text-slate-800 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)] placeholder:text-slate-400"
+                  placeholder={composerPlaceholder}
+                  value={composerValue}
+                  onChange={(event) => setComposerValue(event.target.value)}
+                  onFocus={() => clearBrowserSelection()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      if (!sendDisabled) {
+                        submitCurrentPrompt();
+                      }
+                    }
+                  }}
+                />
+                <div className="pointer-events-none absolute bottom-9 left-[2.75rem] flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                  <span>Enter sends</span>
+                  <span className="inline-flex size-1 rounded-full bg-slate-300" />
+                  <span>{runtimeLabel}</span>
+                </div>
+                <Button
+                  className="absolute bottom-9 right-10 h-12 w-12 rounded-full bg-slate-950/92 px-0 shadow-[0_28px_60px_-30px_rgba(15,23,42,0.7)] backdrop-blur hover:bg-slate-800"
+                  disabled={sendDisabled}
+                  type="submit"
+                >
+                  {isThinking ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <ArrowUp className="size-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {composerErrorMessage ? (
+              <div className="mt-3 rounded-[20px] border border-rose-200 bg-rose-50/95 px-4 py-3 text-sm leading-6 text-rose-700 shadow-[0_20px_40px_-32px_rgba(225,29,72,0.42)]">
+                {composerErrorMessage}
+              </div>
+            ) : null}
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -588,40 +843,96 @@ function NetchatApp() {
 function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const isUser = data.message.role === "user";
   const roleLabel = isUser ? "You" : "Claude Code";
+  const bubbleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const bubbleElement = bubbleRef.current;
+    if (!bubbleElement) {
+      return;
+    }
+
+    const reportHeight = () => {
+      data.onMeasureHeight(data.message.id, bubbleElement.offsetHeight);
+    };
+
+    reportHeight();
+
+    const observer = new ResizeObserver(() => {
+      reportHeight();
+    });
+
+    observer.observe(bubbleElement);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [data]);
 
   return (
     <div
+      ref={bubbleRef}
       className={cn(
-        "group relative w-[476px] overflow-hidden rounded-[28px] border px-5 py-4 text-left shadow-[0_12px_26px_-22px_rgba(15,23,42,0.14)] transition-all",
+        "group relative w-[420px] overflow-hidden rounded-[30px] border px-6 py-5 text-left shadow-[0_30px_72px_-46px_rgba(15,23,42,0.36)] backdrop-blur-[18px] transition-all",
         isUser
-          ? "border-slate-300/90 bg-[#fffefb]"
+          ? "border-white/75 bg-[rgba(255,255,255,0.8)]"
+          : data.hasSelectionDraft
+            ? "border-amber-300/80 bg-[rgba(255,251,235,0.94)] shadow-[0_40px_100px_-54px_rgba(217,119,6,0.18)] ring-1 ring-amber-200/80"
           : data.isActiveMessage
-            ? "border-slate-950 bg-[#fff7fb] shadow-[0_22px_40px_-28px_rgba(15,23,42,0.28)] ring-1 ring-slate-950/10"
-            : "border-[#efcfda] bg-[#fffafd] hover:border-[#e5b8cb]",
+            ? "border-slate-900/16 bg-[rgba(247,255,251,0.95)] shadow-[0_40px_100px_-54px_rgba(15,23,42,0.5)] ring-1 ring-emerald-300/35"
+            : "border-[#d6ebe3] bg-[rgba(244,255,250,0.92)] hover:-translate-y-0.5 hover:border-[#bddccf] hover:shadow-[0_34px_84px_-48px_rgba(15,23,42,0.42)]",
       )}
       onClickCapture={(event) => {
-        if (!isUser) {
+        const selectedText = window.getSelection()?.toString().trim();
+        if (!isUser && !selectedText) {
           data.onPickMessage(data.message.id);
         }
         event.stopPropagation();
       }}
       onMouseDownCapture={(event) => {
-        if (!isUser) {
-          data.onPickMessage(data.message.id);
-        }
         event.stopPropagation();
       }}
       onPointerDownCapture={(event) => {
-        if (!isUser) {
-          data.onPickMessage(data.message.id);
-        }
         event.stopPropagation();
       }}
     >
+      <Handle
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+        className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+      />
+
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0",
+          isUser
+            ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.78))]"
+            : data.hasSelectionDraft
+              ? "bg-[radial-gradient(circle_at_top_left,rgba(254,243,199,0.72),transparent_42%),linear-gradient(180deg,rgba(255,251,235,0.98),rgba(255,247,237,0.84))]"
+            : data.isActiveMessage
+              ? "bg-[radial-gradient(circle_at_top_left,rgba(236,253,245,0.92),transparent_48%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(240,253,250,0.84))]"
+              : "bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(240,253,250,0.82))]",
+        )}
+      />
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-slate-900/10 to-transparent" />
 
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <div className="inline-flex rounded-full border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+      <div className="relative mb-4 flex items-center justify-between gap-4">
+        <div
+          className={cn(
+            "inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]",
+            isUser
+              ? "border-slate-200 bg-white/72 text-slate-500"
+              : data.hasSelectionDraft
+                ? "border-amber-200/80 bg-white/72 text-amber-700"
+                : "border-emerald-200/80 bg-white/72 text-emerald-700",
+          )}
+        >
           {roleLabel}
         </div>
         <div className="font-mono text-[11px] text-slate-400">
@@ -634,6 +945,31 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         disabled={isUser}
         onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
       />
+
+      {!isUser ? (
+        <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-slate-900/6 pt-4">
+          <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+            Click to focus or select text to branch
+          </span>
+          <button
+            type="button"
+            className={cn(
+              "rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] transition-colors",
+              data.hasSelectionDraft
+                ? "border-amber-200 bg-white/78 text-amber-700 hover:border-amber-300"
+                : data.isActiveMessage
+                  ? "border-emerald-200 bg-white/78 text-emerald-700 hover:border-emerald-300"
+                  : "border-slate-200 bg-white/78 text-slate-500 hover:border-slate-300 hover:text-slate-900",
+            )}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onPickMessage(data.message.id);
+            }}
+          >
+            Continue here
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -645,7 +981,7 @@ function SelectableMessage({
 }: {
   content: string;
   disabled: boolean;
-  onSelection: (draft: Omit<SelectionMenu, "sourceMessageId">) => void;
+  onSelection: (draft: Omit<SelectionDraft, "sourceMessageId">) => void;
 }) {
   return (
     <div
@@ -694,14 +1030,11 @@ function SelectableMessage({
         const rawStartOffset = probe.toString().length;
         const startOffset = rawStartOffset + leadingWhitespace;
         const endOffset = rawStartOffset + rawText.length - trailingWhitespace;
-        const rect = range.getBoundingClientRect();
 
         onSelection({
           selectedText,
           startOffset,
           endOffset,
-          top: rect.top,
-          left: rect.left + rect.width / 2,
         });
       }}
     >
@@ -713,13 +1046,19 @@ function SelectableMessage({
 function buildFlowGraph({
   snapshot,
   selectedMessageId,
+  selectionDraft,
+  measuredNodeHeights,
+  onMeasureHeight,
   onPickMessage,
   onSelectionDraft,
 }: {
   snapshot: GraphSnapshot;
   selectedMessageId: string | null;
+  selectionDraft: SelectionDraft | null;
+  measuredNodeHeights: Record<string, number>;
+  onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
-  onSelectionDraft: (draft: SelectionMenu) => void;
+  onSelectionDraft: (draft: SelectionDraft) => void;
 }) {
   const activeEdgeIds = getActiveEdgeIds(snapshot, selectedMessageId);
   const nodes: Node[] = [];
@@ -727,40 +1066,27 @@ function buildFlowGraph({
     id: edge.id,
     source: edge.source,
     target: edge.target,
-    type: "smoothstep",
+    type: "simplebezier",
     zIndex: activeEdgeIds.has(edge.id) ? 5 : 1,
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: activeEdgeIds.has(edge.id)
-        ? "#0f172a"
-        : edge.kind === "fork"
-          ? "#94a3b8"
-          : "#cbd5e1",
+      color: "#111111",
     },
     style: {
-      stroke: activeEdgeIds.has(edge.id)
-        ? "#0f172a"
-        : edge.kind === "fork"
-          ? "#94a3b8"
-          : "#cbd5e1",
-      strokeDasharray: edge.kind === "fork" ? "8 8" : undefined,
-      strokeWidth: activeEdgeIds.has(edge.id) ? 2.15 : edge.kind === "fork" ? 1.5 : 1.15,
-      opacity: activeEdgeIds.has(edge.id) ? 1 : edge.kind === "fork" ? 0.8 : 0.48,
+      stroke: "#111111",
+      strokeDasharray: edge.kind === "fork" ? "8 10" : undefined,
+      strokeWidth: activeEdgeIds.has(edge.id) ? 3 : edge.kind === "fork" ? 2.2 : 2.5,
+      opacity: activeEdgeIds.has(edge.id) ? 1 : edge.kind === "fork" ? 0.72 : 0.92,
     },
   }));
 
-  const branchesById = new Map<string, Branch>();
-  const messagesByBranch = new Map<string, MessageNode[]>();
-  const childBranchesBySource = new Map<string, Branch[]>();
-
-  for (const branch of snapshot.branches) {
-    branchesById.set(branch.id, branch);
-    if (branch.sourceMessageId) {
-      const children = childBranchesBySource.get(branch.sourceMessageId) ?? [];
-      children.push(branch);
-      childBranchesBySource.set(branch.sourceMessageId, children);
-    }
+  if (snapshot.messages.length === 0) {
+    return { nodes, edges };
   }
+
+  const branchOrder = new Map(snapshot.branches.map((branch, index) => [branch.id, index]));
+  const messagesByBranch = new Map<string, MessageNode[]>();
+  const childBranchesBySourceMessage = new Map<string, typeof snapshot.branches>();
 
   for (const message of snapshot.messages) {
     const branchMessages = messagesByBranch.get(message.branchId) ?? [];
@@ -768,20 +1094,37 @@ function buildFlowGraph({
     messagesByBranch.set(message.branchId, branchMessages);
   }
 
-  const rootBranch = branchesById.get(rootBranchId);
-  if (!rootBranch) {
-    return { nodes, edges };
+  for (const branch of snapshot.branches) {
+    if (!branch.sourceMessageId) {
+      continue;
+    }
+
+    const childBranches = childBranchesBySourceMessage.get(branch.sourceMessageId) ?? [];
+    childBranches.push(branch);
+    childBranchesBySourceMessage.set(branch.sourceMessageId, childBranches);
   }
 
-  placeBranch(rootBranch, { x: 0, y: 0, direction: "center" });
+  for (const childBranches of childBranchesBySourceMessage.values()) {
+    childBranches.sort((left, right) => (branchOrder.get(left.id) ?? 0) - (branchOrder.get(right.id) ?? 0));
+  }
+
+  const branchLaneById = new Map<string, number>([[rootBranchId, 0]]);
+  const branchSideById = new Map<string, "center" | "left" | "right">([[rootBranchId, "center"]]);
+  let nextLeftLane = -1;
+  let nextRightLane = 1;
+
+  placeBranch(rootBranchId, 0);
+
   return { nodes, edges };
 
-  function placeBranch(branch: Branch, placement: PositionedBranch) {
-    const messages = messagesByBranch.get(branch.id) ?? [];
+  function placeBranch(branchId: string, startY: number) {
+    const laneIndex = branchLaneById.get(branchId) ?? 0;
+    const centerX = laneIndex * branchLaneWidth;
+    const branchMessages = messagesByBranch.get(branchId) ?? [];
+    let cursorY = startY;
 
-    messages.forEach((message, index) => {
-      const messageX = placement.x;
-      const messageY = placement.y + index * branchMessageGap;
+    branchMessages.forEach((message) => {
+      const height = measuredNodeHeights[message.id] ?? estimateMessageBubbleHeight(message);
 
       nodes.push({
         id: message.id,
@@ -790,72 +1133,65 @@ function buildFlowGraph({
           "message-node-shell nopan",
           message.role === "assistant" ? "message-node-shell--assistant" : "message-node-shell--user",
         ),
-        position: { x: messageX, y: messageY },
+        position: {
+          x: centerX - messageNodeWidth / 2,
+          y: cursorY,
+        },
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
         data: {
           message,
           isActiveMessage: message.id === selectedMessageId,
+          hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
+          onMeasureHeight,
           onPickMessage,
           onSelectionDraft,
         } satisfies MessageNodeData,
       });
 
-      const childBranches = childBranchesBySource.get(message.id) ?? [];
+      const childBranches = childBranchesBySourceMessage.get(message.id) ?? [];
 
-      childBranches.forEach((childBranch, childIndex) => {
-        placeBranch(childBranch, getChildPlacement(placement, messageX, messageY, childIndex));
+      childBranches.forEach((childBranch) => {
+        assignLaneToBranch(childBranch.id, branchId);
+        placeBranch(childBranch.id, cursorY + height + branchForkGap);
       });
+
+      cursorY += height + branchMessageGap;
     });
   }
-}
 
-function getChildPlacement(
-  placement: PositionedBranch,
-  messageX: number,
-  messageY: number,
-  childIndex: number,
-): PositionedBranch {
-  const pattern = getPlacementPattern(placement.direction);
-  const slot = pattern[childIndex % pattern.length];
-  const tier = Math.floor(childIndex / pattern.length);
-  const tierX =
-    slot.direction === "left" ? -tier * 120 : slot.direction === "right" ? tier * 120 : 0;
-  const tierY = tier * 220;
+  function assignLaneToBranch(
+    branchId: string,
+    parentBranchId: string,
+  ) {
+    if (branchLaneById.has(branchId)) {
+      return;
+    }
 
-  return {
-    direction: slot.direction,
-    x: messageX + slot.dx + tierX,
-    y: messageY + slot.dy + tierY,
-  };
-}
+    const parentSide = branchSideById.get(parentBranchId) ?? "center";
+    const side =
+      parentSide === "center"
+        ? Math.abs(nextLeftLane) <= Math.abs(nextRightLane)
+          ? "left"
+          : "right"
+        : parentSide;
+    const laneIndex = side === "left" ? nextLeftLane-- : nextRightLane++;
 
-function getPlacementPattern(direction: BranchDirection) {
-  switch (direction) {
-    case "left":
-      return [
-        { direction: "left" as const, dx: -branchLaneWidth, dy: 170 },
-        { direction: "down" as const, dx: 96, dy: branchDrop },
-      ];
-    case "right":
-      return [
-        { direction: "down" as const, dx: -96, dy: branchDrop },
-        { direction: "right" as const, dx: branchLaneWidth, dy: 170 },
-      ];
-    case "down":
-      return [
-        { direction: "left" as const, dx: -branchLaneWidth, dy: 170 },
-        { direction: "right" as const, dx: branchLaneWidth, dy: 170 },
-        { direction: "down" as const, dx: 0, dy: branchDrop },
-      ];
-    case "center":
-    default:
-      return [
-        { direction: "left" as const, dx: -branchLaneWidth, dy: 170 },
-        { direction: "down" as const, dx: 0, dy: branchDrop },
-        { direction: "right" as const, dx: branchLaneWidth, dy: 170 },
-      ];
+    branchSideById.set(branchId, side);
+    branchLaneById.set(branchId, laneIndex);
   }
+}
+
+
+function estimateMessageBubbleHeight(message: MessageNode) {
+  const normalized = message.content.replace(/\r\n/g, "\n");
+  const wrappedLines = normalized.split("\n").reduce((count, line) => {
+    const visibleLength = Math.max(line.trim().length, 1);
+    return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
+  }, 0);
+  const codeBlockBonus = (normalized.match(/```/g)?.length ?? 0) * 48;
+
+  return Math.max(210, 142 + wrappedLines * messageEstimateLineHeight + codeBlockBonus);
 }
 
 function getActiveEdgeIds(snapshot: GraphSnapshot, selectedMessageId: string | null) {
@@ -882,18 +1218,6 @@ function getActiveEdgeIds(snapshot: GraphSnapshot, selectedMessageId: string | n
 
 function clearBrowserSelection() {
   window.getSelection()?.removeAllRanges();
-}
-
-function resolveSelectionToolbarPosition(selectionMenu: SelectionMenu) {
-  const viewportWidth = typeof window === "undefined" ? 0 : window.innerWidth;
-  const gutter = 120;
-  const minLeft = gutter;
-  const maxLeft = viewportWidth > 0 ? Math.max(minLeft, viewportWidth - gutter) : selectionMenu.left;
-
-  return {
-    top: Math.max(selectionMenu.top - 14, 18),
-    left: clamp(selectionMenu.left, minLeft, maxLeft),
-  };
 }
 
 function clamp(value: number, min: number, max: number) {
