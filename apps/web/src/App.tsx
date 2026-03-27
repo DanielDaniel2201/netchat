@@ -563,223 +563,236 @@ function NetchatApp() {
   const composerErrorMessage = formatErrorMessage(
     rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
   );
+  const branchCount = snapshot?.branches.length ?? 0;
+  const messageCount = snapshot?.messages.length ?? 0;
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#ecf7f2] text-slate-950">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.98),transparent_34%),radial-gradient(circle_at_84%_12%,rgba(204,251,241,0.74),transparent_22%),radial-gradient(circle_at_50%_100%,rgba(219,234,254,0.62),transparent_28%),linear-gradient(180deg,#f8fffc_0%,#eef8f3_52%,#e7f2ee_100%)]" />
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
+      <div className="relative flex-1 overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
 
-      <div className="pointer-events-none absolute right-5 top-5 z-20 flex flex-col items-end gap-3">
-        <button
-          type="button"
-          className="pointer-events-auto relative overflow-hidden rounded-[28px] border border-white/70 bg-white/60 px-4 py-3 text-left shadow-[0_30px_72px_-42px_rgba(15,23,42,0.38)] backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:border-white/90"
-          onClick={() => setShowRuntimeDetails((open) => !open)}
-        >
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.94),rgba(240,253,250,0.86)_40%,rgba(239,246,255,0.82)_100%)]" />
-          <div className="relative flex items-start gap-3">
-            <span
-              className={cn(
-                "mt-[7px] inline-flex size-2.5 rounded-full",
-                connectionStatus.tone === "connected"
-                  ? "bg-emerald-500 shadow-[0_0_0_6px_rgba(16,185,129,0.16)]"
-                  : connectionStatus.tone === "connecting"
-                    ? "animate-pulse bg-amber-400 shadow-[0_0_0_6px_rgba(251,191,36,0.16)]"
-                    : "bg-slate-400 shadow-[0_0_0_6px_rgba(148,163,184,0.16)]",
-              )}
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">
-                  Runtime
-                </span>
-                <span className="rounded-full border border-slate-900/10 bg-white/72 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">
-                  {runtimeLabel}
-                </span>
+        <div className="pointer-events-none absolute right-6 top-6 z-20 flex flex-col items-end gap-3">
+          <button
+            type="button"
+            className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-[var(--block-slate)] px-5 py-4 text-left text-white shadow-[10px_10px_0_rgba(26,26,26,0.1)] transition-transform hover:-translate-y-0.5"
+            onClick={() => setShowRuntimeDetails((open) => !open)}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="editorial-meta text-white/62">Runtime</div>
+                <div className="mt-3 flex items-center gap-3">
+                  <span
+                    className={cn(
+                      "inline-flex h-3 w-3 border border-white/65",
+                      connectionStatus.tone === "connected"
+                        ? "bg-[var(--block-green)]"
+                        : connectionStatus.tone === "connecting"
+                          ? "animate-pulse bg-[var(--block-ochre)]"
+                          : "bg-white/35",
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-lg leading-none text-white">{connectionStatus.label}</div>
+                    <div className="mt-2 text-[11px] uppercase tracking-[0.18em] text-white/68">
+                      {runtimeLabel}
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="mt-2 flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-900">{connectionStatus.label}</span>
-                <span className="inline-flex size-1 rounded-full bg-slate-300" />
-                <span className="max-w-[180px] truncate text-sm text-slate-500">{workspaceName}</span>
+
+              <div className="max-w-[120px] text-right">
+                <div className="editorial-meta text-white/62">Workspace</div>
+                <div className="mt-3 break-words text-sm leading-5 text-white/84">{workspaceName}</div>
               </div>
             </div>
-          </div>
-        </button>
+          </button>
 
-        {showRuntimeDetails ? (
-          <div className="pointer-events-auto relative w-[min(340px,calc(100vw-2.5rem))] overflow-hidden rounded-[30px] border border-white/80 bg-white/62 p-4 shadow-[0_34px_90px_-52px_rgba(15,23,42,0.46)] backdrop-blur-xl">
-            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(160deg,rgba(255,255,255,0.94),rgba(240,253,250,0.78)_44%,rgba(239,246,255,0.82)_100%)]" />
-            <div className="relative space-y-3">
-              <div className="grid gap-1 rounded-[22px] border border-white/70 bg-white/62 px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                  Status
-                </span>
-                <span className="text-base font-semibold text-slate-900">{connectionStatus.label}</span>
+          {showRuntimeDetails ? (
+            <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+              <div className="border-b border-[var(--node-border)] px-5 py-4">
+                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Local runtime</div>
+                <div className="mt-3 text-base font-medium text-[var(--text-main)]">{runtimeLabel}</div>
               </div>
-
-              <div className="grid gap-1 rounded-[22px] border border-white/70 bg-white/62 px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                  Workspace
-                </span>
-                <span
-                  className="font-mono text-[12px] leading-5 text-slate-700"
-                  title={workingDirectoryPath}
-                >
+              <div className="border-b border-[var(--node-border)] px-5 py-4">
+                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Status</div>
+                <div className="mt-2 text-sm leading-6 text-[var(--text-main)]">{connectionStatus.label}</div>
+              </div>
+              <div className="border-b border-[var(--node-border)] px-5 py-4">
+                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Workspace</div>
+                <div className="mt-2 font-mono text-[12px] leading-6 text-[rgba(26,26,26,0.72)]" title={workingDirectoryPath}>
                   {workingDirectoryDisplay}
-                </span>
+                </div>
               </div>
+              <div className="px-5 py-4">
+                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Engine</div>
+                <div className="mt-2 text-sm leading-6 text-[var(--text-main)]">{runtimeLabel}</div>
+              </div>
+            </div>
+          ) : null}
+        </div>
 
-              <div className="grid gap-1 rounded-[22px] border border-white/70 bg-white/62 px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                  Engine
-                </span>
-                <span className="text-sm font-medium text-slate-900">{runtimeLabel}</span>
-              </div>
+        <ReactFlow
+          className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
+          fitView
+          fitViewOptions={{ padding: 0.18, minZoom: 0.34, maxZoom: 1.02 }}
+          nodes={graph.nodes}
+          edges={graph.edges}
+          onNodeClick={(_event, node) => {
+            const selectedText = window.getSelection()?.toString().trim();
+            const message = (node.data as MessageNodeData | undefined)?.message;
+            if (message?.role === "assistant" && !selectedText) {
+              pickMessage(node.id);
+            }
+          }}
+          nodeTypes={{
+            message: MessageGraphNode,
+          }}
+          minZoom={0.35}
+          maxZoom={1.2}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          onPaneClick={() => {
+            setSelectedMessageId(null);
+            setSelectionDraft(null);
+            clearBrowserSelection();
+          }}
+          panOnDrag
+          zoomOnDoubleClick={false}
+        >
+          <Background gap={96} size={1} color="var(--line-color)" />
+        </ReactFlow>
+
+        {graphQuery.isLoading ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+            <div className="border border-[var(--text-main)] bg-white px-6 py-4 text-sm uppercase tracking-[0.16em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
+              Loading conversation canvas...
             </div>
           </div>
         ) : null}
-      </div>
 
-      <ReactFlow
-        className="netchat-flow canvas-flow"
-        fitView
-        fitViewOptions={{ padding: 0.18, minZoom: 0.34, maxZoom: 1.02 }}
-        nodes={graph.nodes}
-        edges={graph.edges}
-        onNodeClick={(_event, node) => {
-          const selectedText = window.getSelection()?.toString().trim();
-          const message = (node.data as MessageNodeData | undefined)?.message;
-          if (message?.role === "assistant" && !selectedText) {
-            pickMessage(node.id);
-          }
-        }}
-        nodeTypes={{
-          message: MessageGraphNode,
-        }}
-        minZoom={0.35}
-        maxZoom={1.2}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        onPaneClick={() => {
-          setSelectedMessageId(null);
-          setSelectionDraft(null);
-          clearBrowserSelection();
-        }}
-        panOnDrag
-        zoomOnDoubleClick={false}
-      >
-        <Background gap={28} size={1.1} color="#c8ddd5" />
-      </ReactFlow>
+        {!graphQuery.isLoading && !hasMessages ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
+            <form
+              className="pointer-events-auto w-full max-w-[880px] border border-[var(--text-main)] bg-white shadow-[14px_14px_0_rgba(26,26,26,0.08)]"
+              onSubmit={handleSubmit}
+            >
+              <div className="grid md:grid-cols-[minmax(0,1.2fr)_280px]">
+                <div className="border-b border-[var(--node-border)] px-8 py-8 md:border-b-0 md:border-r">
+                  <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Start here</div>
+                  <h1
+                    className="mt-4 max-w-[12ch] text-4xl leading-[1.03] tracking-[-0.05em] text-[var(--text-main)]"
+                    style={{ fontFamily: "var(--font-display)" }}
+                  >
+                    Turn one prompt into a branchable canvas.
+                  </h1>
+                  <p className="mt-5 max-w-[56ch] text-[15px] leading-8 text-[rgba(26,26,26,0.76)]">
+                    Conversations read like an editorial layout instead of a chat feed. Click Claude replies or
+                    highlight a passage later to open new lanes from the exact point you want to explore.
+                  </p>
+                </div>
 
-      {graphQuery.isLoading ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
-          <div className="rounded-[28px] border border-white/80 bg-white/72 px-6 py-4 text-sm text-slate-500 shadow-[0_24px_56px_-40px_rgba(15,23,42,0.34)] backdrop-blur-xl">
-            Loading conversation canvas...
+                <div className="bg-[var(--block-slate)] px-6 py-8 text-white">
+                  <div className="editorial-meta text-white/58">Current issue</div>
+                  <div className="mt-4 text-[26px] leading-[1.08] tracking-[-0.03em]" style={{ fontFamily: "var(--font-display)" }}>
+                    Local-first branching.
+                  </div>
+                  <div className="mt-5 space-y-4 text-sm leading-7 text-white/78">
+                    <p>{branchCount} branches archived on the canvas.</p>
+                    <p>{messageCount} messages currently mapped.</p>
+                    <p>The active machine determines where the next lane is written.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-[var(--text-main)] bg-[var(--block-ochre)] px-8 py-7 text-white">
+                <div className="editorial-meta text-white/72">{composerMetaLabel}</div>
+                <div className="relative mt-4">
+                  <Textarea
+                    ref={composerRef}
+                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[16px] leading-8 text-white shadow-none placeholder:text-white/58 focus-visible:ring-0"
+                    placeholder={composerPlaceholder}
+                    value={composerValue}
+                    onChange={(event) => setComposerValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        if (!sendDisabled) {
+                          submitCurrentPrompt();
+                        }
+                      }
+                    }}
+                  />
+                  <div className="pointer-events-none absolute bottom-0 left-0 flex max-w-[calc(100%-6rem)] items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/68">
+                    <span>{composerMetaLabel}</span>
+                    <span className="inline-flex h-px w-6 bg-white/36" />
+                    <span className="truncate">{composerHint}</span>
+                  </div>
+                  <Button
+                    className="absolute bottom-0 right-0 h-12 w-12 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
+                    disabled={sendDisabled}
+                    type="submit"
+                  >
+                    {isThinking ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <ArrowUp className="size-4" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {composerErrorMessage ? (
+                <div className="border-t border-rose-200 bg-rose-50 px-8 py-4 text-sm leading-6 text-rose-700">
+                  {composerErrorMessage}
+                </div>
+              ) : null}
+            </form>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {!graphQuery.isLoading && !hasMessages ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
-          <form
-            className="pointer-events-auto max-w-2xl overflow-hidden rounded-[34px] border border-white/80 bg-white/70 shadow-[0_34px_84px_-48px_rgba(15,23,42,0.36)] backdrop-blur-xl"
-            onSubmit={handleSubmit}
-          >
-            <div className="border-b border-white/80 px-7 py-6">
-              <div className="text-sm font-medium uppercase tracking-[0.28em] text-slate-400">
-              Start here
-              </div>
-              <div className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950">
-                Turn one prompt into a branchable canvas.
-              </div>
-              <div className="mt-3 text-sm leading-7 text-slate-600">
-                Conversations stay readable as waterfalls. Later, click any Claude reply or select a passage
-                to branch right from that exact point.
-              </div>
+        {hasMessages && !showBubbleComposer ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center px-6">
+            <div className="border border-[var(--text-main)] bg-white px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.06)]">
+              Click a Claude block or select a passage to continue from that exact context.
             </div>
-
-            <div className="relative px-7 py-6">
-              <Textarea
-                ref={composerRef}
-                className="min-h-[136px] resize-none rounded-[30px] border-0 bg-[rgba(255,255,255,0.72)] px-6 py-5 pb-16 pr-24 text-[15px] leading-7 text-slate-800 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)] placeholder:text-slate-400"
-                placeholder={composerPlaceholder}
-                value={composerValue}
-                onChange={(event) => setComposerValue(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    if (!sendDisabled) {
-                      submitCurrentPrompt();
-                    }
-                  }
-                }}
-              />
-              <div className="pointer-events-none absolute bottom-[2.75rem] left-[3.25rem] flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                <span>{composerMetaLabel}</span>
-                <span className="inline-flex size-1 rounded-full bg-slate-300" />
-                <span>{composerHint}</span>
-              </div>
-              <Button
-                className="absolute bottom-10 right-[2.75rem] h-12 w-12 rounded-full bg-slate-950/92 px-0 shadow-[0_28px_60px_-30px_rgba(15,23,42,0.7)] backdrop-blur hover:bg-slate-800"
-                disabled={sendDisabled}
-                type="submit"
-              >
-                {isThinking ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <ArrowUp className="size-4" />
-                )}
-              </Button>
-            </div>
-
-            {composerErrorMessage ? (
-              <div className="border-t border-rose-100 bg-rose-50/90 px-7 py-4 text-sm leading-6 text-rose-700">
-                {composerErrorMessage}
-              </div>
-            ) : null}
-          </form>
-        </div>
-      ) : null}
-
-      {hasMessages && !showBubbleComposer ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center px-4">
-          <div className="rounded-full border border-white/80 bg-white/72 px-4 py-2 text-xs text-slate-500 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.36)] backdrop-blur-xl">
-            Click a Claude bubble or select a passage to keep chatting from that exact context.
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {showBubbleComposer ? (
-        <div className="pointer-events-none fixed inset-0 z-30">
-          <form
-            className="pointer-events-auto fixed"
-            style={{
-              left: composerAnchor?.left,
-              top: composerAnchor?.top,
-              width: composerAnchor?.width,
-            }}
-            onSubmit={handleSubmit}
-          >
-            <div className="relative overflow-hidden rounded-[32px] border border-white/80 bg-white/74 shadow-[0_42px_120px_-58px_rgba(15,23,42,0.54)] backdrop-blur-xl">
-              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(240,253,250,0.9)_38%,rgba(239,246,255,0.84)_100%)]" />
-
-              <div className="relative border-b border-white/80 px-6 py-4">
-                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                  <span>{composerMetaLabel}</span>
-                  <span className="inline-flex size-1 rounded-full bg-slate-300" />
-                  <span>{composerHint}</span>
+        {showBubbleComposer ? (
+          <div className="pointer-events-none fixed inset-0 z-30">
+            <form
+              className="pointer-events-auto fixed border border-[var(--text-main)] bg-[var(--block-ochre)] text-white shadow-[14px_14px_0_rgba(26,26,26,0.12)]"
+              style={{
+                left: composerAnchor?.left,
+                top: composerAnchor?.top,
+                width: composerAnchor?.width,
+              }}
+              onSubmit={handleSubmit}
+            >
+              <div className="border-b border-white/24 px-6 py-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="editorial-meta text-white/68">{composerMetaLabel}</div>
+                    <div className="mt-3 text-sm leading-6 text-white/82">{composerHint}</div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="editorial-meta text-white/58">Engine</div>
+                    <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/78">{runtimeLabel}</div>
+                  </div>
                 </div>
 
                 {selectionForSelectedMessage ? (
-                  <div className="mt-3 flex items-start justify-between gap-3">
-                    <div className="min-w-0 rounded-[20px] border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm leading-6 text-amber-950">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-700">
-                        Selected context
+                  <div className="mt-4 flex items-start justify-between gap-3 border border-white/22 bg-[rgba(244,241,234,0.12)] px-4 py-4">
+                    <div className="min-w-0">
+                      <div className="editorial-meta text-white/62">Selected context</div>
+                      <div className="mt-3 break-words text-sm leading-7 text-white">
+                        {truncate(selectionForSelectedMessage.selectedText, 140)}
                       </div>
-                      <div className="mt-2 break-words">{truncate(selectionForSelectedMessage.selectedText, 140)}</div>
                     </div>
                     <button
                       type="button"
-                      className="rounded-full border border-white/80 bg-white/80 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-900"
+                      className="border border-white bg-white px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--block-ochre)] transition-colors hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
                       onClick={() => {
                         setSelectionDraft(null);
                         clearBrowserSelection();
@@ -795,7 +808,7 @@ function NetchatApp() {
               <div className="relative px-6 py-5">
                 <Textarea
                   ref={composerRef}
-                  className="min-h-[118px] resize-none rounded-[28px] border-0 bg-[rgba(255,255,255,0.64)] px-5 py-4 pb-14 pr-20 text-[15px] leading-7 text-slate-800 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)] placeholder:text-slate-400"
+                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-20 text-[15px] leading-8 text-white shadow-none placeholder:text-white/58 focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -809,13 +822,13 @@ function NetchatApp() {
                     }
                   }}
                 />
-                <div className="pointer-events-none absolute bottom-9 left-[2.75rem] flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                <div className="pointer-events-none absolute bottom-5 left-6 flex max-w-[calc(100%-6rem)] items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/68">
                   <span>Enter sends</span>
-                  <span className="inline-flex size-1 rounded-full bg-slate-300" />
-                  <span>{runtimeLabel}</span>
+                  <span className="inline-flex h-px w-6 bg-white/36" />
+                  <span className="truncate">Shift + Enter for new line</span>
                 </div>
                 <Button
-                  className="absolute bottom-9 right-10 h-12 w-12 rounded-full bg-slate-950/92 px-0 shadow-[0_28px_60px_-30px_rgba(15,23,42,0.7)] backdrop-blur hover:bg-slate-800"
+                  className="absolute bottom-5 right-6 h-12 w-12 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
                   disabled={sendDisabled}
                   type="submit"
                 >
@@ -826,23 +839,23 @@ function NetchatApp() {
                   )}
                 </Button>
               </div>
-            </div>
 
-            {composerErrorMessage ? (
-              <div className="mt-3 rounded-[20px] border border-rose-200 bg-rose-50/95 px-4 py-3 text-sm leading-6 text-rose-700 shadow-[0_20px_40px_-32px_rgba(225,29,72,0.42)]">
-                {composerErrorMessage}
-              </div>
-            ) : null}
-          </form>
-        </div>
-      ) : null}
+              {composerErrorMessage ? (
+                <div className="border-t border-white/24 bg-[rgba(58,64,66,0.18)] px-6 py-4 text-sm leading-6 text-white">
+                  {composerErrorMessage}
+                </div>
+              ) : null}
+            </form>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const isUser = data.message.role === "user";
-  const roleLabel = isUser ? "You" : "Claude Code";
+  const roleLabel = isUser ? "User" : "Claude";
   const bubbleRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -872,14 +885,14 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     <div
       ref={bubbleRef}
       className={cn(
-        "group relative w-[420px] overflow-hidden rounded-[30px] border px-6 py-5 text-left shadow-[0_30px_72px_-46px_rgba(15,23,42,0.36)] backdrop-blur-[18px] transition-all",
+        "group relative w-[420px] overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
         isUser
-          ? "border-white/75 bg-[rgba(255,255,255,0.8)]"
+          ? "border-t-[var(--block-slate)]"
           : data.hasSelectionDraft
-            ? "border-amber-300/80 bg-[rgba(255,251,235,0.94)] shadow-[0_40px_100px_-54px_rgba(217,119,6,0.18)] ring-1 ring-amber-200/80"
+            ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
           : data.isActiveMessage
-            ? "border-slate-900/16 bg-[rgba(247,255,251,0.95)] shadow-[0_40px_100px_-54px_rgba(15,23,42,0.5)] ring-1 ring-emerald-300/35"
-            : "border-[#d6ebe3] bg-[rgba(244,255,250,0.92)] hover:-translate-y-0.5 hover:border-[#bddccf] hover:shadow-[0_34px_84px_-48px_rgba(15,23,42,0.42)]",
+            ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.16)]"
+            : "border-t-[var(--block-green)] hover:-translate-y-0.5",
       )}
       onClickCapture={(event) => {
         const selectedText = window.getSelection()?.toString().trim();
@@ -908,68 +921,31 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
       />
 
-      <div
-        className={cn(
-          "pointer-events-none absolute inset-0",
-          isUser
-            ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.78))]"
-            : data.hasSelectionDraft
-              ? "bg-[radial-gradient(circle_at_top_left,rgba(254,243,199,0.72),transparent_42%),linear-gradient(180deg,rgba(255,251,235,0.98),rgba(255,247,237,0.84))]"
-            : data.isActiveMessage
-              ? "bg-[radial-gradient(circle_at_top_left,rgba(236,253,245,0.92),transparent_48%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(240,253,250,0.84))]"
-              : "bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(240,253,250,0.82))]",
-        )}
-      />
-      <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-slate-900/10 to-transparent" />
-
-      <div className="relative mb-4 flex items-center justify-between gap-4">
+      <div className="relative flex items-center justify-between gap-4 border-b border-[var(--node-border)] px-5 py-4">
         <div
           className={cn(
-            "inline-flex rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]",
+            "editorial-meta",
             isUser
-              ? "border-slate-200 bg-white/72 text-slate-500"
+              ? "text-[rgba(58,64,66,0.72)]"
               : data.hasSelectionDraft
-                ? "border-amber-200/80 bg-white/72 text-amber-700"
-                : "border-emerald-200/80 bg-white/72 text-emerald-700",
+                ? "text-[var(--block-ochre)]"
+                : "text-[var(--block-green)]",
           )}
         >
           {roleLabel}
         </div>
-        <div className="font-mono text-[11px] text-slate-400">
+        <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
           {formatMessageTime(data.message.createdAt)}
         </div>
       </div>
 
-      <SelectableMessage
-        content={data.message.content}
-        disabled={isUser}
-        onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
-      />
-
-      {!isUser ? (
-        <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-slate-900/6 pt-4">
-          <span className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-            Click to focus or select text to branch
-          </span>
-          <button
-            type="button"
-            className={cn(
-              "rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] transition-colors",
-              data.hasSelectionDraft
-                ? "border-amber-200 bg-white/78 text-amber-700 hover:border-amber-300"
-                : data.isActiveMessage
-                  ? "border-emerald-200 bg-white/78 text-emerald-700 hover:border-emerald-300"
-                  : "border-slate-200 bg-white/78 text-slate-500 hover:border-slate-300 hover:text-slate-900",
-            )}
-            onClick={(event) => {
-              event.stopPropagation();
-              data.onPickMessage(data.message.id);
-            }}
-          >
-            Continue here
-          </button>
-        </div>
-      ) : null}
+      <div className="relative px-5 py-5">
+        <SelectableMessage
+          content={data.message.content}
+          disabled={isUser}
+          onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
+        />
+      </div>
     </div>
   );
 }
@@ -986,7 +962,7 @@ function SelectableMessage({
   return (
     <div
       className={cn(
-        "message-copy whitespace-pre-wrap text-[15px] leading-7 text-slate-700 selection:bg-amber-200 selection:text-slate-950",
+        "message-copy whitespace-pre-wrap text-[15px] leading-8 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
         disabled ? "cursor-default" : "nodrag nopan cursor-text select-text",
       )}
       onClick={(event) => {
@@ -1062,23 +1038,28 @@ function buildFlowGraph({
 }) {
   const activeEdgeIds = getActiveEdgeIds(snapshot, selectedMessageId);
   const nodes: Node[] = [];
-  const edges: Edge[] = snapshot.edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    type: "simplebezier",
-    zIndex: activeEdgeIds.has(edge.id) ? 5 : 1,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: "#111111",
-    },
-    style: {
-      stroke: "#111111",
-      strokeDasharray: edge.kind === "fork" ? "8 10" : undefined,
-      strokeWidth: activeEdgeIds.has(edge.id) ? 3 : edge.kind === "fork" ? 2.2 : 2.5,
-      opacity: activeEdgeIds.has(edge.id) ? 1 : edge.kind === "fork" ? 0.72 : 0.92,
-    },
-  }));
+  const edges: Edge[] = snapshot.edges.map((edge) => {
+    const isActive = activeEdgeIds.has(edge.id);
+    const strokeColor = isActive ? "#1A1A1A" : edge.kind === "fork" ? "#C2B7A1" : "#8A9288";
+
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: "step",
+      zIndex: isActive ? 5 : 1,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: strokeColor,
+      },
+      style: {
+        stroke: strokeColor,
+        strokeDasharray: edge.kind === "fork" ? "10 8" : undefined,
+        strokeWidth: isActive ? 2.8 : edge.kind === "fork" ? 1.8 : 2.2,
+        opacity: isActive ? 1 : edge.kind === "fork" ? 0.78 : 0.92,
+      },
+    };
+  });
 
   if (snapshot.messages.length === 0) {
     return { nodes, edges };

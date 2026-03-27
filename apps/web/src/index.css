@@ -1,21 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color: #0f172a;
-  background-color: #f3f5f9;
+  --bg-cream: #f4f1ea;
+  --text-main: #1a1a1a;
+  --block-green: #3e4e42;
+  --block-slate: #3a4042;
+  --block-ochre: #c28e55;
+  --line-color: #dcd6c8;
+  --node-border: #e5dfd1;
+  --font-display: "Playfair Display", "Times New Roman", serif;
+  color: var(--text-main);
+  background-color: var(--bg-cream);
   font-family:
-    "SF Pro Display",
-    "Aptos",
-    "Segoe UI",
     "Helvetica Neue",
+    "Segoe UI",
+    "Aptos",
     sans-serif;
   --font-body:
-    "SF Pro Display",
-    "Aptos",
-    "Segoe UI",
     "Helvetica Neue",
+    "Segoe UI",
+    "Aptos",
     sans-serif;
   --font-mono:
     "SFMono-Regular",
@@ -42,9 +50,7 @@ body {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.98), rgba(243, 245, 249, 0.78) 42%, rgba(243, 245, 249, 1) 100%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(243, 245, 249, 0));
+  background-color: var(--bg-cream);
   font-family: var(--font-body);
   overscroll-behavior: none;
 }
@@ -58,6 +64,13 @@ textarea {
 #root {
   height: 100vh;
   width: 100vw;
+}
+
+.editorial-meta {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .netchat-flow .react-flow__pane {
@@ -114,12 +127,12 @@ textarea {
 }
 
 .canvas-flow .react-flow__edge-path {
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
 }
 
 .canvas-flow .react-flow__background {
-  opacity: 0.86;
+  opacity: 1;
 }
 
 .canvas-flow .react-flow__attribution {
