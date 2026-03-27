@@ -124,4 +124,4 @@ npm run app:local
 ## Other references
 
 Refer to /DESIGN.md for frontend UI design principles.
-Refer to /CHANGELOG.md for the development changelog of this project
+Refer to /CHANGELOG.md for the development changelog of this project and to update the changelog after each major code change
