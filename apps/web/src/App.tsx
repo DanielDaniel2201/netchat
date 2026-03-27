@@ -710,7 +710,7 @@ function NetchatApp() {
                 <div className="relative mt-4">
                   <Textarea
                     ref={composerRef}
-                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[16px] leading-8 text-white shadow-none placeholder:text-white/58 focus-visible:ring-0"
+                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[16px] leading-8 text-white shadow-none placeholder:text-white focus-visible:ring-0"
                     placeholder={composerPlaceholder}
                     value={composerValue}
                     onChange={(event) => setComposerValue(event.target.value)}
@@ -770,45 +770,18 @@ function NetchatApp() {
               }}
               onSubmit={handleSubmit}
             >
-              <div className="border-b border-white/24 px-6 py-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="editorial-meta text-white/68">{composerMetaLabel}</div>
-                    <div className="mt-3 text-sm leading-6 text-white/82">{composerHint}</div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="editorial-meta text-white/58">Engine</div>
-                    <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-white/78">{runtimeLabel}</div>
+              {selectionForSelectedMessage ? (
+                <div className="border-b border-white/24 px-6 py-4">
+                  <div className="break-words text-sm leading-7 text-white">
+                    {truncate(selectionForSelectedMessage.selectedText, 160)}
                   </div>
                 </div>
-
-                {selectionForSelectedMessage ? (
-                  <div className="mt-4 flex items-start justify-between gap-3 border border-white/22 bg-[rgba(244,241,234,0.12)] px-4 py-4">
-                    <div className="min-w-0">
-                      <div className="editorial-meta text-white/62">Selected context</div>
-                      <div className="mt-3 break-words text-sm leading-7 text-white">
-                        {truncate(selectionForSelectedMessage.selectedText, 140)}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="border border-white bg-white px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--block-ochre)] transition-colors hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
-                      onClick={() => {
-                        setSelectionDraft(null);
-                        clearBrowserSelection();
-                        focusComposer();
-                      }}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+              ) : null}
 
               <div className="relative px-6 py-5">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-20 text-[15px] leading-8 text-white shadow-none placeholder:text-white/58 focus-visible:ring-0"
+                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[15px] leading-8 text-white shadow-none placeholder:text-white focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -822,13 +795,8 @@ function NetchatApp() {
                     }
                   }}
                 />
-                <div className="pointer-events-none absolute bottom-5 left-6 flex max-w-[calc(100%-6rem)] items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/68">
-                  <span>Enter sends</span>
-                  <span className="inline-flex h-px w-6 bg-white/36" />
-                  <span className="truncate">Shift + Enter for new line</span>
-                </div>
                 <Button
-                  className="absolute bottom-5 right-6 h-12 w-12 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
+                  className="absolute bottom-0 right-0 h-12 w-12 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
                   disabled={sendDisabled}
                   type="submit"
                 >
