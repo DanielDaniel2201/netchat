@@ -57,6 +57,7 @@ async function main() {
         VITE_API_BASE_URL: config.serverUrl,
         VITE_DAEMON_BASE_URL: config.daemonUrl,
       },
+      shell: npmCommand.shell,
       stdio: "inherit",
     });
     writeWebBuildMarker(config);
@@ -562,12 +563,14 @@ function resolveNpmCommand() {
     return {
       command: process.execPath,
       args: [npmCliPath],
+      shell: false,
     };
   }
 
   return {
     command: process.platform === "win32" ? "npm.cmd" : "npm",
     args: [],
+    shell: process.platform === "win32",
   };
 }
 
@@ -651,6 +654,7 @@ function runCommand(
   options: {
     cwd: string;
     env: NodeJS.ProcessEnv;
+    shell?: boolean;
     stdio: "inherit";
   },
 ) {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 export function loadLocalEnv() {
   const protectedKeys = new Set(Object.keys(process.env));
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const envFiles = [path.join(repoRoot, ".env"), path.join(repoRoot, ".env.local")];
+  const envFiles = [path.join(repoRoot, ".env.local")];
 
   for (const envFile of envFiles) {
     if (!existsSync(envFile)) {

@@ -50,7 +50,7 @@ export interface RuntimeAdapter {
 }
 
 export function createRuntimeAdapter(): RuntimeAdapter {
-  if ((process.env.NETCHAT_RUNTIME ?? "mock") === "claude") {
+  if (resolveRuntimeMode() === "claude") {
     return new ClaudeCliRuntime();
   }
 
@@ -62,11 +62,10 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private readonly cwdResolution = resolveClaudeWorkingDirectory();
   private readonly cwd = this.cwdResolution.workingDirectory;
   private readonly binaryPath = this.binaryResolution.binaryPath;
-  private readonly permissionMode = process.env.NETCHAT_PERMISSION_MODE?.trim() || null;
-  private readonly allowDangerouslySkipPermissions =
-    process.env.NETCHAT_ALLOW_DANGEROUS?.trim().toLowerCase() === "true";
-  private readonly settingSources = process.env.NETCHAT_SETTING_SOURCES?.trim() || null;
-  private readonly machineId = process.env.NETCHAT_MACHINE_ID?.trim() || "machine_local";
+  private readonly permissionMode = readStringEnv("NETCHAT_PERMISSION_MODE") ?? "bypassPermissions";
+  private readonly allowDangerouslySkipPermissions = readBooleanEnv("NETCHAT_ALLOW_DANGEROUS", true);
+  private readonly settingSources = readStringEnv("NETCHAT_SETTING_SOURCES");
+  private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
   private readonly timeoutMs = resolveRuntimeTimeoutMs();
 
   getMode(): "claude" {
@@ -527,6 +526,29 @@ class MockRuntimeAdapter implements RuntimeAdapter {
 
 function sanitizeProjectPath(value: string) {
   return value.replace(/[^A-Za-z0-9]/g, "-");
+}
+
+function resolveRuntimeMode(): "mock" | "claude" {
+  const value = readStringEnv("NETCHAT_RUNTIME");
+  if (value === "mock") {
+    return "mock";
+  }
+
+  return "claude";
+}
+
+function readStringEnv(name: string) {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
+}
+
+function readBooleanEnv(name: string, defaultValue = false) {
+  const value = readStringEnv(name);
+  if (value === null) {
+    return defaultValue;
+  }
+
+  return value.toLowerCase() === "true";
 }
 
 function resolveRuntimeTimeoutMs() {
