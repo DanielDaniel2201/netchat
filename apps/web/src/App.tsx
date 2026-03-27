@@ -20,10 +20,12 @@ import {
   DaemonDiagnostics,
   CreateBranchInput,
   CreateBranchTurnInput,
+  CreateNetInput,
   CreateRootTurnInput,
   GraphSnapshot,
   MachineRecord,
   MessageNode,
+  WorkspaceState,
   rootBranchId,
 } from "@netchat/shared";
 import { create } from "zustand";
@@ -32,8 +34,7 @@ import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/cn";
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3001";
-const daemonBaseUrl = import.meta.env.VITE_DAEMON_BASE_URL ?? "http://127.0.0.1:4318";
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
 const messageNodeWidth = 420;
 const branchLaneWidth = 620;
 const branchMessageGap = 96;
@@ -101,8 +102,13 @@ function NetchatApp() {
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
+  const [showNetHistory, setShowNetHistory] = useState(false);
   const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
 
+  const workspaceQuery = useQuery({
+    queryKey: ["workspace"],
+    queryFn: () => request<WorkspaceState>("/api/workspace"),
+  });
   const graphQuery = useQuery({
     queryKey: ["graph"],
     queryFn: () => request<GraphSnapshot>("/api/graph"),
@@ -114,15 +120,19 @@ function NetchatApp() {
   });
   const daemonDiagnosticsQuery = useQuery({
     queryKey: ["daemon-diagnostics"],
-    queryFn: () => requestDaemon<DaemonDiagnostics>("/runtime/diagnostics"),
+    queryFn: () => request<DaemonDiagnostics>("/api/runtime/diagnostics"),
     refetchInterval: 2500,
     retry: false,
   });
 
+  const workspace = workspaceQuery.data;
   const snapshot = graphQuery.data;
   const machines = machinesQuery.data ?? [];
   const onlineMachines = machines.filter((machine) => machine.status === "online");
   const daemonDiagnostics = daemonDiagnosticsQuery.data;
+  const workspaceNets = workspace?.nets ?? [];
+  const activeNetId = workspace?.activeNetId ?? null;
+  const activeNet = workspaceNets.find((net) => net.id === activeNetId) ?? null;
   const machinesById = useMemo(() => new Map(machines.map((machine) => [machine.id, machine])), [machines]);
   const rootMachine = onlineMachines[0];
   const branchesById = useMemo(
@@ -195,7 +205,7 @@ function NetchatApp() {
         body: JSON.stringify(input),
       });
     },
-    onSuccess: (nextSnapshot) => {
+    onSuccess: async (nextSnapshot) => {
       logWeb(
         "info",
         `Root turn completed. Graph now has ${nextSnapshot.messages.length} messages across ${nextSnapshot.branches.length} branches.`,
@@ -204,6 +214,7 @@ function NetchatApp() {
       setComposerValue("");
       setSelectionDraft(null);
       setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
     onError: (error) => {
       logWeb("error", `Root turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -223,7 +234,7 @@ function NetchatApp() {
         body: JSON.stringify(input),
       });
     },
-    onSuccess: (nextSnapshot) => {
+    onSuccess: async (nextSnapshot) => {
       logWeb(
         "info",
         `Branch fork completed. Graph now has ${nextSnapshot.branches.length} branches.`,
@@ -233,6 +244,7 @@ function NetchatApp() {
       setSelectionDraft(null);
       setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
       clearBrowserSelection();
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
     onError: (error) => {
       logWeb("error", `Branch fork failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -250,7 +262,7 @@ function NetchatApp() {
         body: JSON.stringify(variables.input),
       });
     },
-    onSuccess: (nextSnapshot) => {
+    onSuccess: async (nextSnapshot) => {
       logWeb(
         "info",
         `Branch turn completed. Graph now has ${nextSnapshot.messages.length} messages.`,
@@ -259,9 +271,51 @@ function NetchatApp() {
       setComposerValue("");
       setSelectionDraft(null);
       setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
     onError: (error) => {
       logWeb("error", `Branch turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const createNetMutation = useMutation({
+    mutationFn: async (input: CreateNetInput) => {
+      logWeb("info", `Creating a new net for workspace ${workspace?.workspaceId ?? "active"}.`);
+      return request<WorkspaceState>("/api/nets", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+    },
+    onSuccess: async (nextWorkspace) => {
+      logWeb("info", `Created net ${nextWorkspace.activeNetId}.`);
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setComposerValue("");
+      setSelectionDraft(null);
+      setSelectedMessageId(null);
+      clearBrowserSelection();
+      await queryClient.invalidateQueries({ queryKey: ["graph"] });
+    },
+    onError: (error) => {
+      logWeb("error", `Creating a new net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const selectNetMutation = useMutation({
+    mutationFn: async (netId: string) => {
+      logWeb("info", `Switching to net ${netId}.`);
+      return request<WorkspaceState>(`/api/nets/${netId}/select`, {
+        method: "POST",
+      });
+    },
+    onSuccess: async (nextWorkspace) => {
+      logWeb("info", `Switched to net ${nextWorkspace.activeNetId}.`);
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setComposerValue("");
+      setSelectionDraft(null);
+      setSelectedMessageId(null);
+      clearBrowserSelection();
+      await queryClient.invalidateQueries({ queryKey: ["graph"] });
+    },
+    onError: (error) => {
+      logWeb("error", `Switching nets failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
   const isThinking =
@@ -476,9 +530,10 @@ function NetchatApp() {
     };
   }, [selectedMessage, syncBubbleComposerAnchor]);
 
+  const isSwitchingNet = createNetMutation.isPending || selectNetMutation.isPending;
   const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
-  const sendDisabled = composerValue.trim().length === 0 || isThinking || !canSendOnActiveLane;
+  const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
 
   function submitCurrentPrompt() {
     const prompt = composerValue.trim();
@@ -527,6 +582,7 @@ function NetchatApp() {
 
   const connectionStatus = buildConnectionStatus(runtimeMachine, daemonDiagnostics, daemonDiagnosticsQuery.error);
   const workingDirectoryValue =
+    workspace?.workingDirectory ??
     runtimeMachine?.environment.workingDirectory ??
     daemonDiagnostics?.environment.workingDirectory ??
     null;
@@ -561,10 +617,15 @@ function NetchatApp() {
         ? "Continue lane"
         : "Main canvas";
   const composerErrorMessage = formatErrorMessage(
-    rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
+    rootTurnMutation.error ??
+      branchMutation.error ??
+      branchTurnMutation.error ??
+      createNetMutation.error ??
+      selectNetMutation.error,
   );
   const branchCount = snapshot?.branches.length ?? 0;
   const messageCount = snapshot?.messages.length ?? 0;
+  const netCount = workspaceNets.length;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
@@ -626,6 +687,107 @@ function NetchatApp() {
               <div className="px-5 py-4">
                 <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Engine</div>
                 <div className="mt-2 text-[15px] leading-7 text-[var(--text-main)]">{runtimeLabel}</div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+            <div className="border-b border-[var(--node-border)] px-5 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Active net</div>
+                  <div className="mt-3 text-[18px] font-medium leading-7 text-[var(--text-main)]">
+                    {activeNet?.title ?? "Loading..."}
+                  </div>
+                  <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-[rgba(26,26,26,0.52)]">
+                    {netCount} nets in this workspace
+                  </div>
+                </div>
+
+                <div className="max-w-[112px] text-right">
+                  <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Scoped to</div>
+                  <div className="mt-3 break-words text-[15px] leading-6 text-[rgba(26,26,26,0.8)]">
+                    {workspaceName}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
+              <button
+                type="button"
+                className="bg-white px-5 py-4 text-left text-[13px] font-medium uppercase tracking-[0.14em] text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                disabled={workspaceQuery.isLoading}
+                onClick={() => setShowNetHistory((open) => !open)}
+              >
+                {showNetHistory ? "Hide history" : "History nets"}
+              </button>
+              <button
+                type="button"
+                className="bg-white px-5 py-4 text-left text-[13px] font-medium uppercase tracking-[0.14em] text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                disabled={isSwitchingNet || workspaceQuery.isLoading}
+                onClick={() => createNetMutation.mutate({ title: "" })}
+              >
+                {createNetMutation.isPending ? "Creating..." : "New net"}
+              </button>
+            </div>
+          </div>
+
+          {showNetHistory ? (
+            <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+              <div className="border-b border-[var(--node-border)] px-5 py-4">
+                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">History nets</div>
+                <div className="mt-2 text-[14px] leading-6 text-[rgba(26,26,26,0.76)]">
+                  Only nets from this workspace appear here.
+                </div>
+              </div>
+
+              <div className="max-h-[360px] overflow-y-auto">
+                {workspaceQuery.isLoading ? (
+                  <div className="px-5 py-5 text-[14px] leading-6 text-[rgba(26,26,26,0.62)]">
+                    Loading workspace nets...
+                  </div>
+                ) : workspaceNets.length ? (
+                  workspaceNets.map((net) => {
+                    const isActiveNet = net.id === activeNetId;
+                    return (
+                      <button
+                        key={net.id}
+                        type="button"
+                        className={cn(
+                          "block w-full border-b border-[var(--node-border)] px-5 py-4 text-left transition-colors last:border-b-0",
+                          isActiveNet ? "bg-[rgba(247,247,242,0.92)]" : "bg-white hover:bg-[var(--bg-cream)]",
+                        )}
+                        disabled={isSwitchingNet || isActiveNet}
+                        onClick={() => selectNetMutation.mutate(net.id)}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-[15px] font-medium leading-6 text-[var(--text-main)]">
+                              {net.title}
+                            </div>
+                            <div className="mt-2 text-[11px] uppercase tracking-[0.14em] text-[rgba(26,26,26,0.5)]">
+                              Opened {formatNetTime(net.lastOpenedAt)}
+                            </div>
+                            <div className="mt-1 text-[12px] leading-5 text-[rgba(26,26,26,0.58)]">
+                              Created {formatNetTime(net.createdAt)}
+                            </div>
+                          </div>
+
+                          <div className="text-right">
+                            <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
+                              {isActiveNet ? "Current" : "Switch"}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="px-5 py-5 text-[14px] leading-6 text-[rgba(26,26,26,0.62)]">
+                    This workspace does not have any saved nets yet.
+                  </div>
+                )}
               </div>
             </div>
           ) : null}
@@ -698,6 +860,7 @@ function NetchatApp() {
                     Local-first branching.
                   </div>
                   <div className="mt-5 space-y-4 text-[15px] leading-8 text-white/82">
+                    <p>{netCount} nets available in this workspace.</p>
                     <p>{branchCount} branches archived on the canvas.</p>
                     <p>{messageCount} messages currently mapped.</p>
                     <p>The active machine determines where the next lane is written.</p>
@@ -1253,6 +1416,20 @@ function getLatestAssistantMessageId(snapshot: GraphSnapshot) {
   return null;
 }
 
+function formatNetTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "just now";
+  }
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function formatWorkingDirectoryPath(value: string | null) {
   if (!value) {
     return "Unavailable";
@@ -1326,22 +1503,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, "Request failed"));
-  }
-
-  return response.json() as Promise<T>;
-}
-
-async function requestDaemon<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${daemonBaseUrl}${path}`, {
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
-
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response, "Daemon request failed"));
   }
 
   return response.json() as Promise<T>;

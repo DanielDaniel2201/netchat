@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -6,95 +7,102 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const tsxCliPath = path.join(
-  repoRoot,
-  "node_modules",
-  "tsx",
-  "dist",
-  "cli.mjs",
-);
-const webDistPath = path.join(repoRoot, "apps", "web", "dist");
+const runtimeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const sourceMode = existsSync(path.join(runtimeRoot, "apps", "server", "src", "index.ts"));
+const tsxCliPath = path.join(runtimeRoot, "node_modules", "tsx", "dist", "cli.mjs");
+const sourceWebDistPath = path.join(runtimeRoot, "apps", "web", "dist");
+const packagedWebDistPath = path.join(runtimeRoot, "dist", "web");
+const webDistPath = sourceMode ? sourceWebDistPath : packagedWebDistPath;
 const webDistIndexPath = path.join(webDistPath, "index.html");
 const webBuildMarkerPath = path.join(webDistPath, ".netchat-local-build.json");
 const webSourceRoots = [
-  path.join(repoRoot, "apps", "web", "src"),
-  path.join(repoRoot, "apps", "web", "index.html"),
-  path.join(repoRoot, "apps", "web", "package.json"),
-  path.join(repoRoot, "apps", "web", "tsconfig.json"),
-  path.join(repoRoot, "apps", "web", "vite.config.ts"),
-  path.join(repoRoot, "apps", "web", "tailwind.config.ts"),
-  path.join(repoRoot, "apps", "web", "postcss.config.cjs"),
+  path.join(runtimeRoot, "apps", "web", "src"),
+  path.join(runtimeRoot, "apps", "web", "index.html"),
+  path.join(runtimeRoot, "apps", "web", "package.json"),
+  path.join(runtimeRoot, "apps", "web", "tsconfig.json"),
+  path.join(runtimeRoot, "apps", "web", "vite.config.ts"),
+  path.join(runtimeRoot, "apps", "web", "tailwind.config.ts"),
+  path.join(runtimeRoot, "apps", "web", "postcss.config.cjs"),
 ];
+const sourceServerEntryPath = path.join(runtimeRoot, "apps", "server", "src", "index.ts");
+const packagedServerEntryPath = path.join(runtimeRoot, "dist", "apps", "server", "index.mjs");
+const sourceDaemonEntryPath = path.join(runtimeRoot, "apps", "daemon", "src", "index.ts");
+const packagedDaemonEntryPath = path.join(runtimeRoot, "dist", "apps", "daemon", "index.mjs");
 const managedChildren: ChildProcess[] = [];
 
 let shuttingDown = false;
 
-await main().catch(async (error) => {
+void main().catch(async (error) => {
   console.error(`[netchat-local] ${error instanceof Error ? error.message : String(error)}`);
   await shutdown("Local app failed to start cleanly.", 1);
 });
 
 async function main() {
-  if (!existsSync(tsxCliPath)) {
+  if (sourceMode && !existsSync(tsxCliPath)) {
     throw new Error(`tsx is not installed at ${tsxCliPath}. Run npm install first.`);
   }
 
   const config = await resolveLocalAppConfig(process.argv.slice(2));
-  const npmCommand = resolveNpmCommand();
   mkdirSync(config.appDataDirectory, { recursive: true });
 
   log("Preparing the local web app...");
-  const buildReason = resolveWebBuildReason(config);
-  if (config.webBuildMode === "skip") {
-    log("Skipping the web build because --skip-web-build was requested.");
-  } else if (buildReason) {
-    log(buildReason);
-    await runCommand(npmCommand.command, [...npmCommand.args, "run", "build:web"], {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        VITE_API_BASE_URL: config.serverUrl,
-        VITE_DAEMON_BASE_URL: config.daemonUrl,
-      },
-      shell: npmCommand.shell,
-      stdio: "inherit",
-    });
-    writeWebBuildMarker(config);
+  if (!sourceMode) {
+    log("Using the packaged web build.");
   } else {
-    log("Reusing the existing web build.");
+    const npmCommand = resolveNpmCommand();
+    const buildReason = resolveWebBuildReason(config);
+    if (config.webBuildMode === "skip") {
+      log("Skipping the web build because --skip-web-build was requested.");
+    } else if (buildReason) {
+      log(buildReason);
+      await runCommand(npmCommand.command, [...npmCommand.args, "run", "build:web"], {
+        cwd: runtimeRoot,
+        env: process.env,
+        shell: npmCommand.shell,
+        stdio: "inherit",
+      });
+      writeWebBuildMarker();
+    } else {
+      log("Reusing the existing web build.");
+    }
   }
 
   if (!existsSync(webDistIndexPath)) {
     throw new Error(`Local web build not found at ${webDistPath}.`);
   }
 
-  const serverProcess = startProcess("controller", process.execPath, [tsxCliPath, path.join(repoRoot, "apps", "server", "src", "index.ts")], {
-    cwd: repoRoot,
+  const serverProcess = startProcess("controller", process.execPath, resolveManagedEntryArgs("server"), {
+    cwd: runtimeRoot,
     env: {
       ...process.env,
       NODE_NO_WARNINGS: "1",
       NETCHAT_APP_DATA_DIR: config.appDataDirectory,
-      NETCHAT_APP_DB_PATH: config.databasePath,
+      NETCHAT_DAEMON_URL: config.daemonUrl,
+      NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
+      NETCHAT_WORKSPACE_DIR: config.workingDirectory,
       NETCHAT_LOCAL_MODE: "true",
       NETCHAT_WEB_DIST_PATH: webDistPath,
       PORT: String(config.serverPort),
+      ...(config.databasePath ? { NETCHAT_APP_DB_PATH: config.databasePath } : {}),
     },
     stdio: "inherit",
   });
   void serverProcess.exitPromise.catch(() => undefined);
   await waitForHealth(`${config.serverUrl}/health`);
 
-  const daemonProcess = startProcess("daemon", process.execPath, [tsxCliPath, path.join(repoRoot, "apps", "daemon", "src", "index.ts")], {
-    cwd: repoRoot,
+  const daemonProcess = startProcess("daemon", process.execPath, resolveManagedEntryArgs("daemon"), {
+    cwd: runtimeRoot,
     env: {
       ...process.env,
       NODE_NO_WARNINGS: "1",
+      CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? config.workingDirectory,
       DAEMON_PORT: String(config.daemonPort),
       NETCHAT_APP_DATA_DIR: config.appDataDirectory,
+      NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
       NETCHAT_LOCAL_MODE: "true",
       NETCHAT_MACHINE_STATE_PATH: config.machineStatePath,
       NETCHAT_SERVER_URL: config.serverUrl,
+      NETCHAT_WORKSPACE_DIR: config.workingDirectory,
     },
     stdio: "inherit",
   });
@@ -104,7 +112,7 @@ async function main() {
   await waitForOnlineMachine(`${config.serverUrl}/api/machines`);
 
   log(`Local controller ready at ${config.serverUrl}.`);
-  log(`Graph history will persist at ${config.databasePath}.`);
+  log(`Workspace-scoped net history will persist under ${config.appDataDirectory}.`);
   if (config.openBrowser) {
     await openBrowser(config.serverUrl);
   }
@@ -177,6 +185,14 @@ function startProcess(
   };
 }
 
+function resolveManagedEntryArgs(target: "server" | "daemon") {
+  if (sourceMode) {
+    return [tsxCliPath, target === "server" ? sourceServerEntryPath : sourceDaemonEntryPath];
+  }
+
+  return [target === "server" ? packagedServerEntryPath : packagedDaemonEntryPath];
+}
+
 type WebBuildMode = "auto" | "skip" | "force";
 
 type ParsedLocalAppArgs = {
@@ -191,8 +207,9 @@ type ParsedLocalAppArgs = {
 
 type LocalAppConfig = {
   appDataDirectory: string;
-  databasePath: string;
+  databasePath: string | null;
   machineStatePath: string;
+  workingDirectory: string;
   serverPort: number;
   daemonPort: number;
   serverUrl: string;
@@ -202,21 +219,19 @@ type LocalAppConfig = {
 };
 
 type WebBuildMarker = {
-  version: 1;
-  apiBaseUrl: string;
-  daemonBaseUrl: string;
+  version: 2;
 };
 
 async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
   const parsedArgs = parseLocalAppArgs(argv);
+  const workingDirectory = resolveLaunchWorkingDirectory();
   const appDataDirectory =
     parsedArgs.appDataDirectory ??
     readStringEnv("NETCHAT_APP_DATA_DIR") ??
-    path.join(os.homedir(), ".netchat");
+    path.join(os.homedir(), ".netchat", "workspaces", createWorkspaceStorageKey(workingDirectory));
   const databasePath =
     parsedArgs.databasePath ??
-    readStringEnv("NETCHAT_APP_DB_PATH") ??
-    path.join(appDataDirectory, "app.db");
+    readStringEnv("NETCHAT_APP_DB_PATH");
   const machineStatePath =
     parsedArgs.machineStatePath ??
     readStringEnv("NETCHAT_MACHINE_STATE_PATH") ??
@@ -244,6 +259,7 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
     appDataDirectory,
     databasePath,
     machineStatePath,
+    workingDirectory,
     serverPort,
     daemonPort,
     serverUrl: `http://127.0.0.1:${serverPort}`,
@@ -358,9 +374,9 @@ function printLocalAppHelp() {
       "Start the controller, daemon, and web UI with local-first defaults.",
       "",
       "Examples:",
-      "  npx netchat",
-      "  npx netchat --no-browser",
-      "  npx netchat --port 3002 --daemon-port 4319",
+      "  npx netchat-app@latest",
+      "  npx netchat-app@latest --no-browser",
+      "  npx netchat-app@latest --port 3002 --daemon-port 4319",
       "",
       "Options:",
       "  --port <number>               Controller port (default: 3001)",
@@ -397,6 +413,25 @@ function readBooleanEnv(name: string) {
 function readPortEnv(name: string) {
   const value = readStringEnv(name);
   return value ? parsePort(name, value) : null;
+}
+
+function resolveLaunchWorkingDirectory() {
+  const configuredPath =
+    readStringEnv("NETCHAT_WORKSPACE_DIR") ??
+    readStringEnv("NETCHAT_LAUNCH_CWD") ??
+    readStringEnv("CLAUDE_PROJECT_CWD") ??
+    process.cwd();
+  return normalizeWorkingDirectory(configuredPath);
+}
+
+function normalizeWorkingDirectory(value: string) {
+  return path.resolve(value).replace(/\\/g, "/");
+}
+
+function createWorkspaceStorageKey(workingDirectory: string) {
+  const normalized =
+    process.platform === "win32" ? workingDirectory.toLowerCase() : workingDirectory;
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
 async function resolvePort(
@@ -462,6 +497,10 @@ function isPortAvailable(port: number) {
 }
 
 function resolveWebBuildReason(config: LocalAppConfig) {
+  if (!sourceMode) {
+    return null;
+  }
+
   if (config.webBuildMode === "force") {
     return "Building the web UI because --rebuild-web was requested.";
   }
@@ -472,14 +511,7 @@ function resolveWebBuildReason(config: LocalAppConfig) {
 
   const existingMarker = readWebBuildMarker();
   if (!existingMarker) {
-    return "Building the web UI because the existing local build does not record its API endpoints.";
-  }
-
-  if (
-    existingMarker.apiBaseUrl !== config.serverUrl ||
-    existingMarker.daemonBaseUrl !== config.daemonUrl
-  ) {
-    return "Building the web UI because the local API endpoints changed.";
+    return "Building the web UI because the existing local build predates the portable runtime bundle.";
   }
 
   if (isWebBuildOutdated()) {
@@ -501,11 +533,9 @@ function readWebBuildMarker(): WebBuildMarker | null {
   }
 }
 
-function writeWebBuildMarker(config: LocalAppConfig) {
+function writeWebBuildMarker() {
   const marker: WebBuildMarker = {
-    version: 1,
-    apiBaseUrl: config.serverUrl,
-    daemonBaseUrl: config.daemonUrl,
+    version: 2,
   };
   writeFileSync(webBuildMarkerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
 }
@@ -636,7 +666,7 @@ async function openBrowser(url: string) {
 
   try {
     const browserProcess = spawn(command.file, command.args, {
-      cwd: repoRoot,
+      cwd: runtimeRoot,
       detached: true,
       stdio: "ignore",
     });

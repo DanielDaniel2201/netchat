@@ -5,10 +5,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const tsxCliPath = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
-const packageJsonPath = path.join(repoRoot, "package.json");
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const tsxCliPath = path.join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs");
+const packageJsonPath = path.join(packageRoot, "package.json");
 const argv = process.argv.slice(2);
+const launchCwd = process.cwd();
 
 if (argv[0] === "--help" || argv[0] === "-h") {
   printHelp();
@@ -24,18 +25,32 @@ const subcommand = argv[0];
 const isDaemonCommand = subcommand === "daemon";
 const isLocalCommand = subcommand === "local";
 const forwardedArgs = isDaemonCommand || isLocalCommand ? argv.slice(1) : argv;
+const sourceLocalEntry = path.join(packageRoot, "apps", "server", "src", "local-app.ts");
+const sourceDaemonEntry = path.join(packageRoot, "apps", "daemon", "src", "index.ts");
+const distLocalEntry = path.join(packageRoot, "dist", "apps", "local-app", "index.mjs");
+const distDaemonEntry = path.join(packageRoot, "dist", "apps", "daemon", "index.mjs");
+const sourceMode = existsSync(tsxCliPath) && existsSync(sourceLocalEntry) && existsSync(sourceDaemonEntry);
 const entryFile = isDaemonCommand
-  ? path.join(repoRoot, "apps", "daemon", "src", "index.ts")
-  : path.join(repoRoot, "apps", "server", "src", "local-app.ts");
+  ? sourceMode
+    ? sourceDaemonEntry
+    : distDaemonEntry
+  : sourceMode
+    ? sourceLocalEntry
+    : distLocalEntry;
 
-if (!existsSync(tsxCliPath)) {
-  console.error(`netchat requires tsx at ${tsxCliPath}. Run npm install first.`);
+if (!existsSync(entryFile)) {
+  console.error(`netchat-app could not find its runtime entry at ${entryFile}.`);
   process.exit(1);
 }
 
-const child = spawn(process.execPath, [tsxCliPath, entryFile, ...forwardedArgs], {
-  cwd: repoRoot,
-  env: process.env,
+const childArgs = sourceMode ? [tsxCliPath, entryFile, ...forwardedArgs] : [entryFile, ...forwardedArgs];
+const child = spawn(process.execPath, childArgs, {
+  cwd: packageRoot,
+  env: {
+    ...process.env,
+    NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? launchCwd,
+    CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? launchCwd,
+  },
   stdio: "inherit",
 });
 
@@ -73,16 +88,16 @@ function printHelp() {
       "Run the local-first app with sensible defaults.",
       "",
       "Usage:",
-      "  npx netchat                  Start the controller, daemon, and local web UI",
-      "  npx netchat daemon [...]     Start only the daemon",
-      "  npx netchat local [...]      Explicitly start the full local app",
+      "  npx netchat-app@latest                  Start the controller, daemon, and local web UI",
+      "  npx netchat-app@latest daemon [...]     Start only the daemon",
+      "  npx netchat-app@latest local [...]      Explicitly start the full local app",
       "",
       "Examples:",
-      "  npx netchat",
-      "  npx netchat --no-browser",
-      "  npx netchat daemon --server http://127.0.0.1:3001 --pair ABC123",
+      "  npx netchat-app@latest",
+      "  npx netchat-app@latest --no-browser",
+      "  npx netchat-app@latest daemon --server http://127.0.0.1:3001 --pair ABC123",
       "",
-      "Run `npx netchat local --help` or `npx netchat daemon --help` for command-specific options.",
+      "Run `npx netchat-app@latest local --help` or `npx netchat-app@latest daemon --help` for command-specific options.",
     ].join("\n"),
   );
 }

@@ -38,6 +38,20 @@ export type GraphSnapshot = {
   edges: GraphEdge[];
 };
 
+export type WorkspaceNetSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  lastOpenedAt: string;
+};
+
+export type WorkspaceState = {
+  workspaceId: string;
+  workingDirectory: string;
+  activeNetId: string;
+  nets: WorkspaceNetSummary[];
+};
+
 export type HostPlatform = "windows" | "macos" | "linux" | "unknown";
 
 export type RuntimeEnvironment = {
@@ -252,6 +266,12 @@ export const createBranchTurnInputSchema = z.object({
 });
 
 export type CreateBranchTurnInput = z.infer<typeof createBranchTurnInputSchema>;
+
+export const createNetInputSchema = z.object({
+  title: z.string().trim().max(120).default(""),
+});
+
+export type CreateNetInput = z.infer<typeof createNetInputSchema>;
 
 export type RootTurnRuntimeRequest = {
   prompt: string;

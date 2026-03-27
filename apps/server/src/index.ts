@@ -6,6 +6,7 @@ import {
   CreateMachineClaimJobInput,
   CreateMachineHeartbeatInput,
   CreateMachineRegisterInput,
+  CreateNetInput,
   CreatePairingSessionInput,
   CreateBranchInput,
   CreateBranchTurnInput,
@@ -13,11 +14,13 @@ import {
   ForkBranchRuntimeRequest,
   RootTurnRuntimeRequest,
   ServerDiagnostics,
+  WorkspaceState,
   buildForkPrompt,
   buildMessageBranchPrompt,
   completeMachineJobInputSchema,
   createMachineClaimJobInputSchema,
   createMachineHeartbeatInputSchema,
+  createNetInputSchema,
   createMachineRegisterInputSchema,
   createPairingSessionInputSchema,
   createBranchInputSchema,
@@ -26,10 +29,10 @@ import {
   rootBranchId,
 } from "@netchat/shared";
 
-import { GraphStore } from "./store.js";
 import { ServerDiagnosticsStore } from "./diagnostics.js";
 import { MachineStore } from "./machine-store.js";
 import { loadLocalEnv } from "./load-env.js";
+import { WorkspaceStore } from "./workspace-store.js";
 import { registerLocalWebUi } from "./web-ui.js";
 
 loadLocalEnv();
@@ -37,7 +40,7 @@ loadLocalEnv();
 const app = Fastify({
   logger: false,
 });
-const store = new GraphStore();
+const store = new WorkspaceStore();
 const machines = new MachineStore();
 const diagnostics = new ServerDiagnosticsStore({
   jobTimeoutMs: machines.getJobTimeoutMs(),
@@ -60,7 +63,59 @@ app.get("/health", async () => ({
   ok: true,
 }));
 
+app.get("/api/workspace", async (): Promise<WorkspaceState> => store.getWorkspaceState());
+
 app.get("/api/graph", async () => store.getSnapshot());
+
+app.get("/api/runtime/diagnostics", async (request, reply) => {
+  const daemonUrl = process.env.NETCHAT_DAEMON_URL?.trim();
+  if (!daemonUrl) {
+    return reply.status(503).send({ message: "The local daemon URL is not configured." });
+  }
+
+  try {
+    const response = await fetch(new URL("/runtime/diagnostics", daemonUrl));
+    const payload = await response.text();
+    if (!response.ok) {
+      return reply.status(response.status).type("application/json").send(payload);
+    }
+
+    reply.type("application/json");
+    return payload;
+  } catch (error) {
+    diagnostics.log("warn", `Reading daemon diagnostics failed: ${formatError(error)}`);
+    return reply.status(502).send({ message: "The local daemon is unavailable." });
+  }
+});
+
+app.post("/api/nets", async (request, reply) => {
+  const input = createNetInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  try {
+    const workspace = store.createNet(input.data as CreateNetInput);
+    diagnostics.log("info", `Created net ${workspace.activeNetId} for workspace ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("error", `Creating a new net failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/nets/:netId/select", async (request, reply) => {
+  const netId = (request.params as { netId: string }).netId;
+
+  try {
+    const workspace = store.selectNet(netId);
+    diagnostics.log("info", `Switched to net ${netId} for workspace ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Switching to net ${netId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
 
 app.get("/api/machines", async () => {
   return machines.listMachines();

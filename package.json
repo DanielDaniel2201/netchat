@@ -1,10 +1,18 @@
 {
-  "name": "netchat",
-  "private": true,
+  "name": "netchat-app",
+  "private": false,
   "version": "0.1.0",
-  "bin": {
-    "netchat": "./bin/netchat.mjs"
+  "description": "Local-first graph chat interface for Claude Code",
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "bin": "./bin/netchat.mjs",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -15,6 +23,14 @@
     "dev:daemon": "npm run dev --workspace @netchat/daemon",
     "app:local": "node ./bin/netchat.mjs",
     "check": "npm run check --workspace @netchat/shared && npm run check --workspace @netchat/server && npm run check --workspace @netchat/daemon && npm run check --workspace @netchat/web",
-    "build:web": "npm run build --workspace @netchat/web"
+    "build:web": "npm run build --workspace @netchat/web",
+    "build:package": "node ./scripts/build-package.mjs",
+    "prepack": "npm run build:package"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.4"
   }
 }

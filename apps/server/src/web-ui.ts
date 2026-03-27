@@ -60,9 +60,14 @@ function resolveWebDistPath() {
     return configuredPath;
   }
 
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const defaultPath = path.join(repoRoot, "apps", "web", "dist");
-  return existsSync(defaultPath) ? defaultPath : null;
+  const runtimeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const packagedPath = path.join(runtimeRoot, "dist", "web");
+  if (existsSync(packagedPath)) {
+    return packagedPath;
+  }
+
+  const sourcePath = path.join(runtimeRoot, "apps", "web", "dist");
+  return existsSync(sourcePath) ? sourcePath : null;
 }
 
 function getPathname(request: FastifyRequest) {

@@ -41,14 +41,24 @@ type MessageRow = {
 
 export class GraphStore {
   private readonly database: DatabaseSync;
+  private readonly databasePath: string;
 
-  constructor() {
-    const databasePath = resolveGraphDatabasePath();
+  constructor(databasePath = resolveGraphDatabasePath()) {
+    this.databasePath = databasePath;
     mkdirSync(path.dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA journal_mode = WAL;");
     this.ensureSchema();
     this.ensureRootBranch();
+  }
+
+  getDatabasePath() {
+    return this.databasePath;
+  }
+
+  dispose() {
+    const close = (this.database as unknown as { close?: () => void }).close;
+    close?.call(this.database);
   }
 
   getSnapshot(): GraphSnapshot {
