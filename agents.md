@@ -5,7 +5,7 @@
 netchat is a Claude Code chat interface built around graph-shaped, non-linear branching.  
 Users can fork from any part of a reply, and each branch is bound to its own Claude session, turning a linear chat into an explorable conversation canvas.
 
-The project is currently moving toward a `local-first localhost web app` model:
+The project is being developed as a `local-first localhost web app`:
 
 - the UI remains a web interface
 - Claude Code runs on the user's local machine
@@ -27,7 +27,7 @@ The project is currently moving toward a `local-first localhost web app` model:
 
 - `apps/web`
   - frontend UI
-  - renders the conversation graph, message bubbles, and machine diagnostics
+  - renders the conversation graph, message bubbles, and runtime status
 - `apps/server`
   - local controller
   - serves `/api/*`
@@ -121,10 +121,7 @@ This is useful when working on a single module, but the recommended day-to-day f
 npm run app:local
 ```
 
-## Recommended Direction
+## Other references
 
-- prioritize a `localhost web app`
-- prioritize a `local-first` product shape
-- keep the UI on a web stack
-- store data locally by default
-- consider a fuller desktop-style packaging and distribution model later
+Refer to /DESIGN.md for frontend UI design principles.
+Refer to /CHANGELOG.md for the development changelog of this project
