@@ -95,6 +95,7 @@ function printHelp() {
       "Examples:",
       "  npx netchat-app@latest",
       "  npx netchat-app@latest --no-browser",
+      "  npx netchat-app@latest --show-session-ids",
       "  npx netchat-app@latest daemon --server http://127.0.0.1:3001 --pair ABC123",
       "",
       "Run `npx netchat-app@latest local --help` or `npx netchat-app@latest daemon --help` for command-specific options.",

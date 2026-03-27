@@ -14,6 +14,7 @@ import {
   ForkBranchRuntimeRequest,
   RootTurnRuntimeRequest,
   ServerDiagnostics,
+  UiConfig,
   WorkspaceState,
   buildForkPrompt,
   buildMessageBranchPrompt,
@@ -66,6 +67,10 @@ app.get("/health", async () => ({
 app.get("/api/workspace", async (): Promise<WorkspaceState> => store.getWorkspaceState());
 
 app.get("/api/graph", async () => store.getSnapshot());
+
+app.get("/api/ui-config", async (): Promise<UiConfig> => ({
+  showSessionIds: readBooleanEnv("NETCHAT_SHOW_SESSION_IDS"),
+}));
 
 app.get("/api/runtime/diagnostics", async (request, reply) => {
   const daemonUrl = process.env.NETCHAT_DAEMON_URL?.trim();
@@ -327,4 +332,8 @@ function formatError(error: unknown) {
 
 function formatMachineLabel(machineId: string, machineName: string) {
   return `${machineName} (${machineId})`;
+}
+
+function readBooleanEnv(name: string) {
+  return process.env[name]?.trim().toLowerCase() === "true";
 }

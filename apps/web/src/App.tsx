@@ -25,6 +25,7 @@ import {
   GraphSnapshot,
   MachineRecord,
   MessageNode,
+  UiConfig,
   WorkspaceState,
   rootBranchId,
 } from "@netchat/shared";
@@ -69,6 +70,8 @@ type MessageNodeData = {
   message: MessageNode;
   isActiveMessage: boolean;
   hasSelectionDraft: boolean;
+  showSessionId: boolean;
+  sessionLabelSide: "left" | "right";
   onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
@@ -113,6 +116,10 @@ function NetchatApp() {
     queryKey: ["graph"],
     queryFn: () => request<GraphSnapshot>("/api/graph"),
   });
+  const uiConfigQuery = useQuery({
+    queryKey: ["ui-config"],
+    queryFn: () => request<UiConfig>("/api/ui-config"),
+  });
   const machinesQuery = useQuery({
     queryKey: ["machines"],
     queryFn: () => request<MachineRecord[]>("/api/machines"),
@@ -127,6 +134,7 @@ function NetchatApp() {
 
   const workspace = workspaceQuery.data;
   const snapshot = graphQuery.data;
+  const uiConfig = uiConfigQuery.data;
   const machines = machinesQuery.data ?? [];
   const onlineMachines = machines.filter((machine) => machine.status === "online");
   const daemonDiagnostics = daemonDiagnosticsQuery.data;
@@ -389,8 +397,9 @@ function NetchatApp() {
       measuredNodeHeights,
       onMeasureHeight: reportMessageNodeHeight,
       onSelectionDraft: applySelectionDraft,
+      showSessionIds: uiConfig?.showSessionIds ?? false,
     });
-  }, [measuredNodeHeights, reportMessageNodeHeight, selectedMessageId, selectionDraft, snapshot]);
+  }, [measuredNodeHeights, reportMessageNodeHeight, selectedMessageId, selectionDraft, snapshot, uiConfig?.showSessionIds]);
 
   useOnViewportChange({
     onChange: syncBubbleComposerAnchor,
@@ -988,6 +997,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const isUser = data.message.role === "user";
   const roleLabel = isUser ? "User" : "Claude";
   const bubbleRef = useRef<HTMLDivElement>(null);
+  const sessionIdLabel = data.message.sessionId ?? "pending";
 
   useEffect(() => {
     const bubbleElement = bubbleRef.current;
@@ -1013,32 +1023,22 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   }, [data]);
 
   return (
-    <div
-      ref={bubbleRef}
-      className={cn(
-        "group relative w-[420px] overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
-        isUser
-          ? "border-t-[var(--block-slate)]"
-          : data.hasSelectionDraft
-            ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
-          : data.isActiveMessage
-            ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.16)]"
-            : "border-t-[var(--block-green)] hover:-translate-y-0.5",
-      )}
-      onClickCapture={(event) => {
-        const selectedText = window.getSelection()?.toString().trim();
-        if (!isUser && !selectedText) {
-          data.onPickMessage(data.message.id);
-        }
-        event.stopPropagation();
-      }}
-      onMouseDownCapture={(event) => {
-        event.stopPropagation();
-      }}
-      onPointerDownCapture={(event) => {
-        event.stopPropagation();
-      }}
-    >
+    <div className="relative w-[420px]">
+      {data.showSessionId ? (
+        <div
+          className={cn(
+            "pointer-events-none absolute top-1/2 z-10 max-w-[164px] -translate-y-1/2",
+            data.sessionLabelSide === "left" ? "right-full mr-4 text-right" : "left-full ml-4 text-left",
+          )}
+          title={sessionIdLabel}
+        >
+          <div className="editorial-meta text-[rgba(26,26,26,0.38)]">session_id</div>
+          <div className="mt-2 break-all font-mono text-[10px] leading-5 text-[rgba(26,26,26,0.68)]">
+            {sessionIdLabel}
+          </div>
+        </div>
+      ) : null}
+
       <Handle
         type="target"
         position={Position.Top}
@@ -1052,30 +1052,57 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
       />
 
-      <div className="relative flex items-center justify-between gap-4 border-b border-[var(--node-border)] px-5 py-4">
-        <div
-          className={cn(
-            "editorial-meta",
-            isUser
-              ? "text-[rgba(58,64,66,0.72)]"
-              : data.hasSelectionDraft
-                ? "text-[var(--block-ochre)]"
-                : "text-[var(--block-green)]",
-          )}
-        >
-          {roleLabel}
+      <div
+        ref={bubbleRef}
+        className={cn(
+          "group relative w-[420px] overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
+          isUser
+            ? "border-t-[var(--block-slate)]"
+            : data.hasSelectionDraft
+              ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
+            : data.isActiveMessage
+              ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.16)]"
+              : "border-t-[var(--block-green)] hover:-translate-y-0.5",
+        )}
+        onClickCapture={(event) => {
+          const selectedText = window.getSelection()?.toString().trim();
+          if (!isUser && !selectedText) {
+            data.onPickMessage(data.message.id);
+          }
+          event.stopPropagation();
+        }}
+        onMouseDownCapture={(event) => {
+          event.stopPropagation();
+        }}
+        onPointerDownCapture={(event) => {
+          event.stopPropagation();
+        }}
+      >
+        <div className="relative flex items-center justify-between gap-4 border-b border-[var(--node-border)] px-5 py-4">
+          <div
+            className={cn(
+              "editorial-meta",
+              isUser
+                ? "text-[rgba(58,64,66,0.72)]"
+                : data.hasSelectionDraft
+                  ? "text-[var(--block-ochre)]"
+                  : "text-[var(--block-green)]",
+            )}
+          >
+            {roleLabel}
+          </div>
+          <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
+            {formatMessageTime(data.message.createdAt)}
+          </div>
         </div>
-        <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
-          {formatMessageTime(data.message.createdAt)}
-        </div>
-      </div>
 
-      <div className="relative px-5 py-5">
-        <SelectableMessage
-          content={data.message.content}
-          disabled={isUser}
-          onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
-        />
+        <div className="relative px-5 py-5">
+          <SelectableMessage
+            content={data.message.content}
+            disabled={isUser}
+            onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
+          />
+        </div>
       </div>
     </div>
   );
@@ -1158,6 +1185,7 @@ function buildFlowGraph({
   onMeasureHeight,
   onPickMessage,
   onSelectionDraft,
+  showSessionIds,
 }: {
   snapshot: GraphSnapshot;
   selectedMessageId: string | null;
@@ -1166,6 +1194,7 @@ function buildFlowGraph({
   onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
+  showSessionIds: boolean;
 }) {
   const activeEdgeIds = getActiveEdgeIds(snapshot, selectedMessageId);
   const nodes: Node[] = [];
@@ -1255,6 +1284,8 @@ function buildFlowGraph({
           message,
           isActiveMessage: message.id === selectedMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
+          showSessionId: showSessionIds,
+          sessionLabelSide: laneIndex < 0 ? "left" : "right",
           onMeasureHeight,
           onPickMessage,
           onSelectionDraft,

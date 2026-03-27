@@ -52,6 +52,10 @@ export type WorkspaceState = {
   nets: WorkspaceNetSummary[];
 };
 
+export type UiConfig = {
+  showSessionIds: boolean;
+};
+
 export type HostPlatform = "windows" | "macos" | "linux" | "unknown";
 
 export type RuntimeEnvironment = {

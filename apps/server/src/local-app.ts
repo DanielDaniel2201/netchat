@@ -81,6 +81,7 @@ async function main() {
       NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
       NETCHAT_WORKSPACE_DIR: config.workingDirectory,
       NETCHAT_LOCAL_MODE: "true",
+      NETCHAT_SHOW_SESSION_IDS: String(config.showSessionIds),
       NETCHAT_WEB_DIST_PATH: webDistPath,
       PORT: String(config.serverPort),
       ...(config.databasePath ? { NETCHAT_APP_DB_PATH: config.databasePath } : {}),
@@ -113,6 +114,9 @@ async function main() {
 
   log(`Local controller ready at ${config.serverUrl}.`);
   log(`Workspace-scoped net history will persist under ${config.appDataDirectory}.`);
+  if (config.showSessionIds) {
+    log("Developer mode is enabled: every message bubble will show its session_id.");
+  }
   if (config.openBrowser) {
     await openBrowser(config.serverUrl);
   }
@@ -203,6 +207,7 @@ type ParsedLocalAppArgs = {
   daemonPort: number | null;
   openBrowser: boolean | null;
   webBuildMode: WebBuildMode | null;
+  showSessionIds: boolean | null;
 };
 
 type LocalAppConfig = {
@@ -216,6 +221,7 @@ type LocalAppConfig = {
   daemonUrl: string;
   openBrowser: boolean;
   webBuildMode: WebBuildMode;
+  showSessionIds: boolean;
 };
 
 type WebBuildMarker = {
@@ -254,6 +260,9 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
       : readBooleanEnv("NETCHAT_SKIP_WEB_BUILD")
         ? "skip"
         : "auto");
+  const showSessionIds =
+    parsedArgs.showSessionIds ??
+    readBooleanEnv("NETCHAT_SHOW_SESSION_IDS");
 
   return {
     appDataDirectory,
@@ -266,6 +275,7 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
     daemonUrl: `http://127.0.0.1:${daemonPort}`,
     openBrowser,
     webBuildMode,
+    showSessionIds,
   };
 }
 
@@ -278,6 +288,7 @@ function parseLocalAppArgs(argv: string[]): ParsedLocalAppArgs {
     daemonPort: null,
     openBrowser: null,
     webBuildMode: null,
+    showSessionIds: null,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -334,6 +345,9 @@ function parseLocalAppArgs(argv: string[]): ParsedLocalAppArgs {
       case "--force-web-build":
         parsed.webBuildMode = "force";
         break;
+      case "--show-session-ids":
+        parsed.showSessionIds = true;
+        break;
       default:
         throw new Error(`Unknown option ${token}. Run with --help to see supported flags.`);
     }
@@ -376,6 +390,7 @@ function printLocalAppHelp() {
       "Examples:",
       "  npx netchat-app@latest",
       "  npx netchat-app@latest --no-browser",
+      "  npx netchat-app@latest --show-session-ids",
       "  npx netchat-app@latest --port 3002 --daemon-port 4319",
       "",
       "Options:",
@@ -388,6 +403,7 @@ function printLocalAppHelp() {
       "  --browser                     Force opening the browser even if env overrides disable it",
       "  --skip-web-build              Reuse the existing web build without rebuilding",
       "  --rebuild-web                 Force a fresh web build before startup",
+      "  --show-session-ids            Developer flag: render each message bubble's session_id",
     ].join("\n"),
   );
 }
