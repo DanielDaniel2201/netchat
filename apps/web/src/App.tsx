@@ -72,11 +72,23 @@ type MessageNodeData = {
   message: MessageNode;
   isActiveMessage: boolean;
   hasSelectionDraft: boolean;
+  selectionAnchors: MessageSelectionAnchor[];
   showSessionId: boolean;
   sessionLabelSide: "left" | "right";
   onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
+  onActivateMessagePath: (messageId: string) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
+};
+
+type MessageSelectionAnchor = {
+  id: string;
+  handleId: string;
+  targetMessageId: string;
+  label: string;
+  startOffset: number;
+  endOffset: number;
+  isActive: boolean;
 };
 
 const useComposerStore = create<{
@@ -103,6 +115,7 @@ function NetchatApp() {
   const lastAutoSelectedMessageIdRef = useRef<string | null>(null);
   const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
+  const [activePathMessageId, setActivePathMessageId] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
@@ -225,7 +238,9 @@ function NetchatApp() {
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
       setSelectionDraft(null);
-      setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
+      const latestAssistantMessageId = getLatestAssistantMessageId(nextSnapshot);
+      setSelectedMessageId(latestAssistantMessageId);
+      setActivePathMessageId(latestAssistantMessageId);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
     onError: (error) => {
@@ -254,7 +269,9 @@ function NetchatApp() {
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
       setSelectionDraft(null);
-      setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
+      const latestAssistantMessageId = getLatestAssistantMessageId(nextSnapshot);
+      setSelectedMessageId(latestAssistantMessageId);
+      setActivePathMessageId(latestAssistantMessageId);
       clearBrowserSelection();
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
@@ -282,7 +299,9 @@ function NetchatApp() {
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
       setSelectionDraft(null);
-      setSelectedMessageId(getLatestAssistantMessageId(nextSnapshot));
+      const latestAssistantMessageId = getLatestAssistantMessageId(nextSnapshot);
+      setSelectedMessageId(latestAssistantMessageId);
+      setActivePathMessageId(latestAssistantMessageId);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
     onError: (error) => {
@@ -303,6 +322,7 @@ function NetchatApp() {
       setComposerValue("");
       setSelectionDraft(null);
       setSelectedMessageId(null);
+      setActivePathMessageId(null);
       clearBrowserSelection();
       await queryClient.invalidateQueries({ queryKey: ["graph"] });
     },
@@ -323,6 +343,7 @@ function NetchatApp() {
       setComposerValue("");
       setSelectionDraft(null);
       setSelectedMessageId(null);
+      setActivePathMessageId(null);
       clearBrowserSelection();
       await queryClient.invalidateQueries({ queryKey: ["graph"] });
     },
@@ -364,6 +385,7 @@ function NetchatApp() {
         setComposerValue("");
         setSelectionDraft(null);
         setSelectedMessageId(null);
+        setActivePathMessageId(null);
         clearBrowserSelection();
         await queryClient.invalidateQueries({ queryKey: ["graph"] });
       }
@@ -379,6 +401,10 @@ function NetchatApp() {
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
     });
+  }
+
+  function activateMessagePath(messageId: string | null) {
+    setActivePathMessageId(messageId);
   }
 
   const syncBubbleComposerAnchor = useCallback(() => {
@@ -407,15 +433,25 @@ function NetchatApp() {
   }, [selectedMessage]);
 
   function pickMessage(messageId: string) {
+    activateMessagePath(messageId);
     setSelectedMessageId(messageId);
     setSelectionDraft(null);
+    clearBrowserSelection();
     focusComposer();
   }
 
   function applySelectionDraft(draft: SelectionDraft) {
+    activateMessagePath(draft.sourceMessageId);
     setSelectedMessageId(draft.sourceMessageId);
     setSelectionDraft(draft);
     focusComposer();
+  }
+
+  function activateSelectionAnchorTarget(messageId: string) {
+    activateMessagePath(messageId);
+    setSelectedMessageId(null);
+    setSelectionDraft(null);
+    clearBrowserSelection();
   }
 
   function beginNetRename(netId: string, title: string) {
@@ -476,15 +512,23 @@ function NetchatApp() {
 
     return buildFlowGraph({
       snapshot,
-      selectedMessageId,
+      activePathMessageId,
       onPickMessage: pickMessage,
+      onActivateMessagePath: activateSelectionAnchorTarget,
       selectionDraft,
       measuredNodeHeights,
       onMeasureHeight: reportMessageNodeHeight,
       onSelectionDraft: applySelectionDraft,
       showSessionIds: uiConfig?.showSessionIds ?? false,
     });
-  }, [measuredNodeHeights, reportMessageNodeHeight, selectedMessageId, selectionDraft, snapshot, uiConfig?.showSessionIds]);
+  }, [
+    activePathMessageId,
+    measuredNodeHeights,
+    reportMessageNodeHeight,
+    selectionDraft,
+    snapshot,
+    uiConfig?.showSessionIds,
+  ]);
 
   useOnViewportChange({
     onChange: syncBubbleComposerAnchor,
@@ -539,11 +583,13 @@ function NetchatApp() {
 
     if (
       !selectedMessageId &&
+      !activePathMessageId &&
       latestAssistantMessageId &&
       latestAssistantMessageId !== lastAutoSelectedMessageIdRef.current
     ) {
       lastAutoSelectedMessageIdRef.current = latestAssistantMessageId;
       setSelectedMessageId(latestAssistantMessageId);
+      setActivePathMessageId(latestAssistantMessageId);
       return;
     }
 
@@ -562,7 +608,18 @@ function NetchatApp() {
       setSelectedMessageId(null);
     }
     setSelectionDraft(null);
-  }, [selectedMessageId, setSelectedMessageId, snapshot]);
+  }, [activePathMessageId, selectedMessageId, setSelectedMessageId, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot) {
+      setActivePathMessageId(null);
+      return;
+    }
+
+    if (activePathMessageId && !snapshot.messages.some((message) => message.id === activePathMessageId)) {
+      setActivePathMessageId(null);
+    }
+  }, [activePathMessageId, snapshot]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -591,6 +648,7 @@ function NetchatApp() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        activateMessagePath(null);
         setSelectedMessageId(null);
         setSelectionDraft(null);
         clearBrowserSelection();
@@ -1004,6 +1062,7 @@ function NetchatApp() {
           nodesConnectable={false}
           elementsSelectable={false}
           onPaneClick={() => {
+            activateMessagePath(null);
             setSelectedMessageId(null);
             setSelectionDraft(null);
             clearBrowserSelection();
@@ -1237,7 +1296,9 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         className={cn(
           "group relative w-[420px] overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
           isUser
-            ? "border-t-[var(--block-slate)]"
+            ? data.isActiveMessage
+              ? "border-t-[var(--block-slate)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(58,64,66,0.12)]"
+              : "border-t-[var(--block-slate)]"
             : data.hasSelectionDraft
               ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
             : data.isActiveMessage
@@ -1245,6 +1306,10 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               : "border-t-[var(--block-green)] hover:-translate-y-0.5",
         )}
         onClickCapture={(event) => {
+          if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
           const selectedText = window.getSelection()?.toString().trim();
           if (!isUser && !selectedText) {
             data.onPickMessage(data.message.id);
@@ -1252,9 +1317,17 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
           event.stopPropagation();
         }}
         onMouseDownCapture={(event) => {
+          if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
           event.stopPropagation();
         }}
         onPointerDownCapture={(event) => {
+          if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
           event.stopPropagation();
         }}
       >
@@ -1279,7 +1352,9 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         <div className="relative px-5 py-5">
           <SelectableMessage
             content={data.message.content}
+            anchors={data.selectionAnchors}
             disabled={isUser}
+            onActivateAnchor={data.onActivateMessagePath}
             onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
           />
         </div>
@@ -1290,13 +1365,19 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
 
 function SelectableMessage({
   content,
+  anchors,
   disabled,
+  onActivateAnchor,
   onSelection,
 }: {
   content: string;
+  anchors: MessageSelectionAnchor[];
   disabled: boolean;
+  onActivateAnchor: (messageId: string) => void;
   onSelection: (draft: Omit<SelectionDraft, "sourceMessageId">) => void;
 }) {
+  const renderableAnchors = getRenderableSelectionAnchors(content, anchors);
+
   return (
     <div
       className={cn(
@@ -1315,6 +1396,10 @@ function SelectableMessage({
       onMouseUp={(event) => {
         event.stopPropagation();
         if (disabled) {
+          return;
+        }
+
+        if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
           return;
         }
 
@@ -1352,62 +1437,129 @@ function SelectableMessage({
         });
       }}
     >
-      {content}
+      {renderableAnchors.length > 0
+        ? renderableAnchors.map((anchor, index) => {
+            const previousEndOffset = renderableAnchors[index - 1]?.endOffset ?? 0;
+            const nextLeadingText = content.slice(previousEndOffset, anchor.startOffset);
+
+            return (
+              <span key={anchor.id}>
+                {nextLeadingText}
+                <button
+                  type="button"
+                  data-selection-anchor="true"
+                  className={cn(
+                    "relative inline-flex max-w-full items-center border px-1.5 py-0.5 text-left align-baseline text-[0.95em] leading-[1.7] transition-colors",
+                    anchor.isActive
+                      ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
+                      : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onActivateAnchor(anchor.targetMessageId);
+                  }}
+                  onMouseDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <Handle
+                    id={anchor.handleId}
+                    type="source"
+                    position={Position.Bottom}
+                    isConnectable={false}
+                    className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                  />
+                  <span className="whitespace-pre-wrap break-words">{anchor.label}</span>
+                </button>
+              </span>
+            );
+          })
+        : content}
+      {renderableAnchors.length > 0 ? content.slice(renderableAnchors.at(-1)?.endOffset ?? 0) : null}
     </div>
   );
 }
 
+function getRenderableSelectionAnchors(content: string, anchors: MessageSelectionAnchor[]) {
+  if (anchors.length === 0) {
+    return [];
+  }
+
+  const sortedAnchors = [...anchors].sort((left, right) => {
+    if (left.startOffset !== right.startOffset) {
+      return left.startOffset - right.startOffset;
+    }
+
+    if (left.endOffset !== right.endOffset) {
+      return left.endOffset - right.endOffset;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
+  const renderableAnchors: MessageSelectionAnchor[] = [];
+  let cursor = 0;
+
+  for (const anchor of sortedAnchors) {
+    const startOffset = clamp(anchor.startOffset, 0, content.length);
+    const endOffset = clamp(anchor.endOffset, 0, content.length);
+
+    if (startOffset >= endOffset || startOffset < cursor) {
+      continue;
+    }
+
+    renderableAnchors.push({
+      ...anchor,
+      label: content.slice(startOffset, endOffset) || anchor.label,
+      startOffset,
+      endOffset,
+    });
+    cursor = endOffset;
+  }
+
+  return renderableAnchors;
+}
+
+function makeSelectionAnchorHandleId(branchId: string) {
+  return `selection-anchor-${branchId}`;
+}
+
 function buildFlowGraph({
   snapshot,
-  selectedMessageId,
+  activePathMessageId,
   selectionDraft,
   measuredNodeHeights,
   onMeasureHeight,
   onPickMessage,
+  onActivateMessagePath,
   onSelectionDraft,
   showSessionIds,
 }: {
   snapshot: GraphSnapshot;
-  selectedMessageId: string | null;
+  activePathMessageId: string | null;
   selectionDraft: SelectionDraft | null;
   measuredNodeHeights: Record<string, number>;
   onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
+  onActivateMessagePath: (messageId: string) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
   showSessionIds: boolean;
 }) {
-  const activeEdgeIds = getActiveEdgeIds(snapshot, selectedMessageId);
+  const activeEdgeIds = getActiveEdgeIds(snapshot, activePathMessageId);
   const nodes: Node[] = [];
-  const edges: Edge[] = snapshot.edges.map((edge) => {
-    const isActive = activeEdgeIds.has(edge.id);
-    const strokeColor = isActive ? "#1A1A1A" : edge.kind === "fork" ? "#C2B7A1" : "#8A9288";
-
-    return {
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      type: "step",
-      zIndex: isActive ? 5 : 1,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: strokeColor,
-      },
-      style: {
-        stroke: strokeColor,
-        strokeDasharray: edge.kind === "fork" ? "10 8" : undefined,
-        strokeWidth: isActive ? 2.8 : edge.kind === "fork" ? 1.8 : 2.2,
-        opacity: isActive ? 1 : edge.kind === "fork" ? 0.78 : 0.92,
-      },
-    };
-  });
 
   if (snapshot.messages.length === 0) {
-    return { nodes, edges };
+    return { nodes, edges: [] };
   }
 
   const branchOrder = new Map(snapshot.branches.map((branch, index) => [branch.id, index]));
+  const messagesById = new Map(snapshot.messages.map((message) => [message.id, message]));
   const messagesByBranch = new Map<string, MessageNode[]>();
   const childBranchesBySourceMessage = new Map<string, typeof snapshot.branches>();
+  const selectionAnchorsByMessageId = new Map<string, MessageSelectionAnchor[]>();
+  const sourceHandleByEdgeId = new Map<string, string>();
 
   for (const message of snapshot.messages) {
     const branchMessages = messagesByBranch.get(message.branchId) ?? [];
@@ -1423,11 +1575,66 @@ function buildFlowGraph({
     const childBranches = childBranchesBySourceMessage.get(branch.sourceMessageId) ?? [];
     childBranches.push(branch);
     childBranchesBySourceMessage.set(branch.sourceMessageId, childBranches);
+
+    const firstBranchMessage = messagesByBranch.get(branch.id)?.[0];
+    const sourceMessage = messagesById.get(branch.sourceMessageId);
+    if (
+      !firstBranchMessage ||
+      !sourceMessage ||
+      !branch.selectedText ||
+      typeof branch.startOffset !== "number" ||
+      typeof branch.endOffset !== "number" ||
+      branch.startOffset < 0 ||
+      branch.endOffset > sourceMessage.content.length ||
+      branch.endOffset <= branch.startOffset
+    ) {
+      continue;
+    }
+
+    const forkEdgeId = `edge_fork_${branch.sourceMessageId}_${firstBranchMessage.id}`;
+    const anchors = selectionAnchorsByMessageId.get(branch.sourceMessageId) ?? [];
+    const label = branch.selectedText.trim() || "Selected passage";
+
+    anchors.push({
+      id: branch.id,
+      handleId: makeSelectionAnchorHandleId(branch.id),
+      targetMessageId: firstBranchMessage.id,
+      label,
+      startOffset: branch.startOffset,
+      endOffset: branch.endOffset,
+      isActive: activeEdgeIds.has(forkEdgeId),
+    });
+    selectionAnchorsByMessageId.set(branch.sourceMessageId, anchors);
+    sourceHandleByEdgeId.set(forkEdgeId, makeSelectionAnchorHandleId(branch.id));
   }
 
   for (const childBranches of childBranchesBySourceMessage.values()) {
     childBranches.sort((left, right) => (branchOrder.get(left.id) ?? 0) - (branchOrder.get(right.id) ?? 0));
   }
+
+  const edges: Edge[] = snapshot.edges.map((edge) => {
+    const isActive = activeEdgeIds.has(edge.id);
+    const strokeColor = isActive ? "#1A1A1A" : edge.kind === "fork" ? "#C2B7A1" : "#8A9288";
+
+    return {
+      id: edge.id,
+      source: edge.source,
+      sourceHandle: sourceHandleByEdgeId.get(edge.id),
+      target: edge.target,
+      type: "step",
+      zIndex: isActive ? 5 : 1,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: strokeColor,
+      },
+      style: {
+        stroke: strokeColor,
+        strokeDasharray: edge.kind === "fork" ? "10 8" : undefined,
+        strokeWidth: isActive ? 2.8 : edge.kind === "fork" ? 1.8 : 2.2,
+        opacity: isActive ? 1 : edge.kind === "fork" ? 0.78 : 0.92,
+      },
+    };
+  });
 
   const branchLaneById = new Map<string, number>([[rootBranchId, 0]]);
   const branchSideById = new Map<string, "center" | "left" | "right">([[rootBranchId, "center"]]);
@@ -1462,12 +1669,14 @@ function buildFlowGraph({
         targetPosition: Position.Top,
         data: {
           message,
-          isActiveMessage: message.id === selectedMessageId,
+          isActiveMessage: message.id === activePathMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
+          selectionAnchors: selectionAnchorsByMessageId.get(message.id) ?? [],
           showSessionId: showSessionIds,
           sessionLabelSide: laneIndex < 0 ? "left" : "right",
           onMeasureHeight,
           onPickMessage,
+          onActivateMessagePath,
           onSelectionDraft,
         } satisfies MessageNodeData,
       });
