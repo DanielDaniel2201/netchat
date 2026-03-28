@@ -96,6 +96,78 @@ export class GraphStore {
     return row ? mapMessageRow(row) : undefined;
   }
 
+  getVisiblePathToMessage(messageId: string): MessageNode[] {
+    const sourceMessage = this.getMessage(messageId);
+    if (!sourceMessage) {
+      throw new Error(`Unknown source message: ${messageId}`);
+    }
+
+    const branches = this.listBranches();
+    const messages = this.listMessages();
+    const branchesById = new Map(branches.map((branch) => [branch.id, branch]));
+    const messagesByBranch = new Map<string, MessageNode[]>();
+
+    for (const message of messages) {
+      const branchMessages = messagesByBranch.get(message.branchId) ?? [];
+      branchMessages.push(message);
+      messagesByBranch.set(message.branchId, branchMessages);
+    }
+
+    const lineage: Branch[] = [];
+    let currentBranchId: string | null = sourceMessage.branchId;
+
+    while (currentBranchId) {
+      const branch = branchesById.get(currentBranchId);
+      if (!branch) {
+        throw new Error(`Branch lineage is missing branch ${currentBranchId}.`);
+      }
+
+      lineage.push(branch);
+      currentBranchId = branch.parentBranchId;
+    }
+
+    lineage.reverse();
+
+    const stopMessageIds = new Map<string, string>();
+    stopMessageIds.set(sourceMessage.branchId, sourceMessage.id);
+
+    for (let index = 1; index < lineage.length; index += 1) {
+      const parentBranch = lineage[index - 1];
+      const childBranch = lineage[index];
+      if (!childBranch.sourceMessageId) {
+        throw new Error(`Branch ${childBranch.id} is missing a source message id.`);
+      }
+
+      stopMessageIds.set(parentBranch.id, childBranch.sourceMessageId);
+    }
+
+    const visibleMessages: MessageNode[] = [];
+
+    for (const branch of lineage) {
+      const branchMessages = messagesByBranch.get(branch.id) ?? [];
+      const stopMessageId = stopMessageIds.get(branch.id);
+
+      if (!stopMessageId) {
+        throw new Error(`Could not determine where branch ${branch.id} should stop.`);
+      }
+
+      let reachedStopMessage = false;
+      for (const message of branchMessages) {
+        visibleMessages.push(message);
+        if (message.id === stopMessageId) {
+          reachedStopMessage = true;
+          break;
+        }
+      }
+
+      if (!reachedStopMessage) {
+        throw new Error(`Could not find stop message ${stopMessageId} in branch ${branch.id}.`);
+      }
+    }
+
+    return visibleMessages;
+  }
+
   applyRootTurn(prompt: string, runtime: RuntimeResponse): GraphSnapshot {
     this.runInTransaction(() => {
       const branch = this.ensureRootBranch();

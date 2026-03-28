@@ -2,22 +2,18 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
   CompleteMachineJobInput,
-  ContinueBranchRuntimeRequest,
+  CreateBranchRuntimeRequest,
   CreateMachineClaimJobInput,
   CreateMachineHeartbeatInput,
   CreateMachineRegisterInput,
   CreateNetInput,
   CreatePairingSessionInput,
   CreateBranchInput,
-  CreateBranchTurnInput,
-  CreateRootTurnInput,
-  ForkBranchRuntimeRequest,
-  RootTurnRuntimeRequest,
   ServerDiagnostics,
   UiConfig,
   WorkspaceState,
-  buildForkPrompt,
-  buildMessageBranchPrompt,
+  buildPrefixReplayPrompt,
+  buildSelectionPrompt,
   completeMachineJobInputSchema,
   createMachineClaimJobInputSchema,
   createMachineHeartbeatInputSchema,
@@ -212,16 +208,22 @@ app.post("/api/root-turn", async (request, reply) => {
 
   const snapshot = store.getSnapshot();
   const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
+  const runtimePrompt = input.data.selectedText
+    ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
+    : input.data.prompt;
+
   try {
     const machine = machines.resolveMachine(input.data.machineId ?? rootBranch?.machineId ?? null);
     diagnostics.log(
       "info",
-      `Received root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`,
+      input.data.selectedText
+        ? `Received root turn from a highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`
+        : `Received root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`,
     );
     const runtime = await machines.enqueueJob(machine.id, {
       kind: "root-turn",
       payload: {
-        prompt: input.data.prompt,
+        prompt: runtimePrompt,
         sessionId: rootBranch?.sessionId ?? null,
       },
     });
@@ -245,41 +247,39 @@ app.post("/api/branches", async (request, reply) => {
   }
 
   const sourceMessage = store.getMessage(input.data.sourceMessageId);
-  if (!sourceMessage?.sessionId || !sourceMessage.machineId) {
-    return reply.status(400).send({ error: "The source message does not have a session id yet." });
+  if (!sourceMessage?.machineId) {
+    return reply.status(400).send({ error: "The source message does not have a machine id yet." });
   }
 
   try {
-    const branchPrompt =
-      input.data.mode === "message"
-        ? buildMessageBranchPrompt(sourceMessage, input.data.prompt)
-        : buildForkPrompt(input.data.selectedText!, input.data.prompt);
+    const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
+    const branchPrompt = buildPrefixReplayPrompt({
+      history: visibleHistory,
+      userPrompt: input.data.prompt,
+      selectedText: input.data.mode === "selection" ? input.data.selectedText! : null,
+    });
+
     diagnostics.log(
       "info",
       input.data.mode === "message"
-        ? `Received branch-from-message request from ${sourceMessage.id} on machine ${sourceMessage.machineId} (${input.data.prompt.length} prompt chars).`
-        : `Received fork request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars).`,
+        ? `Received branch-from-message request from ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
+        : `Received branch-from-selection request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
     );
     const runtime = await machines.enqueueJob(sourceMessage.machineId, {
-      kind: "fork-branch",
+      kind: "branch-create",
       payload: {
-        sourceSessionId: sourceMessage.sessionId,
-        selectedText:
-          input.data.mode === "message"
-            ? sourceMessage.content.slice(0, 160).trim() || sourceMessage.role
-            : input.data.selectedText!,
         prompt: branchPrompt,
-      },
+      } satisfies CreateBranchRuntimeRequest,
     });
 
     const nextSnapshot = store.applyBranchCreation(input.data as CreateBranchInput, runtime);
     diagnostics.log(
       "info",
-      `Branch fork completed as session ${runtime.sessionId} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
+      `Branch creation completed as session ${runtime.sessionId} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
     );
     return nextSnapshot;
   } catch (error) {
-    diagnostics.log("error", `Fork request failed: ${formatError(error)}`);
+    diagnostics.log("error", `Branch request failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });
@@ -296,16 +296,22 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
     return reply.status(400).send({ error: "This branch does not have a session id yet." });
   }
 
+  const runtimePrompt = input.data.selectedText
+    ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
+    : input.data.prompt;
+
   try {
     diagnostics.log(
       "info",
-      `Received branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`,
+      input.data.selectedText
+        ? `Received branch turn for ${branchId} from a highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`
+        : `Received branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`,
     );
     const runtime = await machines.enqueueJob(branch.machineId, {
       kind: "branch-turn",
       payload: {
         sessionId: branch.sessionId,
-        prompt: input.data.prompt,
+        prompt: runtimePrompt,
       },
     });
 

@@ -4,10 +4,10 @@ import path from "node:path";
 
 import {
   CompleteMachineJobInput,
+  CreateBranchRuntimeRequest,
   ContinueBranchRuntimeRequest,
   CreateMachineHeartbeatInput,
   CreateMachineRegisterInput,
-  ForkBranchRuntimeRequest,
   MachineJob,
   MachineRegistration,
   RootTurnRuntimeRequest,
@@ -41,7 +41,7 @@ export class MachineClient {
       getMode(): "mock" | "claude";
       getWorkingDirectory(): string;
       runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse>;
-      forkBranch(input: ForkBranchRuntimeRequest): Promise<RuntimeResponse>;
+      createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse>;
       continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse>;
     },
     private readonly detectEnvironment: () => Promise<RuntimeEnvironment>,
@@ -230,8 +230,8 @@ export class MachineClient {
         case "root-turn":
           response = await this.runtime.runRootTurn(job.payload);
           break;
-        case "fork-branch":
-          response = await this.runtime.forkBranch(job.payload);
+        case "branch-create":
+          response = await this.runtime.createBranch(job.payload);
           break;
         case "branch-turn":
           response = await this.runtime.continueBranch(job.payload);

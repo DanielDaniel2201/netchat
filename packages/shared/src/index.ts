@@ -186,8 +186,8 @@ export type MachineJob =
     }
   | {
       id: string;
-      kind: "fork-branch";
-      payload: ForkBranchRuntimeRequest;
+      kind: "branch-create";
+      payload: CreateBranchRuntimeRequest;
       createdAt: string;
     }
   | {
@@ -202,6 +202,7 @@ export const rootBranchId = "branch_root";
 export const createRootTurnInputSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
   machineId: z.string().trim().min(1).optional(),
+  selectedText: z.string().trim().max(1000).optional(),
 });
 
 export type CreateRootTurnInput = z.infer<typeof createRootTurnInputSchema>;
@@ -267,6 +268,7 @@ export type CreateBranchInput = z.infer<typeof createBranchInputSchema>;
 
 export const createBranchTurnInputSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
+  selectedText: z.string().trim().max(1000).optional(),
 });
 
 export type CreateBranchTurnInput = z.infer<typeof createBranchTurnInputSchema>;
@@ -282,9 +284,7 @@ export type RootTurnRuntimeRequest = {
   sessionId: string | null;
 };
 
-export type ForkBranchRuntimeRequest = {
-  sourceSessionId: string;
-  selectedText: string;
+export type CreateBranchRuntimeRequest = {
   prompt: string;
 };
 
@@ -307,36 +307,80 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-export function buildForkPrompt(selectedText: string, userPrompt: string): string {
-  const suffix =
+export function buildSelectionPrompt(selectedText: string, userPrompt: string): string {
+  const normalizedSelectedText = truncatePromptContext(selectedText.trim() || "(empty selection)", 1600);
+  const normalizedUserPrompt =
     userPrompt.trim().length > 0
-      ? `\n\nUser follow-up:\n${userPrompt.trim()}`
-      : "\n\nUser follow-up:\nContinue by explaining this selection more deeply.";
+      ? userPrompt.trim()
+      : "Continue by explaining the highlighted passage more deeply.";
 
   return [
-    "The user selected part of your previous answer and wants to fork the conversation from that exact context.",
-    `Selected text: "${selectedText}"`,
-    "Stay grounded in the original reply's context and keep the next answer focused on the selected text unless the user broadens the scope.",
-    suffix,
+    "The user is asking a follow-up about a highlighted passage from your previous answer.",
+    "Highlighted passage:",
+    `"""${normalizedSelectedText}"""`,
+    "Stay grounded in the original reply's context and keep the next answer focused on the highlighted passage unless the user broadens the scope.",
+    "",
+    "User follow-up:",
+    normalizedUserPrompt,
   ].join("\n");
 }
 
-export function buildMessageBranchPrompt(
-  sourceMessage: Pick<MessageNode, "role" | "content">,
-  userPrompt: string,
-): string {
-  const anchorContent = truncatePromptContext(sourceMessage.content.trim() || "(empty message)", 1600);
+export function buildPrefixReplayPrompt(input: {
+  history: ReadonlyArray<Pick<MessageNode, "role" | "content">>;
+  userPrompt: string;
+  selectedText?: string | null;
+}): string {
+  const normalizedHistory = input.history.map((message) => ({
+    role: message.role,
+    content: message.content.trim() || "(empty message)",
+  }));
+  const normalizedUserPrompt =
+    input.userPrompt.trim().length > 0
+      ? input.userPrompt.trim()
+      : input.selectedText?.trim()
+        ? "Continue by explaining the highlighted passage more deeply."
+        : "Continue the conversation from this point.";
 
-  return [
-    "The user wants to branch the conversation from an earlier message in this session.",
-    `Anchor message role: ${sourceMessage.role}`,
-    "Anchor message content:",
-    `"""${anchorContent}"""`,
-    "Treat later messages in the original session as a different path, and continue from this anchor point instead.",
+  const lines = [
+    "You are starting a fresh branch of an existing conversation.",
+    "The transcript below is the complete visible conversation history for this branch.",
+    "Anything not included below is intentionally outside this branch and must not be assumed.",
     "",
-    "User follow-up:",
-    userPrompt.trim(),
-  ].join("\n");
+    "Transcript:",
+  ];
+
+  if (normalizedHistory.length === 0) {
+    lines.push("(empty transcript)");
+  } else {
+    for (const [index, message] of normalizedHistory.entries()) {
+      lines.push(`[${index + 1}] ${message.role === "user" ? "User" : "Assistant"}:`);
+      lines.push(`"""${message.content}"""`);
+      lines.push("");
+    }
+  }
+
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  lines.push("");
+  lines.push("Branch point:");
+  lines.push(`The new branch begins immediately after transcript item [${normalizedHistory.length}].`);
+
+  if (input.selectedText?.trim()) {
+    lines.push("");
+    lines.push("Highlighted context inside the last assistant message:");
+    lines.push(`"""${truncatePromptContext(input.selectedText.trim(), 1600)}"""`);
+    lines.push(
+      "Keep the next answer grounded in that highlighted passage unless the user broadens the scope.",
+    );
+  }
+
+  lines.push("");
+  lines.push("New user message:");
+  lines.push(normalizedUserPrompt);
+
+  return lines.join("\n");
 }
 
 export function buildGraphEdges(snapshot: Pick<GraphSnapshot, "branches" | "messages">): GraphEdge[] {

@@ -180,10 +180,10 @@ function NetchatApp() {
   const sendMode: BubbleComposerMode =
     !selectedMessage
       ? "root"
-      : selectionForSelectedMessage
-        ? "branch-from-selection"
       : !selectedMessageIsTail
-        ? "branch-from-message"
+        ? selectionForSelectedMessage
+          ? "branch-from-selection"
+          : "branch-from-message"
         : selectedBranch?.id === rootBranchId
           ? "continue-root"
           : "continue-branch";
@@ -235,7 +235,7 @@ function NetchatApp() {
         "info",
         input.mode === "message"
           ? `Branching from bubble ${input.sourceMessageId} with ${input.prompt.length} prompt chars.`
-          : `Forking from message ${input.sourceMessageId} with ${(input.selectedText ?? "").length} selected chars and ${input.prompt.length} prompt chars.`,
+          : `Branching from message ${input.sourceMessageId} with ${(input.selectedText ?? "").length} selected chars and ${input.prompt.length} prompt chars.`,
       );
       return request<GraphSnapshot>("/api/branches", {
         method: "POST",
@@ -245,7 +245,7 @@ function NetchatApp() {
     onSuccess: async (nextSnapshot) => {
       logWeb(
         "info",
-        `Branch fork completed. Graph now has ${nextSnapshot.branches.length} branches.`,
+        `Branch creation completed. Graph now has ${nextSnapshot.branches.length} branches.`,
       );
       queryClient.setQueryData(["graph"], nextSnapshot);
       setComposerValue("");
@@ -255,7 +255,7 @@ function NetchatApp() {
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
     onError: (error) => {
-      logWeb("error", `Branch fork failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+      logWeb("error", `Branch creation failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
 
@@ -551,14 +551,21 @@ function NetchatApp() {
     }
 
     if (sendMode === "root" || sendMode === "continue-root") {
-      rootTurnMutation.mutate({ prompt, machineId: rootMachine?.id });
+      rootTurnMutation.mutate({
+        prompt,
+        machineId: rootMachine?.id,
+        selectedText: selectionForSelectedMessage?.selectedText,
+      });
       return;
     }
 
     if (sendMode === "continue-branch" && selectedBranch) {
       branchTurnMutation.mutate({
         branchId: selectedBranch.id,
-        input: { prompt },
+        input: {
+          prompt,
+          selectedText: selectionForSelectedMessage?.selectedText,
+        },
       });
       return;
     }
@@ -602,8 +609,10 @@ function NetchatApp() {
   const composerHint = selectedMessage
     ? runtimeMachine && runtimeMachine.status !== "online"
       ? "Reconnect the local runtime to send from this bubble."
-      : sendMode === "branch-from-selection"
-        ? "You are branching from a highlighted passage in this reply."
+      : selectionForSelectedMessage
+        ? selectedMessageIsTail
+          ? "You are continuing from a highlighted passage in this reply."
+          : "You are branching from a highlighted passage in this reply."
       : sendMode === "branch-from-message"
         ? "Next message creates a new branch."
         : "Next message continues this branch."
@@ -611,14 +620,14 @@ function NetchatApp() {
       ? "Your next message starts the main branch."
       : "Bring one local runtime online to start chatting.";
   const composerPlaceholder = selectedMessage
-    ? sendMode === "branch-from-selection"
+    ? selectionForSelectedMessage
       ? "Ask about the selected text in this context..."
       : sendMode === "branch-from-message"
         ? "Start a branch from this reply..."
         : "Continue from this reply..."
     : "Start the first turn...";
   const composerMetaLabel =
-    sendMode === "branch-from-selection"
+    selectionForSelectedMessage
       ? "Selected passage"
       : sendMode === "branch-from-message"
         ? "New branch"

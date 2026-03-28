@@ -32,8 +32,8 @@ type EnqueuedJob =
       payload: Extract<MachineJob, { kind: "root-turn" }>["payload"];
     }
   | {
-      kind: "fork-branch";
-      payload: Extract<MachineJob, { kind: "fork-branch" }>["payload"];
+      kind: "branch-create";
+      payload: Extract<MachineJob, { kind: "branch-create" }>["payload"];
     }
   | {
       kind: "branch-turn";
@@ -202,10 +202,10 @@ export class MachineStore {
             kind: "root-turn",
             payload: job.payload,
           }
-        : job.kind === "fork-branch"
+        : job.kind === "branch-create"
           ? {
               ...base,
-              kind: "fork-branch",
+              kind: "branch-create",
               payload: job.payload,
             }
           : {

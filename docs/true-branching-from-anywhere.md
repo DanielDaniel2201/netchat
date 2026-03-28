@@ -1,16 +1,29 @@
-# True Branching From Anywhere
+# Branching From Earlier Messages
+
+## Summary
+
+`netchat` should model only two compose actions:
+
+1. continue the current conversation
+2. branch from an earlier point
+
+There should not be a first-class "tail branch" concept.
+
+If the user replies to the latest assistant message on the active lane, that is a normal continuation of the same conversation. If the user replies to any earlier assistant message, or to a selection inside any earlier assistant message, that is a new branch.
+
+The current implementation for non-tail replies uses Claude Code `--resume <sessionId> --fork-session` plus an anchor prompt. That creates a visually correct branch in the canvas, but not a clean runtime branch in Claude's underlying session transcript. Later sibling-path turns can still remain in the forked session history.
+
+This document updates the earlier proposal after reviewing Claude Code checkpointing and `/rewind`.
 
 ## Problem Summary
 
-`netchat` currently renders message-level branching in the UI, but mid-message branching is not reflected as a clean message-level fork in Claude Code's underlying session storage.
-
-Today, branching from an earlier assistant bubble works like this:
+Current non-tail branching behaves like this:
 
 1. read the clicked message's `sessionId`
 2. call Claude Code with `--resume <sessionId> --fork-session`
 3. append an anchor prompt telling Claude to ignore later turns and continue from the earlier message
 
-This means the new branch session can physically inherit turns that happened after the visible branch point. In practice, Claude often behaves as if it understands the requested branch point, but that behavior depends on prompt-following, not on a clean underlying session topology.
+This means the new session can physically inherit turns that are outside the visible branch point.
 
 ## Example Failure Mode
 
@@ -22,10 +35,10 @@ user1 -> claude1 -> user2 -> claude2
                    -> user3 -> claude3
 ```
 
-Desired branch semantics:
+Desired semantics for the lower path:
 
 ```text
-claude3 sees only:
+claude3 should see only:
 user1 -> claude1 -> user3
 ```
 
@@ -33,417 +46,352 @@ Observed current behavior:
 
 ```text
 claude3 may actually be generated from:
-user1 -> claude1 -> user2 -> claude2 -> branch-anchor-prompt -> user3
+user1 -> claude1 -> user2 -> claude2 -> anchor prompt -> user3
 ```
 
-Claude may still answer as if `user2` and `claude2` are outside the branch, but they remain present in the raw session transcript.
+Claude may often follow the prompt and behave as if `user2` and `claude2` are outside the branch, but that correctness depends on prompt following rather than on clean session topology.
 
-## Design Goal
+## Updated Product Semantics
 
-Support a branch that is as close as possible to:
+### 1. Continue current conversation
 
-- "start a new Claude Code branch from the exact message the user clicked"
-- while still sending the request through Claude Code
-- without mutating Claude's local transcript files
-- and without depending on undocumented Claude Code import or checkpoint APIs
+If the user replies to the latest assistant message on the active lane, the reply continues the current branch and should stay in the current Claude session.
 
-## Non-Goals
+This is true even if the user selected a passage inside that latest assistant message. A selection on the current tail is a context-shaping affordance, not a new branch by itself.
 
-- Do not attempt to patch or rewrite Claude's local `.jsonl` transcript files.
-- Do not rely on undocumented resume-from-message or import-session capabilities.
-- Do not claim byte-for-byte equivalence with an internal Claude checkpoint that is not publicly exposed.
+### 2. Branch from an earlier point
 
-## Proposed Strategy
+If the user replies to any non-latest assistant message, the reply creates a new child branch.
 
-## Hybrid branch strategy
+If the user replies to a text selection inside any non-latest assistant message, that also creates a new child branch.
 
-Use two branch creation strategies:
+So the model is:
 
-### 1. Native fork
+- tail reply -> continue
+- earlier reply -> branch
 
-Use the current `--resume ... --fork-session` approach only when branching from the tail assistant message of a branch.
+not:
 
-Why:
+- tail branch
+- middle branch
 
-- tail branching already matches Claude Code's natural session semantics
-- it is cheap
-- it preserves existing behavior where it is already correct enough
+### 3. Selection is not its own branch strategy
 
-### 2. Prefix replay
+Selection should not define a separate runtime strategy. It only narrows the context within the source assistant message.
 
-Use a new `prefix_replay` strategy when branching from a non-tail assistant message.
+The branch decision should come from whether the source assistant message is the current tail on the visible path:
 
-Why:
+- selection on tail -> continue with selection-scoped prompt
+- selection on earlier message -> branch from earlier point with selection-scoped prompt
 
-- mid-message branching is where the current semantic mismatch appears
-- prefix replay creates a clean new session without carrying later sibling-path turns into the new branch context
+## Key Insight From Claude Code Checkpointing
 
-## Prefix Replay: Core Idea
+Claude Code interactive mode provides `/rewind`, which is the closest native semantic we have found to "go back to this earlier point in the same conversation".
 
-Instead of asking Claude Code to fork an existing session tail, create a brand-new Claude Code session whose initial prompt contains only:
+Public checkpointing docs say:
 
-1. the visible conversation prefix up to the clicked assistant message
-2. a clear statement that this prefix is the complete branch history
-3. the user's new branch prompt
+- every user prompt creates a checkpoint
+- `/rewind` shows a list of prompts from the session
+- the user can choose:
+  - restore code and conversation
+  - restore conversation
+  - restore code
+  - summarize from here
+- after restoring conversation, the original prompt from the selected point is restored into the input box so it can be re-sent or edited
 
-That first request creates a fresh branch session. After that, the branch continues normally with `--resume <branchSessionId>`.
+This matters because it suggests a better conceptual model for non-tail branching than "fork the session tail and add an anchor prompt".
 
-## Why This Is The Most Practical Direction
+## Prompt-Level Mapping
 
-This approach:
+`/rewind` is prompt-based, not assistant-message-based.
 
-- still uses Claude Code for execution
-- avoids transcript mutation
-- avoids undocumented import behavior
-- removes the known sibling-path contamination at branch creation time
-- aligns the UI topology more closely with the runtime context topology
+That means the natural mapping from a clicked assistant message `A` is:
 
-It is not a native internal checkpoint fork, but it is a clean, product-grade approximation of "branch from anywhere".
+- find the first later user prompt on the same visible path
+- rewind to that prompt
+- restore conversation
+- replace or edit the restored prompt with the new branch prompt
 
-## Required Data Model Changes
-
-Current message records are not strong enough to identify the exact Claude transcript event that a UI bubble came from.
-
-Add transcript-level identifiers to persisted messages.
-
-## Message fields to add
-
-- `claudeMessageUuid: string | null`
-- `claudeParentUuid: string | null`
-- `claudeSessionId: string | null`
-- `claudePromptId: string | null`
-- `transcriptTimestamp: string | null`
-
-## Branch fields to add
-
-- `strategy: "native_fork" | "prefix_replay"`
-- `sourceClaudeMessageUuid: string | null`
-- `replayHash: string | null`
-- `replaySourceSessionId: string | null`
-
-## Why these fields matter
-
-They let `netchat` answer:
-
-- which transcript event produced this assistant bubble?
-- where exactly should a replay prefix end?
-- which branch strategy created this branch?
-- can identical replay prefixes be recognized and reused?
-
-Without this metadata, branch-point identification must rely on content matching or timestamps, which is fragile.
-
-## Transcript Indexing
-
-Add a transcript indexing layer in the daemon.
-
-Suggested new modules:
-
-- `apps/daemon/src/transcript-index.ts`
-- `apps/daemon/src/prefix-replay.ts`
-
-## Responsibilities of transcript indexing
-
-- locate the transcript file for a given `sessionId`
-- parse transcript events into a normalized structure
-- identify user, assistant, tool-use, and tool-result segments
-- map Claude transcript events back to persisted `netchat` messages
-- extract the prefix ending at a selected assistant event
-
-## Prefix Extraction Rules
-
-Given a clicked assistant message `M`:
-
-1. resolve `M.claudeMessageUuid`
-2. load the transcript for `M.claudeSessionId`
-3. find the exact assistant event for `M`
-4. include only the visible branch history from the transcript start through `M`
-5. exclude every later event after `M`
-
-For the example:
+Example:
 
 ```text
 user1 -> claude1 -> user2 -> claude2
 ```
 
-If the user branches from `claude1`, the replay prefix must end after `claude1`.
+If the user wants to branch from `claude1` with `user3`, the natural checkpoint target is `user2`.
 
-The new branch must not receive:
+Why:
 
-- `user2`
-- `claude2`
+- rewinding to `user2` and restoring conversation puts the conversation back to the state immediately after `claude1`
+- `user2` then returns to the input box
+- `netchat` could replace that restored text with `user3`
 
-## Replay Prompt Format
+This is much closer to a true conversation rewind than replaying a visible prefix into a brand-new session.
 
-The replay prompt should be deterministic and stable so the same branch point produces the same prefix text every time.
+## Important Constraint
 
-Suggested shape:
+Today, `/rewind` is only documented as an interactive slash command.
 
-```text
-You are continuing a branched conversation.
+The public docs currently show:
 
-The transcript below is the complete visible conversation history for this branch.
-Anything not included below is intentionally outside this branch and must not be assumed.
+- `/rewind` in interactive mode
+- `--resume` / `--fork-session` in CLI mode
 
-Transcript:
-[1] User:
-...
-
-[2] Assistant:
-...
-
-Branch point:
-The branch begins immediately after transcript item [2].
-
-New user message:
-...
-```
-
-## Prompt construction rules
-
-- deterministic formatting
-- fixed heading text
-- fixed numbering
-- no timestamps
-- no machine IDs
-- no branch IDs
-- no workspace-specific metadata unless strictly necessary
-
-This keeps replay prompts stable and makes prompt-prefix reuse more likely if Claude Code benefits from upstream prompt caching.
-
-## Tool History Handling
-
-This is the hardest fidelity problem.
-
-Claude transcripts can contain:
-
-- user text
-- assistant thinking
-- tool use
-- tool result
-- final assistant text
-
-For the first implementation, the replay should preserve only the visible conversational state:
-
-- user messages
-- final assistant text
-
-Do not replay:
-
-- hidden thinking
-- low-level tool event graph
-
-Reason:
-
-- the visible branch semantics are the main product requirement
-- hidden/tool replay fidelity is significantly more complex
-- the first milestone should solve visible context correctness first
-
-Future improvement:
-
-- add structured summaries of tool use/result blocks when they materially affect branch semantics
-
-## Branch Creation Flow
-
-## Current non-tail flow
+but do not show a documented equivalent like:
 
 ```text
-UI click -> /api/branches -> fork-branch job -> Claude resume+fork -> store branch
+claude --resume <session> --rewind <checkpoint>
 ```
 
-## Proposed non-tail flow
+The public SDK docs also show that slash commands can be sent through the SDK, but do not document a structured, headless way to:
 
-```text
-UI click
--> /api/branches
--> detect non-tail source message
--> transcript index resolves exact source event
--> prefix replay prompt is built
--> Claude Code starts a brand-new session without --resume
--> new sessionId returned
--> branch is stored with strategy=prefix_replay
-```
+1. enumerate rewind checkpoints
+2. choose one programmatically
+3. choose `Restore conversation` or another action
+4. continue with a new prompt without going through the interactive menu
 
-## Proposed tail flow
+So `/rewind` is an important semantic clue, but not yet a stable headless API surface we can build the product around.
 
-Tail branching can continue using:
+## Design Goal
 
-```text
---resume <sessionId> --fork-session
-```
+Support a branch from an earlier assistant message or earlier selection such that:
 
-with `strategy=native_fork`.
+- the visible graph semantics stay honest
+- the runtime implementation is robust in a headless daemon architecture
+- the system can adopt a future checkpoint-backed implementation if Claude exposes one
+- the product model stays simple: continue vs branch-from-earlier-point
 
-## Suggested Code Changes
+## Non-Goals
 
-## Shared types
+- Do not introduce a first-class `tail branch` concept in the product model.
+- Do not automate the interactive `/rewind` menu as the default production path.
+- Do not mutate Claude transcript files.
+- Do not rely on undocumented checkpoint-selection or transcript-import APIs.
+- Do not index the entire low-level Claude tool event graph unless it becomes necessary.
 
-Update:
+## Recommended Runtime Architecture
 
-- `packages/shared/src/index.ts`
+### One branch abstraction, two possible backends
 
-Add:
-
-- branch strategy type
-- transcript metadata fields
-- new runtime request type for prefix replay branching
-
-## Server
-
-Update:
-
-- `apps/server/src/index.ts`
-- `apps/server/src/store.ts`
-- `apps/server/src/workspace-store.ts` if needed
-
-Responsibilities:
-
-- choose `native_fork` or `prefix_replay`
-- persist new message/branch metadata
-- expose strategy and transcript-debug data to the UI when developer mode is enabled
-
-## Daemon
-
-Update:
-
-- `apps/daemon/src/runtime.ts`
-- `apps/daemon/src/machine.ts`
-
-Add:
-
-- transcript indexing
-- prefix replay prompt builder
-- runtime method to create a new branch session without resume
-
-Suggested runtime method:
+For `netchat`, non-tail branching should be modeled as one capability:
 
 ```ts
-createBranchFromPrefix(input: PrefixReplayRuntimeRequest): Promise<RuntimeResponse>
+createBranchFromEarlierPoint(...)
 ```
 
-Where `PrefixReplayRuntimeRequest` contains:
+The runtime can support different backends under that abstraction:
 
-- `sourceSessionId`
-- `sourceMessageUuid`
-- `prefixMessages`
-- `userPrompt`
+- `replay-backed`
+- `checkpoint-backed` (future)
 
-## UI / developer tooling
+Continuation remains a separate capability:
 
-Update:
+```ts
+continueConversation(...)
+```
 
-- `apps/web/src/App.tsx`
+This is cleaner than splitting the product model into `native_fork` tail branching versus `prefix_replay` middle branching.
 
-Developer mode should eventually show:
+### Backend A: Replay-backed branch
 
-- branch strategy
-- branch session id
+This should be the default implementation now.
+
+For any non-tail assistant message or non-tail selection:
+
+1. collect the visible conversation history up to the source assistant message
+2. create a brand-new Claude session
+3. send a deterministic prompt containing:
+   - the visible history up to the branch point
+   - the branch-point statement
+   - the new user prompt
+   - selection context if the user branched from a text span
+
+#### Why this is still the best default today
+
+- it works in the current headless daemon architecture
+- it does not require TUI automation
+- it does not mutate an existing interactive session
+- it keeps runtime behavior deterministic and testable
+- it avoids workspace rewinds in a shared working directory
+
+#### What it does not provide
+
+- it is not a true Claude checkpoint branch
+- it can be token-heavy for long histories
+- first versions will only preserve visible conversation state well
+- tool/result fidelity can still diverge from the original session
+
+### Backend B: Checkpoint-backed branch
+
+This is the future-preferred backend if Claude exposes a stable programmable checkpoint surface.
+
+Desired flow:
+
+1. identify the source assistant message `A`
+2. map `A` to the first later user prompt `U_next` on the same visible path
+3. create an isolated scratch runtime context for the new branch
+4. resume or fork the source Claude session inside that isolated context
+5. rewind to `U_next`
+6. choose `Restore conversation` or, in carefully isolated cases, `Restore code and conversation`
+7. replace the restored prompt with the new branch prompt
+8. bind the resulting Claude session to the new netchat branch
+
+#### Why this is preferable if it becomes possible
+
+- it is closer to native Claude conversation semantics
+- it preserves more hidden session state than replay
+- it avoids reconstructing long visible prefixes by hand
+- it makes "branch from earlier point" a true runtime operation rather than a prompt reconstruction trick
+
+### Why it is not the default today
+
+#### 1. No documented headless rewind API
+
+The current docs do not expose a public non-interactive way to select a checkpoint and action.
+
+#### 2. Interactive automation would be brittle
+
+Automating `/rewind` through a PTY or TUI driver would be fragile across:
+
+- terminal differences
+- Windows behavior
+- Claude UI changes
+- focus / timing / scroll behavior
+
+#### 3. Workspace restore has real side effects
+
+Checkpointing docs explicitly say:
+
+- bash-command file changes are not tracked
+- external changes are not reliably tracked
+
+So using `Restore code and conversation` in a shared workspace could create surprising state rollbacks.
+
+If a checkpoint-backed backend is ever attempted before a better API exists, it should only run behind a feature flag and inside isolated per-branch worktrees or equivalent isolated directories.
+
+## Data Model Guidance
+
+The previous proposal leaned toward transcript-event-level metadata such as raw Claude message UUIDs for every low-level event.
+
+After reviewing checkpointing, the more useful future-facing metadata appears to be prompt-oriented, not raw event-oriented.
+
+### Persist what maps to prompt boundaries
+
+When available, prefer storing fields like:
+
+- `claudeSessionId`
+- `claudePromptId` or `claudePromptOrdinal`
+- `responseToPromptId`
+- `sourcePromptId` for a derived branch
+
+This supports the mapping that `/rewind` actually exposes: prompt checkpoints.
+
+### Do not over-invest in raw transcript event plumbing yet
+
+We should not assume that a future production implementation needs:
+
+- low-level tool event UUIDs
+- full event-graph parent pointers
+- replay hashes tied to internal transcript layout
+
+Those can be added later if real runtime evidence shows they are required.
+
+## UI Semantics
+
+UI copy and behavior should reflect the simpler model:
+
+- reply on current tail -> continue this conversation
+- reply on earlier assistant -> create a new branch
+- selected text only changes what context is emphasized; it does not create a different branching category
+
+Developer tooling can still expose runtime details such as:
+
+- branch backend: `replay` or `checkpoint`
+- source message id
+- source prompt id
 - source session id
-- source message UUID
+- branch session id
 
-This will make it much easier to verify whether the underlying runtime topology matches the visible graph.
+But that is debugging information, not product language.
 
-## Caching Considerations
+## Validation Scenarios
 
-## What may help
+### Scenario A: continue at tail
 
-If Claude Code benefits from Anthropic prompt-prefix caching, replay prompts may be cache-friendly when:
+```text
+user1 -> claude1 -> user2 -> claude2
+reply to claude2 with user3
+```
 
-- the replay scaffold is constant
-- the serialized prefix is byte-stable
-- the model and settings are unchanged
-- the branch point is reused multiple times
+Expected:
 
-## What must not be assumed
+- stay in the same branch
+- stay in the same Claude session
+- no new branch node is created
 
-- prompt cache availability is not guaranteed at the Claude Code CLI layer
-- no product logic should depend on cache hits
-- current observed transcripts do not provide strong evidence that cache reuse is happening in the existing flow
-
-Conclusion:
-
-- design for deterministic prefixes
-- treat cache reuse only as a possible optimization, not as a correctness mechanism
-
-## Validation Plan
-
-Use the known failing scenario:
+### Scenario B: branch from earlier assistant
 
 ```text
 user1 -> claude1 -> user2 -> claude2
 branch from claude1 with user3
 ```
 
-Expected result under `prefix_replay`:
+Expected:
 
-### netchat DB
+- create a new child branch from `claude1`
+- new branch should not depend on sibling-path turns for correctness
+- current default backend may be replay-backed
+- future checkpoint-backed backend would map `claude1` to checkpoint `user2`
 
-- child branch points to `claude1`
-- child branch session is a new session
-- branch strategy is `prefix_replay`
-
-### Claude transcript
-
-The new session should contain only:
+### Scenario C: branch from earlier selection
 
 ```text
-replayed prefix up to claude1
-+ new user branch prompt
-+ new assistant reply
+user1 -> claude1(long reply) -> user2 -> claude2
+branch from a selected span inside claude1 with user3
 ```
 
-It should not contain:
+Expected:
 
-- `user2`
-- `claude2`
-
-### behavioral check
-
-Ask both branches to summarize their branch-only history.
-
-The replay branch should not need an "ignore later messages" instruction to avoid sibling-path leakage, because sibling-path turns were never supplied to that new session.
-
-## Trade-Off Summary
-
-## Pros
-
-- clean mid-message branch semantics
-- still uses Claude Code
-- no transcript mutation
-- much closer match between UI topology and runtime topology
-- can coexist with native tail branching
-
-## Cons
-
-- not identical to an internal Claude checkpoint fork
-- initial replay prompt can be token-heavy
-- tool history fidelity is imperfect in the first version
-- requires new transcript metadata plumbing
+- create a new child branch
+- selected text narrows the branch prompt
+- branch still semantically starts from the earlier assistant message, not from a new special selection-only session primitive
 
 ## Recommended Rollout
 
 ### Phase 1
 
-- implement transcript event mapping
-- implement `prefix_replay` for non-tail assistant branching
-- keep tail branching on `native_fork`
+- update product and UI language to `continue` vs `branch from earlier point`
+- remove `tail branch` from design terminology
+- use replay-backed branching for all non-tail branch creation
+- treat selection as scoped context, not its own branch strategy
 
 ### Phase 2
 
-- add developer visibility for branch strategy and transcript mapping
-- record replay hashes and prefix sizes
-- compare quality and cost against the current fork mode
+- persist prompt-oriented metadata where available
+- expose debug visibility for source session, source prompt, and runtime backend
+- measure prompt size and quality of replay-backed branches
 
 ### Phase 3
 
-- improve tool-history summarization
-- consider branch-point prompt reuse
-- evaluate whether tail branching should remain native-only or also support replay
+- monitor Claude Code for a documented programmable checkpoint API
+- if such an API appears, add a `checkpoint-backed` backend behind a feature flag
+- only consider enabling it by default once workspace isolation and runtime reliability are proven
 
 ## Final Recommendation
 
-The most promising implementation is a hybrid model:
+`netchat` should stop thinking in terms of `tail branch` versus `middle branch`.
 
-- tail assistant branch -> `native_fork`
-- mid-message assistant branch -> `prefix_replay`
+The right product model is:
 
-This is the best balance between correctness, implementation complexity, and compatibility with the current Claude Code-based architecture.
+- reply to the latest assistant -> continue
+- reply to any earlier assistant or earlier selection -> branch
+
+The right implementation model today is:
+
+- non-tail branch = replay-backed new session
+
+The right future direction is:
+
+- adopt a checkpoint-backed backend if Claude exposes a real headless way to leverage `/rewind`
+
+That keeps the product semantics clean today while leaving room for a genuinely more native branch primitive later.

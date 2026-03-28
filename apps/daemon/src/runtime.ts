@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  CreateBranchRuntimeRequest,
   ContinueBranchRuntimeRequest,
-  ForkBranchRuntimeRequest,
   RootTurnRuntimeRequest,
   RuntimeResponse,
   makeId,
@@ -43,7 +43,7 @@ type ClaudeTranscriptEntry = {
 
 export interface RuntimeAdapter {
   runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse>;
-  forkBranch(input: ForkBranchRuntimeRequest): Promise<RuntimeResponse>;
+  createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse>;
   continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse>;
   getMode(): "mock" | "claude";
   getWorkingDirectory(): string;
@@ -82,11 +82,8 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     });
   }
 
-  async forkBranch(input: ForkBranchRuntimeRequest): Promise<RuntimeResponse> {
-    return this.executePrompt("fork-branch", input.prompt, {
-      forkSession: true,
-      resume: input.sourceSessionId,
-    });
+  async createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse> {
+    return this.executePrompt("branch-create", input.prompt, {});
   }
 
   async continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse> {
@@ -96,11 +93,10 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   }
 
   private async executePrompt(
-    kind: "root-turn" | "fork-branch" | "branch-turn",
+    kind: "root-turn" | "branch-create" | "branch-turn",
     prompt: string,
     options: {
       resume?: string;
-      forkSession?: boolean;
     },
   ): Promise<RuntimeResponse> {
     if (!this.binaryPath) {
@@ -118,7 +114,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
 
     logRuntime(
       "info",
-      `Starting ${kind} via Claude CLI (cwd=${this.cwd}, resume=${options.resume ?? "new"}, fork=${options.forkSession ? "yes" : "no"}, timeout=${formatDuration(this.timeoutMs)}, config=${this.describeCliConfig()}).`,
+      `Starting ${kind} via Claude CLI (cwd=${this.cwd}, resume=${options.resume ?? "new"}, timeout=${formatDuration(this.timeoutMs)}, config=${this.describeCliConfig()}).`,
     );
 
     let stdout = "";
@@ -171,7 +167,6 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     prompt: string,
     options: {
       resume?: string;
-      forkSession?: boolean;
     },
   ) {
     const args = ["-p", "--output-format", "json"];
@@ -190,10 +185,6 @@ class ClaudeCliRuntime implements RuntimeAdapter {
 
     if (options.resume) {
       args.push("--resume", options.resume);
-    }
-
-    if (options.forkSession) {
-      args.push("--fork-session");
     }
 
     args.push(prompt);
@@ -327,11 +318,10 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private formatExecutionError(
     error: unknown,
     context: {
-      kind: "root-turn" | "fork-branch" | "branch-turn";
+      kind: "root-turn" | "branch-create" | "branch-turn";
       startedAtMs: number;
       options: {
         resume?: string;
-        forkSession?: boolean;
       };
     },
   ) {
@@ -366,7 +356,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
 
     logRuntime(
       didTimeout ? "error" : "warn",
-      `${message} (resume=${context.options.resume ?? "new"}, fork=${context.options.forkSession ? "yes" : "no"}).`,
+      `${message} (resume=${context.options.resume ?? "new"}).`,
     );
 
     return new Error(message);
@@ -469,21 +459,18 @@ class MockRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
-  async forkBranch(input: ForkBranchRuntimeRequest): Promise<RuntimeResponse> {
-    const source = this.ensureSession(input.sourceSessionId);
+  async createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse> {
     const session = this.ensureSession(null);
-    session.turns.push(...source.turns);
     session.turns.push(input.prompt);
 
     return {
       machineId: this.machineId,
       sessionId: session.id,
       assistantMessage: [
-        "Mock forked branch",
-        `Forked from session: ${source.id}`,
-        `Selected text: ${input.selectedText}`,
+        "Mock replay-backed branch",
+        `Session: ${session.id}`,
         "",
-        "The branch inherited the source session history and then received the fork prompt.",
+        "The branch started in a fresh session with a replay prompt built from the visible path only.",
         "",
         `Prompt:\n${input.prompt}`,
       ].join("\n"),

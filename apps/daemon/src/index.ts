@@ -2,8 +2,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
   DaemonDiagnostics,
+  CreateBranchRuntimeRequest,
   ContinueBranchRuntimeRequest,
-  ForkBranchRuntimeRequest,
   RootTurnRuntimeRequest,
 } from "@netchat/shared";
 
@@ -58,8 +58,8 @@ app.post("/runtime/root-turn", async (request) => {
   return runtime.runRootTurn(request.body as RootTurnRuntimeRequest);
 });
 
-app.post("/runtime/fork-branch", async (request) => {
-  return runtime.forkBranch(request.body as ForkBranchRuntimeRequest);
+app.post("/runtime/branch-create", async (request) => {
+  return runtime.createBranch(request.body as CreateBranchRuntimeRequest);
 });
 
 app.post("/runtime/branch-turn", async (request) => {

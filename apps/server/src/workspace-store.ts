@@ -82,6 +82,10 @@ export class WorkspaceStore {
     return this.activeStore.getMessage(messageId);
   }
 
+  getVisiblePathToMessage(messageId: string): MessageNode[] {
+    return this.activeStore.getVisiblePathToMessage(messageId);
+  }
+
   createNet(input: CreateNetInput): WorkspaceState {
     const createdAt = nowIso();
     const netId = makeNetId();
