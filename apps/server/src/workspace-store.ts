@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -15,9 +15,9 @@ import {
   nowIso,
 } from "@netchat/shared";
 
-import { GraphStore } from "./store.js";
+import { GraphStore, readLatestMessageTimestamp } from "./store.js";
 
-type WorkspaceNetRecord = WorkspaceNetSummary & {
+type WorkspaceNetRecord = Omit<WorkspaceNetSummary, "latestMessageAt"> & {
   databasePath: string;
 };
 
@@ -55,18 +55,13 @@ export class WorkspaceStore {
   }
 
   getWorkspaceState(): WorkspaceState {
+    const netSummaries = this.manifest.nets.map((net) => this.buildNetSummary(net));
+
     return {
       workspaceId: this.manifest.workspaceId,
       workingDirectory: this.manifest.workingDirectory,
       activeNetId: this.manifest.activeNetId,
-      nets: [...this.manifest.nets]
-        .sort((left, right) => right.lastOpenedAt.localeCompare(left.lastOpenedAt))
-        .map(({ id, title, createdAt, lastOpenedAt }) => ({
-          id,
-          title,
-          createdAt,
-          lastOpenedAt,
-        })),
+      nets: netSummaries.sort(compareNetSummaryActivity),
     };
   }
 
@@ -117,6 +112,52 @@ export class WorkspaceStore {
     this.manifest.activeNetId = net.id;
     this.writeManifest();
     this.switchActiveStore(net.databasePath);
+
+    return this.getWorkspaceState();
+  }
+
+  renameNet(netId: string, title: string): WorkspaceState {
+    const net = this.findNetRecord(netId);
+    if (!net) {
+      throw new Error("The requested net does not exist in this workspace.");
+    }
+
+    net.title = title.trim();
+    this.writeManifest();
+
+    return this.getWorkspaceState();
+  }
+
+  deleteNet(netId: string): WorkspaceState {
+    const net = this.findNetRecord(netId);
+    if (!net) {
+      throw new Error("The requested net does not exist in this workspace.");
+    }
+
+    if (this.manifest.nets.length === 1) {
+      this.manifest.nets.push(this.createRecoveredNetRecord());
+    }
+
+    const removingActiveNet = this.manifest.activeNetId === netId;
+    const replacementNet = removingActiveNet ? this.pickReplacementNetRecord(netId) : null;
+
+    if (removingActiveNet && !replacementNet) {
+      throw new Error("A replacement net could not be found for the current workspace.");
+    }
+
+    this.manifest.nets = this.manifest.nets.filter((candidate) => candidate.id !== netId);
+
+    if (replacementNet) {
+      this.manifest.activeNetId = replacementNet.id;
+    }
+
+    this.writeManifest();
+
+    if (replacementNet) {
+      this.switchActiveStore(replacementNet.databasePath);
+    }
+
+    this.deleteManagedNetDatabase(net.databasePath);
 
     return this.getWorkspaceState();
   }
@@ -263,6 +304,39 @@ export class WorkspaceStore {
     return this.manifest.nets.find((net) => net.id === netId) ?? null;
   }
 
+  private buildNetSummary(net: WorkspaceNetRecord): WorkspaceNetSummary {
+    return {
+      id: net.id,
+      title: net.title,
+      createdAt: net.createdAt,
+      lastOpenedAt: net.lastOpenedAt,
+      latestMessageAt: readLatestMessageTimestamp(net.databasePath),
+    };
+  }
+
+  private pickReplacementNetRecord(netId: string) {
+    const candidates = this.manifest.nets
+      .filter((net) => net.id !== netId)
+      .map((net) => ({
+        record: net,
+        latestMessageAt: readLatestMessageTimestamp(net.databasePath),
+      }))
+      .sort((left, right) =>
+        compareNetSummaryActivity(
+          {
+            ...this.toWorkspaceNetSummary(left.record),
+            latestMessageAt: left.latestMessageAt,
+          },
+          {
+            ...this.toWorkspaceNetSummary(right.record),
+            latestMessageAt: right.latestMessageAt,
+          },
+        ),
+      );
+
+    return candidates[0]?.record ?? null;
+  }
+
   private getActiveNetRecord() {
     const activeNet = this.findNetRecord(this.manifest.activeNetId);
     if (activeNet) {
@@ -302,6 +376,25 @@ export class WorkspaceStore {
     const previousStore = this.activeStore;
     this.activeStore = new GraphStore(resolvedPath);
     previousStore.dispose();
+  }
+
+  private deleteManagedNetDatabase(databasePath: string) {
+    if (!isManagedWorkspaceNetPath(databasePath, this.netsDirectory)) {
+      return;
+    }
+
+    rmSync(databasePath, { force: true });
+    rmSync(`${databasePath}-shm`, { force: true });
+    rmSync(`${databasePath}-wal`, { force: true });
+  }
+
+  private toWorkspaceNetSummary(net: WorkspaceNetRecord) {
+    return {
+      id: net.id,
+      title: net.title,
+      createdAt: net.createdAt,
+      lastOpenedAt: net.lastOpenedAt,
+    };
   }
 }
 
@@ -375,4 +468,36 @@ function formatNetTimestamp(value: string) {
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function compareNetSummaryActivity(left: WorkspaceNetSummary, right: WorkspaceNetSummary) {
+  const activityDelta = compareIsoTimestamps(
+    right.latestMessageAt ?? right.createdAt,
+    left.latestMessageAt ?? left.createdAt,
+  );
+  if (activityDelta !== 0) {
+    return activityDelta;
+  }
+
+  const creationDelta = compareIsoTimestamps(right.createdAt, left.createdAt);
+  if (creationDelta !== 0) {
+    return creationDelta;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function compareIsoTimestamps(left: string, right: string) {
+  return left.localeCompare(right);
+}
+
+function isManagedWorkspaceNetPath(databasePath: string, netsDirectory: string) {
+  const normalizedDatabasePath = normalizeComparablePath(databasePath);
+  const normalizedNetsDirectory = `${normalizeComparablePath(netsDirectory)}${path.sep}`;
+  return normalizedDatabasePath.startsWith(normalizedNetsDirectory);
+}
+
+function normalizeComparablePath(value: string) {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }

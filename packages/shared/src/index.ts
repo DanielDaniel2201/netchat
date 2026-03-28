@@ -43,6 +43,7 @@ export type WorkspaceNetSummary = {
   title: string;
   createdAt: string;
   lastOpenedAt: string;
+  latestMessageAt: string | null;
 };
 
 export type WorkspaceState = {
@@ -278,6 +279,12 @@ export const createNetInputSchema = z.object({
 });
 
 export type CreateNetInput = z.infer<typeof createNetInputSchema>;
+
+export const updateNetInputSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+});
+
+export type UpdateNetInput = z.infer<typeof updateNetInputSchema>;
 
 export type RootTurnRuntimeRequest = {
   prompt: string;

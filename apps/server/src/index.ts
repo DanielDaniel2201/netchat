@@ -8,6 +8,7 @@ import {
   CreateMachineRegisterInput,
   CreateNetInput,
   CreatePairingSessionInput,
+  UpdateNetInput,
   CreateBranchInput,
   ServerDiagnostics,
   UiConfig,
@@ -23,6 +24,7 @@ import {
   createBranchInputSchema,
   createBranchTurnInputSchema,
   createRootTurnInputSchema,
+  updateNetInputSchema,
   rootBranchId,
 } from "@netchat/shared";
 
@@ -114,6 +116,36 @@ app.post("/api/nets/:netId/select", async (request, reply) => {
     return workspace;
   } catch (error) {
     diagnostics.log("warn", `Switching to net ${netId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.patch("/api/nets/:netId", async (request, reply) => {
+  const netId = (request.params as { netId: string }).netId;
+  const input = updateNetInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  try {
+    const workspace = store.renameNet(netId, (input.data as UpdateNetInput).title);
+    diagnostics.log("info", `Renamed net ${netId} for workspace ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Renaming net ${netId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.delete("/api/nets/:netId", async (request, reply) => {
+  const netId = (request.params as { netId: string }).netId;
+
+  try {
+    const workspace = store.deleteNet(netId);
+    diagnostics.log("info", `Deleted net ${netId} for workspace ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Deleting net ${netId} failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });

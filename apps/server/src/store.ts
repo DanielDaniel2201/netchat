@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -473,6 +473,31 @@ export class GraphStore {
       this.database.exec("ROLLBACK;");
       throw error;
     }
+  }
+}
+
+export function readLatestMessageTimestamp(databasePath: string) {
+  if (!existsSync(databasePath)) {
+    return null;
+  }
+
+  const database = new DatabaseSync(databasePath);
+  try {
+    const row = database
+      .prepare(
+        `SELECT MAX(created_at) AS latest_message_at
+         FROM messages`,
+      )
+      .get() as { latest_message_at: string | null } | undefined;
+
+    return typeof row?.latest_message_at === "string" && row.latest_message_at.trim().length > 0
+      ? row.latest_message_at
+      : null;
+  } catch {
+    return null;
+  } finally {
+    const close = (database as unknown as { close?: () => void }).close;
+    close?.call(database);
   }
 }
 

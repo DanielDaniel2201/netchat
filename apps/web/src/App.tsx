@@ -26,12 +26,14 @@ import {
   MachineRecord,
   MessageNode,
   UiConfig,
+  UpdateNetInput,
   WorkspaceState,
   rootBranchId,
 } from "@netchat/shared";
 import { create } from "zustand";
 
 import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/cn";
 
@@ -105,6 +107,8 @@ function NetchatApp() {
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
+  const [editingNetId, setEditingNetId] = useState<string | null>(null);
+  const [editingNetTitle, setEditingNetTitle] = useState("");
   const [showNetHistory, setShowNetHistory] = useState(false);
   const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
 
@@ -326,6 +330,48 @@ function NetchatApp() {
       logWeb("error", `Switching nets failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
+  const renameNetMutation = useMutation({
+    mutationFn: async (variables: { netId: string; input: UpdateNetInput }) => {
+      logWeb("info", `Renaming net ${variables.netId}.`);
+      return request<WorkspaceState>(`/api/nets/${variables.netId}`, {
+        method: "PATCH",
+        body: JSON.stringify(variables.input),
+      });
+    },
+    onSuccess: (nextWorkspace) => {
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setEditingNetId(null);
+      setEditingNetTitle("");
+    },
+    onError: (error) => {
+      logWeb("error", `Renaming a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const deleteNetMutation = useMutation({
+    mutationFn: async (netId: string) => {
+      logWeb("info", `Deleting net ${netId}.`);
+      return request<WorkspaceState>(`/api/nets/${netId}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: async (nextWorkspace) => {
+      const activeNetChanged = nextWorkspace.activeNetId !== activeNetId;
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setEditingNetId(null);
+      setEditingNetTitle("");
+
+      if (activeNetChanged) {
+        setComposerValue("");
+        setSelectionDraft(null);
+        setSelectedMessageId(null);
+        clearBrowserSelection();
+        await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      }
+    },
+    onError: (error) => {
+      logWeb("error", `Deleting a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
   const isThinking =
     rootTurnMutation.isPending || branchMutation.isPending || branchTurnMutation.isPending;
 
@@ -370,6 +416,45 @@ function NetchatApp() {
     setSelectedMessageId(draft.sourceMessageId);
     setSelectionDraft(draft);
     focusComposer();
+  }
+
+  function beginNetRename(netId: string, title: string) {
+    setEditingNetId(netId);
+    setEditingNetTitle(title);
+  }
+
+  function cancelNetRename() {
+    setEditingNetId(null);
+    setEditingNetTitle("");
+  }
+
+  function submitNetRename(netId: string, fallbackTitle: string) {
+    const normalizedTitle = editingNetTitle.trim();
+    if (!normalizedTitle) {
+      setEditingNetTitle(fallbackTitle);
+      return;
+    }
+
+    if (normalizedTitle === fallbackTitle) {
+      cancelNetRename();
+      return;
+    }
+
+    renameNetMutation.mutate({
+      netId,
+      input: {
+        title: normalizedTitle,
+      },
+    });
+  }
+
+  function requestNetDeletion(netId: string, title: string) {
+    const confirmed = window.confirm(`Delete "${title}" from this workspace history?`);
+    if (!confirmed) {
+      return;
+    }
+
+    deleteNetMutation.mutate(netId);
   }
 
   const reportMessageNodeHeight = useCallback((messageId: string, height: number) => {
@@ -525,6 +610,12 @@ function NetchatApp() {
   }, [selectedMessageId, selectionDraft]);
 
   useEffect(() => {
+    if (editingNetId && !workspaceNets.some((net) => net.id === editingNetId)) {
+      cancelNetRename();
+    }
+  }, [editingNetId, workspaceNets]);
+
+  useEffect(() => {
     if (!selectedMessage) {
       setComposerAnchor(null);
       return;
@@ -539,7 +630,11 @@ function NetchatApp() {
     };
   }, [selectedMessage, syncBubbleComposerAnchor]);
 
-  const isSwitchingNet = createNetMutation.isPending || selectNetMutation.isPending;
+  const isSwitchingNet =
+    createNetMutation.isPending ||
+    selectNetMutation.isPending ||
+    renameNetMutation.isPending ||
+    deleteNetMutation.isPending;
   const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
@@ -635,11 +730,13 @@ function NetchatApp() {
         ? "Continue lane"
         : "Main canvas";
   const composerErrorMessage = formatErrorMessage(
-    rootTurnMutation.error ??
-      branchMutation.error ??
-      branchTurnMutation.error ??
-      createNetMutation.error ??
-      selectNetMutation.error,
+    rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
+  );
+  const netErrorMessage = formatErrorMessage(
+    createNetMutation.error ??
+      selectNetMutation.error ??
+      renameNetMutation.error ??
+      deleteNetMutation.error,
   );
   const branchCount = snapshot?.branches.length ?? 0;
   const messageCount = snapshot?.messages.length ?? 0;
@@ -749,6 +846,12 @@ function NetchatApp() {
                 {createNetMutation.isPending ? "Creating..." : "New net"}
               </button>
             </div>
+
+            {netErrorMessage ? (
+              <div className="border-t border-rose-200 bg-rose-50 px-5 py-4 text-sm leading-6 text-rose-700">
+                {netErrorMessage}
+              </div>
+            ) : null}
           </div>
 
           {showNetHistory ? (
@@ -768,37 +871,105 @@ function NetchatApp() {
                 ) : workspaceNets.length ? (
                   workspaceNets.map((net) => {
                     const isActiveNet = net.id === activeNetId;
+                    const isEditingNet = editingNetId === net.id;
+                    const isRenamingNet = renameNetMutation.isPending && renameNetMutation.variables?.netId === net.id;
+                    const isDeletingNet = deleteNetMutation.isPending && deleteNetMutation.variables === net.id;
+                    const latestMessageLabel = formatLatestMessageTime(net.latestMessageAt);
                     return (
-                      <button
+                      <div
                         key={net.id}
-                        type="button"
                         className={cn(
-                          "block w-full border-b border-[var(--node-border)] px-5 py-4 text-left transition-colors last:border-b-0",
+                          "border-b border-[var(--node-border)] px-5 py-4 transition-colors last:border-b-0",
                           isActiveNet ? "bg-[rgba(247,247,242,0.92)]" : "bg-white hover:bg-[var(--bg-cream)]",
                         )}
-                        disabled={isSwitchingNet || isActiveNet}
-                        onClick={() => selectNetMutation.mutate(net.id)}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-[15px] font-medium leading-6 text-[var(--text-main)]">
-                              {net.title}
-                            </div>
-                            <div className="mt-2 text-[11px] uppercase tracking-[0.14em] text-[rgba(26,26,26,0.5)]">
-                              Opened {formatNetTime(net.lastOpenedAt)}
-                            </div>
-                            <div className="mt-1 text-[12px] leading-5 text-[rgba(26,26,26,0.58)]">
-                              Created {formatNetTime(net.createdAt)}
-                            </div>
+                          <div className="min-w-0 flex-1">
+                            {isEditingNet ? (
+                              <div className="space-y-3">
+                                <Input
+                                  autoFocus
+                                  className="h-11 rounded-none border-[var(--text-main)] px-3 text-[15px] font-medium shadow-none focus:border-[var(--text-main)]"
+                                  disabled={isRenamingNet}
+                                  maxLength={120}
+                                  value={editingNetTitle}
+                                  onChange={(event) => setEditingNetTitle(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      submitNetRename(net.id, net.title);
+                                    }
+
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      cancelNetRename();
+                                    }
+                                  }}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[11px] font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                                    disabled={isRenamingNet || editingNetTitle.trim().length === 0}
+                                    onClick={() => submitNetRename(net.id, net.title)}
+                                  >
+                                    {isRenamingNet ? "Saving..." : "Save"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="border border-[var(--node-border)] bg-white px-3 py-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
+                                    disabled={isRenamingNet}
+                                    onClick={cancelNetRename}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="block w-full text-left disabled:cursor-not-allowed"
+                                disabled={isSwitchingNet || isActiveNet}
+                                onClick={() => selectNetMutation.mutate(net.id)}
+                              >
+                                <div className="truncate text-[15px] font-medium leading-6 text-[var(--text-main)]">
+                                  {net.title}
+                                </div>
+                                <div className="mt-2 text-[11px] uppercase tracking-[0.14em] text-[rgba(26,26,26,0.5)]">
+                                  {latestMessageLabel ? `Latest message ${latestMessageLabel}` : "No messages yet"}
+                                </div>
+                                <div className="mt-1 text-[12px] leading-5 text-[rgba(26,26,26,0.58)]">
+                                  Created {formatNetTime(net.createdAt)}
+                                </div>
+                              </button>
+                            )}
                           </div>
 
-                          <div className="text-right">
+                          <div className="flex shrink-0 flex-col items-end gap-2 text-right">
                             <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
                               {isActiveNet ? "Current" : "Switch"}
                             </div>
+                            <div className="flex flex-wrap justify-end gap-2">
+                              <button
+                                type="button"
+                                className="border border-[var(--node-border)] bg-white px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-[rgba(26,26,26,0.66)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
+                                disabled={isSwitchingNet || isEditingNet}
+                                onClick={() => beginNetRename(net.id, net.title)}
+                              >
+                                Rename
+                              </button>
+                              <button
+                                type="button"
+                                className="border border-rose-200 bg-white px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
+                                disabled={isSwitchingNet || isDeletingNet}
+                                onClick={() => requestNetDeletion(net.id, net.title)}
+                              >
+                                {isDeletingNet ? "Deleting..." : "Delete"}
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </button>
+                      </div>
                     );
                   })
                 ) : (
@@ -1468,6 +1639,14 @@ function formatNetTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatLatestMessageTime(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return formatNetTime(value);
 }
 
 function formatWorkingDirectoryPath(value: string | null) {
