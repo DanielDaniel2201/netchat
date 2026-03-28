@@ -15,7 +15,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, LoaderCircle } from "lucide-react";
+import { ArrowUp, LoaderCircle, MoreHorizontal } from "lucide-react";
 import {
   DaemonDiagnostics,
   CreateBranchInput,
@@ -112,6 +112,7 @@ function NetchatApp() {
   const reactFlow = useReactFlow();
   const nodesInitialized = useNodesInitialized();
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const openNetMenuRef = useRef<HTMLDivElement>(null);
   const lastAutoSelectedMessageIdRef = useRef<string | null>(null);
   const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
@@ -122,8 +123,9 @@ function NetchatApp() {
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
   const [editingNetId, setEditingNetId] = useState<string | null>(null);
   const [editingNetTitle, setEditingNetTitle] = useState("");
+  const [openNetMenuId, setOpenNetMenuId] = useState<string | null>(null);
+  const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
   const [showNetHistory, setShowNetHistory] = useState(false);
-  const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
 
   const workspaceQuery = useQuery({
     queryKey: ["workspace"],
@@ -363,6 +365,7 @@ function NetchatApp() {
       queryClient.setQueryData(["workspace"], nextWorkspace);
       setEditingNetId(null);
       setEditingNetTitle("");
+      setOpenNetMenuId(null);
     },
     onError: (error) => {
       logWeb("error", `Renaming a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -380,6 +383,8 @@ function NetchatApp() {
       queryClient.setQueryData(["workspace"], nextWorkspace);
       setEditingNetId(null);
       setEditingNetTitle("");
+      setOpenNetMenuId(null);
+      setPendingNetDeletion(null);
 
       if (activeNetChanged) {
         setComposerValue("");
@@ -455,6 +460,7 @@ function NetchatApp() {
   }
 
   function beginNetRename(netId: string, title: string) {
+    setOpenNetMenuId(null);
     setEditingNetId(netId);
     setEditingNetTitle(title);
   }
@@ -485,12 +491,24 @@ function NetchatApp() {
   }
 
   function requestNetDeletion(netId: string, title: string) {
-    const confirmed = window.confirm(`Delete "${title}" from this workspace history?`);
-    if (!confirmed) {
+    setOpenNetMenuId(null);
+    setPendingNetDeletion({ id: netId, title });
+  }
+
+  function cancelNetDeletion() {
+    if (deleteNetMutation.isPending) {
       return;
     }
 
-    deleteNetMutation.mutate(netId);
+    setPendingNetDeletion(null);
+  }
+
+  function confirmNetDeletion() {
+    if (!pendingNetDeletion) {
+      return;
+    }
+
+    deleteNetMutation.mutate(pendingNetDeletion.id);
   }
 
   const reportMessageNodeHeight = useCallback((messageId: string, height: number) => {
@@ -674,6 +692,47 @@ function NetchatApp() {
   }, [editingNetId, workspaceNets]);
 
   useEffect(() => {
+    if (openNetMenuId && !workspaceNets.some((net) => net.id === openNetMenuId)) {
+      setOpenNetMenuId(null);
+    }
+  }, [openNetMenuId, workspaceNets]);
+
+  useEffect(() => {
+    if (pendingNetDeletion && !workspaceNets.some((net) => net.id === pendingNetDeletion.id)) {
+      setPendingNetDeletion(null);
+    }
+  }, [pendingNetDeletion, workspaceNets]);
+
+  useEffect(() => {
+    if (!openNetMenuId) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof HTMLElement && openNetMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setOpenNetMenuId(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenNetMenuId(null);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openNetMenuId]);
+
+  useEffect(() => {
     if (!selectedMessage) {
       setComposerAnchor(null);
       return;
@@ -756,9 +815,7 @@ function NetchatApp() {
     daemonDiagnostics?.environment.workingDirectory ??
     null;
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
-  const workingDirectoryDisplay = truncateMiddle(workingDirectoryPath, 44);
   const workspaceName = resolveWorkspaceName(workingDirectoryPath);
-  const runtimeLabel = resolveRuntimeLabel(runtimeMachine, daemonDiagnostics);
   const composerHint = selectedMessage
     ? runtimeMachine && runtimeMachine.status !== "online"
       ? "Reconnect the local runtime to send from this bubble."
@@ -799,6 +856,8 @@ function NetchatApp() {
   const branchCount = snapshot?.branches.length ?? 0;
   const messageCount = snapshot?.messages.length ?? 0;
   const netCount = workspaceNets.length;
+  const pendingDeletionNetId = pendingNetDeletion?.id ?? null;
+  const isConfirmingDeletion = deleteNetMutation.isPending && deleteNetMutation.variables === pendingDeletionNetId;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
@@ -806,100 +865,56 @@ function NetchatApp() {
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
 
         <div className="pointer-events-none absolute right-6 top-6 z-20 flex flex-col items-end gap-3">
-          <button
-            type="button"
-            className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-[var(--block-slate)] px-5 py-4 text-left text-white shadow-[10px_10px_0_rgba(26,26,26,0.1)] transition-transform hover:-translate-y-0.5"
-            onClick={() => setShowRuntimeDetails((open) => !open)}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="editorial-meta text-white/62">Runtime</div>
-                <div className="mt-3 flex items-center gap-3">
+          <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+            <div className="border-b border-[var(--node-border)] px-5 py-4">
+              <div className="flex items-start justify-between gap-4 text-[13px] font-medium leading-5">
+                <div className="flex min-w-0 items-center gap-2 text-[var(--text-main)]">
+                  <span>Claude Code</span>
                   <span
                     className={cn(
-                      "inline-flex h-3 w-3 border border-white/65",
+                      "inline-flex h-2.5 w-2.5 rounded-full border border-[rgba(26,26,26,0.16)]",
                       connectionStatus.tone === "connected"
                         ? "bg-[var(--block-green)]"
                         : connectionStatus.tone === "connecting"
                           ? "animate-pulse bg-[var(--block-ochre)]"
-                          : "bg-white/35",
+                          : "bg-rose-500",
                     )}
+                    title={connectionStatus.label}
                   />
-                  <div className="min-w-0">
-                    <div className="text-[22px] font-medium leading-none text-white">{connectionStatus.label}</div>
-                    <div className="mt-2 text-[12px] uppercase tracking-[0.16em] text-white/72">
-                      {runtimeLabel}
-                    </div>
-                  </div>
+                </div>
+                <div
+                  className="max-w-[128px] truncate text-right text-[rgba(26,26,26,0.66)]"
+                  title={workingDirectoryPath}
+                >
+                  {workspaceName}
                 </div>
               </div>
 
-              <div className="max-w-[120px] text-right">
-                <div className="editorial-meta text-white/62">Workspace</div>
-                <div className="mt-3 break-words text-[15px] leading-6 text-white/88">{workspaceName}</div>
-              </div>
-            </div>
-          </button>
-
-          {showRuntimeDetails ? (
-            <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-              <div className="border-b border-[var(--node-border)] px-5 py-4">
-                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Local runtime</div>
-                <div className="mt-3 text-[17px] font-medium text-[var(--text-main)]">{runtimeLabel}</div>
-              </div>
-              <div className="border-b border-[var(--node-border)] px-5 py-4">
-                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Status</div>
-                <div className="mt-2 text-[15px] leading-7 text-[var(--text-main)]">{connectionStatus.label}</div>
-              </div>
-              <div className="border-b border-[var(--node-border)] px-5 py-4">
-                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Workspace</div>
-                <div className="mt-2 font-mono text-[12px] leading-6 text-[rgba(26,26,26,0.72)]" title={workingDirectoryPath}>
-                  {workingDirectoryDisplay}
-                </div>
-              </div>
-              <div className="px-5 py-4">
-                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Engine</div>
-                <div className="mt-2 text-[15px] leading-7 text-[var(--text-main)]">{runtimeLabel}</div>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-            <div className="border-b border-[var(--node-border)] px-5 py-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Active net</div>
-                  <div className="mt-3 text-[18px] font-medium leading-7 text-[var(--text-main)]">
-                    {activeNet?.title ?? "Loading..."}
-                  </div>
-                  <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-[rgba(26,26,26,0.52)]">
-                    {netCount} nets in this workspace
-                  </div>
-                </div>
-
-                <div className="max-w-[112px] text-right">
-                  <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Scoped to</div>
-                  <div className="mt-3 break-words text-[15px] leading-6 text-[rgba(26,26,26,0.8)]">
-                    {workspaceName}
-                  </div>
-                </div>
+              <div className="mt-5 text-center text-[20px] font-medium leading-7 text-[var(--text-main)]">
+                {activeNet?.title ?? "Loading..."}
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
               <button
                 type="button"
-                className="bg-white px-5 py-4 text-left text-[13px] font-medium uppercase tracking-[0.14em] text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                className="bg-white px-5 py-4 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
                 disabled={workspaceQuery.isLoading}
-                onClick={() => setShowNetHistory((open) => !open)}
+                onClick={() => {
+                  setOpenNetMenuId(null);
+                  setShowNetHistory((open) => !open);
+                }}
               >
                 {showNetHistory ? "Hide history" : "History nets"}
               </button>
               <button
                 type="button"
-                className="bg-white px-5 py-4 text-left text-[13px] font-medium uppercase tracking-[0.14em] text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                className="bg-white px-5 py-4 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
                 disabled={isSwitchingNet || workspaceQuery.isLoading}
-                onClick={() => createNetMutation.mutate({ title: "" })}
+                onClick={() => {
+                  setOpenNetMenuId(null);
+                  createNetMutation.mutate({ title: "" });
+                }}
               >
                 {createNetMutation.isPending ? "Creating..." : "New net"}
               </button>
@@ -914,11 +929,8 @@ function NetchatApp() {
 
           {showNetHistory ? (
             <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-              <div className="border-b border-[var(--node-border)] px-5 py-4">
-                <div className="editorial-meta text-[rgba(26,26,26,0.48)]">History nets</div>
-                <div className="mt-2 text-[14px] leading-6 text-[rgba(26,26,26,0.76)]">
-                  Only nets from this workspace appear here.
-                </div>
+              <div className="border-b border-[var(--node-border)] px-5 py-4 text-[15px] font-medium text-[var(--text-main)]">
+                History nets
               </div>
 
               <div className="max-h-[360px] overflow-y-auto">
@@ -930,6 +942,7 @@ function NetchatApp() {
                   workspaceNets.map((net) => {
                     const isActiveNet = net.id === activeNetId;
                     const isEditingNet = editingNetId === net.id;
+                    const isMenuOpen = openNetMenuId === net.id;
                     const isRenamingNet = renameNetMutation.isPending && renameNetMutation.variables?.netId === net.id;
                     const isDeletingNet = deleteNetMutation.isPending && deleteNetMutation.variables === net.id;
                     const latestMessageLabel = formatLatestMessageTime(net.latestMessageAt);
@@ -938,7 +951,7 @@ function NetchatApp() {
                         key={net.id}
                         className={cn(
                           "border-b border-[var(--node-border)] px-5 py-4 transition-colors last:border-b-0",
-                          isActiveNet ? "bg-[rgba(247,247,242,0.92)]" : "bg-white hover:bg-[var(--bg-cream)]",
+                          isActiveNet ? "bg-[var(--block-slate)] text-white" : "bg-white hover:bg-[var(--bg-cream)]",
                         )}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -967,7 +980,7 @@ function NetchatApp() {
                                 <div className="flex items-center gap-2">
                                   <button
                                     type="button"
-                                    className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[11px] font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                                    className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
                                     disabled={isRenamingNet || editingNetTitle.trim().length === 0}
                                     onClick={() => submitNetRename(net.id, net.title)}
                                   >
@@ -975,7 +988,7 @@ function NetchatApp() {
                                   </button>
                                   <button
                                     type="button"
-                                    className="border border-[var(--node-border)] bg-white px-3 py-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
+                                    className="border border-[var(--node-border)] bg-white px-3 py-2 text-[12px] font-medium text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
                                     disabled={isRenamingNet}
                                     onClick={cancelNetRename}
                                   >
@@ -990,42 +1003,65 @@ function NetchatApp() {
                                 disabled={isSwitchingNet || isActiveNet}
                                 onClick={() => selectNetMutation.mutate(net.id)}
                               >
-                                <div className="truncate text-[15px] font-medium leading-6 text-[var(--text-main)]">
+                                <div className={cn("truncate text-[15px] font-medium leading-6", isActiveNet ? "text-white" : "text-[var(--text-main)]")}>
                                   {net.title}
                                 </div>
-                                <div className="mt-2 text-[11px] uppercase tracking-[0.14em] text-[rgba(26,26,26,0.5)]">
-                                  {latestMessageLabel ? `Latest message ${latestMessageLabel}` : "No messages yet"}
-                                </div>
-                                <div className="mt-1 text-[12px] leading-5 text-[rgba(26,26,26,0.58)]">
-                                  Created {formatNetTime(net.createdAt)}
+                                <div
+                                  className={cn(
+                                    "mt-1 text-[12px] leading-5",
+                                    isActiveNet ? "text-white/64" : "text-[rgba(26,26,26,0.56)]",
+                                  )}
+                                >
+                                  {latestMessageLabel ?? "No messages yet"}
                                 </div>
                               </button>
                             )}
                           </div>
 
-                          <div className="flex shrink-0 flex-col items-end gap-2 text-right">
-                            <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
-                              {isActiveNet ? "Current" : "Switch"}
-                            </div>
-                            <div className="flex flex-wrap justify-end gap-2">
+                          {isEditingNet ? null : (
+                            <div
+                              ref={isMenuOpen ? openNetMenuRef : null}
+                              className="relative shrink-0"
+                              data-net-actions-root
+                            >
                               <button
                                 type="button"
-                                className="border border-[var(--node-border)] bg-white px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-[rgba(26,26,26,0.66)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
-                                disabled={isSwitchingNet || isEditingNet}
-                                onClick={() => beginNetRename(net.id, net.title)}
+                                className={cn(
+                                  "inline-flex h-9 w-9 items-center justify-center border transition-colors disabled:cursor-not-allowed",
+                                  isActiveNet
+                                    ? "border-white/18 bg-white/8 text-white hover:bg-white/14 disabled:text-white/36"
+                                    : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.66)] hover:bg-[var(--bg-cream)] disabled:text-[rgba(26,26,26,0.32)]",
+                                )}
+                                disabled={isSwitchingNet}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOpenNetMenuId((current) => (current === net.id ? null : net.id));
+                                }}
                               >
-                                Rename
+                                <MoreHorizontal className="size-4" />
                               </button>
-                              <button
-                                type="button"
-                                className="border border-rose-200 bg-white px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
-                                disabled={isSwitchingNet || isDeletingNet}
-                                onClick={() => requestNetDeletion(net.id, net.title)}
-                              >
-                                {isDeletingNet ? "Deleting..." : "Delete"}
-                              </button>
+                              {isMenuOpen ? (
+                                <div className="absolute right-0 top-full z-30 mt-2 w-36 border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
+                                  <button
+                                    type="button"
+                                    className="block w-full border-b border-[var(--node-border)] px-4 py-3 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
+                                    disabled={isSwitchingNet || isDeletingNet}
+                                    onClick={() => beginNetRename(net.id, net.title)}
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="block w-full px-4 py-3 text-left text-[13px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
+                                    disabled={isSwitchingNet || isDeletingNet}
+                                    onClick={() => requestNetDeletion(net.id, net.title)}
+                                  >
+                                    {isDeletingNet ? "Deleting..." : "Delete"}
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
-                          </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -1162,14 +1198,6 @@ function NetchatApp() {
           </div>
         ) : null}
 
-        {hasMessages && !showBubbleComposer ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center px-6">
-            <div className="border border-[var(--text-main)] bg-white px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.06)]">
-              Click a Claude block or select a passage to continue from that exact context.
-            </div>
-          </div>
-        ) : null}
-
         {showBubbleComposer ? (
           <div className="pointer-events-none fixed inset-0 z-30">
             <form
@@ -1225,6 +1253,45 @@ function NetchatApp() {
                 </div>
               ) : null}
             </form>
+          </div>
+        ) : null}
+
+        {pendingNetDeletion ? (
+          <div
+            className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center bg-[rgba(26,26,26,0.2)] px-6"
+            onClick={cancelNetDeletion}
+          >
+            <div
+              className="w-full max-w-[420px] border border-[var(--text-main)] bg-white shadow-[14px_14px_0_rgba(26,26,26,0.1)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="border-b border-[var(--node-border)] px-6 py-5">
+                <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">Delete net?</div>
+              </div>
+
+              <div className="px-6 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.76)]">
+                Delete "{pendingNetDeletion.title}" from history?
+              </div>
+
+              <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
+                <button
+                  type="button"
+                  className="bg-white px-5 py-4 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                  disabled={isConfirmingDeletion}
+                  onClick={cancelNetDeletion}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="bg-rose-50 px-5 py-4 text-left text-[13px] font-medium text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:text-rose-300"
+                  disabled={isConfirmingDeletion}
+                  onClick={confirmNetDeletion}
+                >
+                  {isConfirmingDeletion ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
       </div>
