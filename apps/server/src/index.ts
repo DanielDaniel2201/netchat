@@ -1,29 +1,47 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
+  AssistantStreamBlock,
+  AssistantStreamState,
+  Branch,
   CompleteMachineJobInput,
+  CreateBranchInput,
   CreateBranchRuntimeRequest,
+  CreateBranchTurnInput,
   CreateMachineClaimJobInput,
   CreateMachineHeartbeatInput,
+  CreateMachineJobEventInput,
   CreateMachineRegisterInput,
   CreateNetInput,
   CreatePairingSessionInput,
+  CreateRootTurnInput,
+  GraphSnapshot,
+  MessageNode,
+  RuntimeResponse,
+  RuntimeStreamEvent,
   UpdateNetInput,
-  CreateBranchInput,
   ServerDiagnostics,
+  TurnStreamEvent,
   UiConfig,
   WorkspaceState,
+  buildGraphEdges,
   buildPrefixReplayPrompt,
   buildSelectionPrompt,
   completeMachineJobInputSchema,
+  createPendingAssistantState,
   createMachineClaimJobInputSchema,
   createMachineHeartbeatInputSchema,
+  createMachineJobEventInputSchema,
   createNetInputSchema,
   createMachineRegisterInputSchema,
   createPairingSessionInputSchema,
   createBranchInputSchema,
   createBranchTurnInputSchema,
   createRootTurnInputSchema,
+  describeBranchCreation,
+  finalizeAssistantState,
+  makeId,
+  nowIso,
   updateNetInputSchema,
   rootBranchId,
 } from "@netchat/shared";
@@ -232,6 +250,234 @@ app.post("/api/daemon/jobs/:jobId/complete", async (request, reply) => {
   }
 });
 
+app.post("/api/daemon/jobs/:jobId/events", async (request, reply) => {
+  const jobId = (request.params as { jobId: string }).jobId;
+  const input = createMachineJobEventInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  try {
+    machines.recordJobEvent(jobId, input.data as CreateMachineJobEventInput);
+    return { ok: true };
+  } catch (error) {
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/root-turn/stream", async (request, reply) => {
+  const input = createRootTurnInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  const baseSnapshot = store.getSnapshot();
+  const rootBranch = baseSnapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
+  const runtimePrompt = input.data.selectedText
+    ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
+    : input.data.prompt;
+
+  try {
+    const machine = machines.resolveMachine(input.data.machineId ?? rootBranch?.machineId ?? null);
+    const turnId = input.data.clientTurnId ?? makeId("turn");
+    const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
+    const assistantMessageId = input.data.clientAssistantMessageId ?? makeId("msg");
+    const createdAt = input.data.clientCreatedAt ?? nowIso();
+    const streamingJob = machines.enqueueStreamingJob(machine.id, {
+      kind: "root-turn",
+      payload: {
+        prompt: runtimePrompt,
+        sessionId: rootBranch?.sessionId ?? null,
+      },
+    });
+    const optimisticSnapshot = buildOptimisticRootTurnSnapshot(baseSnapshot, {
+      assistantMessageId,
+      createdAt,
+      machineId: machine.id,
+      prompt: input.data.prompt,
+      userMessageId,
+    });
+
+    diagnostics.log(
+      "info",
+      input.data.selectedText
+        ? `Streaming root turn from highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`
+        : `Streaming root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`,
+    );
+
+    return streamTurnResponse({
+      assistantMessageId,
+      bootstrapSnapshot: optimisticSnapshot,
+      commit: (runtime, assistantState) => {
+        const nextSnapshot = store.applyRootTurn(input.data.prompt, runtime, {
+          assistantMessageId,
+          assistantState,
+          userMessageId,
+        });
+        diagnostics.log(
+          "info",
+          `Root turn completed on ${formatMachineLabel(runtime.machineId, machine.name)}. Graph now has ${nextSnapshot.messages.length} messages across ${nextSnapshot.branches.length} branches.`,
+        );
+        return nextSnapshot;
+      },
+      reply,
+      request,
+      result: streamingJob.result,
+      dispose: streamingJob.dispose,
+      subscribe: streamingJob.subscribe,
+      turnId,
+    });
+  } catch (error) {
+    diagnostics.log("error", `Root turn failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/branches/stream", async (request, reply) => {
+  const input = createBranchInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  const sourceMessage = store.getMessage(input.data.sourceMessageId);
+  if (!sourceMessage?.machineId) {
+    return reply.status(400).send({ error: "The source message does not have a machine id yet." });
+  }
+
+  try {
+    const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
+    const branchPrompt = buildPrefixReplayPrompt({
+      history: visibleHistory,
+      userPrompt: input.data.prompt,
+      selectedText: input.data.mode === "selection" ? input.data.selectedText! : null,
+    });
+    const turnId = input.data.clientTurnId ?? makeId("turn");
+    const branchId = input.data.clientBranchId ?? makeId("branch");
+    const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
+    const assistantMessageId = input.data.clientAssistantMessageId ?? makeId("msg");
+    const createdAt = input.data.clientCreatedAt ?? nowIso();
+    const optimisticSnapshot = buildOptimisticBranchCreationSnapshot(store.getSnapshot(), {
+      assistantMessageId,
+      branchId,
+      createdAt,
+      input: input.data as CreateBranchInput,
+      userMessageId,
+    });
+    const streamingJob = machines.enqueueStreamingJob(sourceMessage.machineId, {
+      kind: "branch-create",
+      payload: {
+        prompt: branchPrompt,
+      } satisfies CreateBranchRuntimeRequest,
+    });
+
+    diagnostics.log(
+      "info",
+      input.data.mode === "message"
+        ? `Streaming branch-from-message request from ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
+        : `Streaming branch-from-selection request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
+    );
+
+    return streamTurnResponse({
+      assistantMessageId,
+      bootstrapSnapshot: optimisticSnapshot,
+      commit: (runtime, assistantState) => {
+        const nextSnapshot = store.applyBranchCreation(input.data as CreateBranchInput, runtime, {
+          assistantMessageId,
+          assistantState,
+          branchId,
+          userMessageId,
+        });
+        diagnostics.log(
+          "info",
+          `Branch creation completed as session ${runtime.sessionId} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
+        );
+        return nextSnapshot;
+      },
+      reply,
+      request,
+      result: streamingJob.result,
+      dispose: streamingJob.dispose,
+      subscribe: streamingJob.subscribe,
+      turnId,
+    });
+  } catch (error) {
+    diagnostics.log("error", `Branch request failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
+  const branchId = (request.params as { branchId: string }).branchId;
+  const input = createBranchTurnInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  const branch = store.getBranch(branchId);
+  if (!branch?.sessionId || !branch.machineId) {
+    return reply.status(400).send({ error: "This branch does not have a session id yet." });
+  }
+
+  const runtimePrompt = input.data.selectedText
+    ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
+    : input.data.prompt;
+
+  try {
+    const turnId = input.data.clientTurnId ?? makeId("turn");
+    const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
+    const assistantMessageId = input.data.clientAssistantMessageId ?? makeId("msg");
+    const createdAt = input.data.clientCreatedAt ?? nowIso();
+    const optimisticSnapshot = buildOptimisticBranchTurnSnapshot(store.getSnapshot(), {
+      assistantMessageId,
+      branchId,
+      createdAt,
+      machineId: branch.machineId,
+      prompt: input.data.prompt,
+      userMessageId,
+    });
+    const streamingJob = machines.enqueueStreamingJob(branch.machineId, {
+      kind: "branch-turn",
+      payload: {
+        sessionId: branch.sessionId,
+        prompt: runtimePrompt,
+      },
+    });
+
+    diagnostics.log(
+      "info",
+      input.data.selectedText
+        ? `Streaming branch turn for ${branchId} from highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`
+        : `Streaming branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`,
+    );
+
+    return streamTurnResponse({
+      assistantMessageId,
+      bootstrapSnapshot: optimisticSnapshot,
+      commit: (runtime, assistantState) => {
+        const nextSnapshot = store.applyBranchTurn(branchId, input.data.prompt, runtime, {
+          assistantMessageId,
+          assistantState,
+          userMessageId,
+        });
+        diagnostics.log(
+          "info",
+          `Branch turn ${branchId} completed on machine ${runtime.machineId}. Branch now has ${nextSnapshot.messages.filter((message) => message.branchId === branchId).length} messages.`,
+        );
+        return nextSnapshot;
+      },
+      reply,
+      request,
+      result: streamingJob.result,
+      dispose: streamingJob.dispose,
+      subscribe: streamingJob.subscribe,
+      turnId,
+    });
+  } catch (error) {
+    diagnostics.log("error", `Branch turn failed for ${branchId}: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
 app.post("/api/root-turn", async (request, reply) => {
   const input = createRootTurnInputSchema.safeParse(request.body);
   if (!input.success) {
@@ -363,6 +609,332 @@ registerLocalWebUi(app, diagnostics);
 
 await app.listen({ host: "0.0.0.0", port });
 diagnostics.log("info", `Server listening on port ${port}.`);
+
+function applyRuntimeEventToAssistantState(
+  current: AssistantStreamState,
+  event: RuntimeStreamEvent,
+): AssistantStreamState {
+  if (event.type === "response.update") {
+    return {
+      ...current,
+      status: event.isComplete ? "complete" : "streaming",
+      responseText: event.text,
+    };
+  }
+
+  const nextBlocks = upsertAssistantBlock(current.blocks, event);
+  return {
+    ...current,
+    status: "streaming",
+    blocks: nextBlocks,
+  };
+}
+
+function upsertAssistantBlock(
+  blocks: AssistantStreamBlock[],
+  event: Exclude<RuntimeStreamEvent, { type: "response.update" }>,
+): AssistantStreamBlock[] {
+  const nextBlocks = [...blocks];
+  const index = nextBlocks.findIndex((block) => block.id === event.blockId);
+
+  if (event.type === "thinking.update") {
+    const nextBlock: AssistantStreamBlock = {
+      id: event.blockId,
+      order: event.order,
+      kind: "thinking",
+      text: event.text,
+      status: event.isComplete ? "complete" : "streaming",
+    };
+
+    if (index >= 0) {
+      nextBlocks[index] = nextBlock;
+    } else {
+      nextBlocks.push(nextBlock);
+    }
+
+    return nextBlocks.sort(compareAssistantBlocks);
+  }
+
+  const nextBlock: AssistantStreamBlock = {
+    id: event.blockId,
+    order: event.order,
+    kind: "tool_call",
+    toolCallId: event.toolCallId,
+    toolName: event.toolName,
+    inputText: event.inputText,
+    outputText: event.outputText,
+    isError: event.isError,
+    status: event.isError ? "error" : event.isComplete ? "complete" : "streaming",
+  };
+
+  if (index >= 0) {
+    nextBlocks[index] = nextBlock;
+  } else {
+    nextBlocks.push(nextBlock);
+  }
+
+  return nextBlocks.sort(compareAssistantBlocks);
+}
+
+function compareAssistantBlocks(left: AssistantStreamBlock, right: AssistantStreamBlock) {
+  if (left.order !== right.order) {
+    return left.order - right.order;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+async function streamTurnResponse(input: {
+  turnId: string;
+  assistantMessageId: string;
+  bootstrapSnapshot: GraphSnapshot;
+  request: {
+    raw: {
+      on: (event: "close", listener: () => void) => void;
+    };
+  };
+  reply: {
+    hijack: () => void;
+    raw: {
+      end: () => void;
+      on: (event: "close", listener: () => void) => void;
+      write: (chunk: string) => void;
+      writeHead: (statusCode: number, headers: Record<string, string>) => void;
+    };
+  };
+  subscribe: (listener: (event: RuntimeStreamEvent) => void) => () => void;
+  dispose: () => void;
+  result: Promise<RuntimeResponse>;
+  commit: (runtime: RuntimeResponse, assistantState: AssistantStreamState) => GraphSnapshot;
+}) {
+  let assistantState = createPendingAssistantState();
+  const bootstrapEvent: TurnStreamEvent = {
+    type: "turn.bootstrap",
+    turnId: input.turnId,
+    assistantMessageId: input.assistantMessageId,
+    snapshot: input.bootstrapSnapshot,
+    assistantState,
+  };
+
+  input.reply.hijack();
+  const response = input.reply.raw;
+  response.writeHead(200, {
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+  });
+
+  const writeEvent = (event: TurnStreamEvent) => {
+    response.write(`${JSON.stringify(event)}\n`);
+  };
+
+  store.saveAssistantState(input.assistantMessageId, assistantState);
+  writeEvent(bootstrapEvent);
+
+  const unsubscribe = input.subscribe((runtimeEvent) => {
+    assistantState = applyRuntimeEventToAssistantState(assistantState, runtimeEvent);
+    store.saveAssistantState(input.assistantMessageId, assistantState);
+    writeEvent({
+      type: "assistant.patch",
+      turnId: input.turnId,
+      assistantMessageId: input.assistantMessageId,
+      state: assistantState,
+    });
+  });
+
+  response.on("close", unsubscribe);
+
+  try {
+    const runtime = await input.result;
+    assistantState = finalizeAssistantState(assistantState, runtime.assistantMessage);
+    store.saveAssistantState(input.assistantMessageId, assistantState);
+    const snapshot = input.commit(runtime, assistantState);
+    writeEvent({
+      type: "turn.committed",
+      turnId: input.turnId,
+      assistantMessageId: input.assistantMessageId,
+      snapshot,
+    });
+  } catch (error) {
+    assistantState = {
+      ...assistantState,
+      status: "error",
+      errorMessage: formatError(error),
+    };
+    store.saveAssistantState(input.assistantMessageId, assistantState);
+    writeEvent({
+      type: "assistant.patch",
+      turnId: input.turnId,
+      assistantMessageId: input.assistantMessageId,
+      state: assistantState,
+    });
+    writeEvent({
+      type: "turn.error",
+      turnId: input.turnId,
+      assistantMessageId: input.assistantMessageId,
+      message: formatError(error),
+    });
+  } finally {
+    unsubscribe();
+    input.dispose();
+    response.end();
+  }
+}
+
+function buildOptimisticRootTurnSnapshot(
+  snapshot: GraphSnapshot,
+  input: {
+    userMessageId: string;
+    assistantMessageId: string;
+    prompt: string;
+    machineId: string;
+    createdAt: string;
+  },
+) {
+  const messages = [
+    ...snapshot.messages,
+    {
+      id: input.userMessageId,
+      branchId: rootBranchId,
+      role: "user",
+      content: input.prompt,
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt: input.createdAt,
+    } satisfies MessageNode,
+    {
+      id: input.assistantMessageId,
+      branchId: rootBranchId,
+      role: "assistant",
+      content: "",
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt: input.createdAt,
+    } satisfies MessageNode,
+  ];
+
+  return {
+    branches: snapshot.branches,
+    messages,
+    edges: buildGraphEdges({
+      branches: snapshot.branches,
+      messages,
+    }),
+    assistantStates: {
+      ...snapshot.assistantStates,
+      [input.assistantMessageId]: createPendingAssistantState(),
+    },
+  } satisfies GraphSnapshot;
+}
+
+function buildOptimisticBranchCreationSnapshot(
+  snapshot: GraphSnapshot,
+  input: {
+    branchId: string;
+    userMessageId: string;
+    assistantMessageId: string;
+    input: CreateBranchInput;
+    createdAt: string;
+  },
+) {
+  const sourceMessage = snapshot.messages.find((message) => message.id === input.input.sourceMessageId);
+  if (!sourceMessage) {
+    throw new Error(`Unknown source message: ${input.input.sourceMessageId}`);
+  }
+
+  const { branchTitle, userMessageContent } = describeBranchCreation(input.input, sourceMessage);
+  const branch: Branch = {
+    id: input.branchId,
+    parentBranchId: sourceMessage.branchId,
+    sourceMessageId: sourceMessage.id,
+    sessionId: null,
+    machineId: sourceMessage.machineId,
+    title: branchTitle,
+    selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
+    startOffset: input.input.mode === "selection" ? input.input.startOffset ?? null : null,
+    endOffset: input.input.mode === "selection" ? input.input.endOffset ?? null : null,
+    createdAt: input.createdAt,
+  };
+  const messages = [
+    ...snapshot.messages,
+    {
+      id: input.userMessageId,
+      branchId: input.branchId,
+      role: "user",
+      content: userMessageContent,
+      sessionId: null,
+      machineId: sourceMessage.machineId,
+      createdAt: input.createdAt,
+    } satisfies MessageNode,
+    {
+      id: input.assistantMessageId,
+      branchId: input.branchId,
+      role: "assistant",
+      content: "",
+      sessionId: null,
+      machineId: sourceMessage.machineId,
+      createdAt: input.createdAt,
+    } satisfies MessageNode,
+  ];
+  const branches = [...snapshot.branches, branch];
+
+  return {
+    branches,
+    messages,
+    edges: buildGraphEdges({ branches, messages }),
+    assistantStates: {
+      ...snapshot.assistantStates,
+      [input.assistantMessageId]: createPendingAssistantState(),
+    },
+  } satisfies GraphSnapshot;
+}
+
+function buildOptimisticBranchTurnSnapshot(
+  snapshot: GraphSnapshot,
+  input: {
+    branchId: string;
+    userMessageId: string;
+    assistantMessageId: string;
+    prompt: string;
+    machineId: string;
+    createdAt: string;
+  },
+) {
+  const messages = [
+    ...snapshot.messages,
+    {
+      id: input.userMessageId,
+      branchId: input.branchId,
+      role: "user",
+      content: input.prompt,
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt: input.createdAt,
+    } satisfies MessageNode,
+    {
+      id: input.assistantMessageId,
+      branchId: input.branchId,
+      role: "assistant",
+      content: "",
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt: input.createdAt,
+    } satisfies MessageNode,
+  ];
+
+  return {
+    branches: snapshot.branches,
+    messages,
+    edges: buildGraphEdges({
+      branches: snapshot.branches,
+      messages,
+    }),
+    assistantStates: {
+      ...snapshot.assistantStates,
+      [input.assistantMessageId]: createPendingAssistantState(),
+    },
+  } satisfies GraphSnapshot;
+}
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : "Unknown server error";

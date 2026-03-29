@@ -17,6 +17,7 @@ import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, LoaderCircle, MoreHorizontal } from "lucide-react";
 import {
+  AssistantStreamState,
   DaemonDiagnostics,
   CreateBranchInput,
   CreateBranchTurnInput,
@@ -25,9 +26,15 @@ import {
   GraphSnapshot,
   MachineRecord,
   MessageNode,
+  TurnStreamEvent,
   UiConfig,
   UpdateNetInput,
   WorkspaceState,
+  buildGraphEdges,
+  createPendingAssistantState,
+  describeBranchCreation,
+  finalizeAssistantState,
+  makeId,
   rootBranchId,
 } from "@netchat/shared";
 import { create } from "zustand";
@@ -70,6 +77,7 @@ type BubbleComposerMode =
 
 type MessageNodeData = {
   message: MessageNode;
+  liveAssistantState: AssistantStreamState | null;
   isActiveMessage: boolean;
   hasSelectionDraft: boolean;
   selectionAnchors: MessageSelectionAnchor[];
@@ -89,6 +97,23 @@ type MessageSelectionAnchor = {
   startOffset: number;
   endOffset: number;
   isActive: boolean;
+};
+
+type ActiveStreamedTurn = {
+  turnId: string;
+  assistantMessageId: string;
+  optimisticSnapshot: GraphSnapshot;
+  isPending: boolean;
+};
+
+type PendingTurnMetadata = {
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  createdAt: string;
+  branchId?: string;
+  optimisticSnapshot: GraphSnapshot;
+  assistantState: AssistantStreamState;
 };
 
 const useComposerStore = create<{
@@ -126,6 +151,9 @@ function NetchatApp() {
   const [openNetMenuId, setOpenNetMenuId] = useState<string | null>(null);
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
   const [showNetHistory, setShowNetHistory] = useState(false);
+  const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
+  const [liveAssistantStates, setLiveAssistantStates] = useState<Record<string, AssistantStreamState>>({});
+  const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
 
   const workspaceQuery = useQuery({
     queryKey: ["workspace"],
@@ -152,7 +180,8 @@ function NetchatApp() {
   });
 
   const workspace = workspaceQuery.data;
-  const snapshot = graphQuery.data;
+  const persistedSnapshot = graphQuery.data;
+  const snapshot = activeStreamedTurn?.optimisticSnapshot ?? persistedSnapshot;
   const uiConfig = uiConfigQuery.data;
   const machines = machinesQuery.data ?? [];
   const onlineMachines = machines.filter((machine) => machine.status === "online");
@@ -221,95 +250,92 @@ function NetchatApp() {
         : true
       : Boolean(rootMachine);
 
-  const rootTurnMutation = useMutation({
-    mutationFn: async (input: CreateRootTurnInput) => {
-      logWeb(
-        "info",
-        `Sending root turn (${input.prompt.length} chars) to ${input.machineId ?? "auto-selected machine"}.`,
-      );
-      return request<GraphSnapshot>("/api/root-turn", {
-        method: "POST",
-        body: JSON.stringify(input),
-      });
-    },
-    onSuccess: async (nextSnapshot) => {
-      logWeb(
-        "info",
-        `Root turn completed. Graph now has ${nextSnapshot.messages.length} messages across ${nextSnapshot.branches.length} branches.`,
-      );
-      queryClient.setQueryData(["graph"], nextSnapshot);
-      setComposerValue("");
-      setSelectionDraft(null);
-      const latestAssistantMessageId = getLatestAssistantMessageId(nextSnapshot);
-      setSelectedMessageId(latestAssistantMessageId);
-      setActivePathMessageId(latestAssistantMessageId);
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-    },
-    onError: (error) => {
-      logWeb("error", `Root turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
-    },
-  });
+  async function runStreamedTurn(
+    path: string,
+    init: RequestInit,
+    logLabel: string,
+    optimisticTurn: PendingTurnMetadata,
+  ) {
+    try {
+      await streamRequest<TurnStreamEvent>(path, init, async (event) => {
+        if (event.type === "turn.bootstrap") {
+          logWeb("info", `${logLabel} started streaming.`);
+          setStreamErrorMessage(null);
+          setActiveStreamedTurn({
+            turnId: event.turnId,
+            assistantMessageId: event.assistantMessageId,
+            optimisticSnapshot: event.snapshot,
+            isPending: true,
+          });
+          setLiveAssistantStates((current) => ({
+            ...current,
+            [event.assistantMessageId]: event.assistantState,
+          }));
+          setSelectedMessageId(event.assistantMessageId);
+          setActivePathMessageId(event.assistantMessageId);
+          return;
+        }
 
-  const branchMutation = useMutation({
-    mutationFn: async (input: CreateBranchInput) => {
-      logWeb(
-        "info",
-        input.mode === "message"
-          ? `Branching from bubble ${input.sourceMessageId} with ${input.prompt.length} prompt chars.`
-          : `Branching from message ${input.sourceMessageId} with ${(input.selectedText ?? "").length} selected chars and ${input.prompt.length} prompt chars.`,
-      );
-      return request<GraphSnapshot>("/api/branches", {
-        method: "POST",
-        body: JSON.stringify(input),
-      });
-    },
-    onSuccess: async (nextSnapshot) => {
-      logWeb(
-        "info",
-        `Branch creation completed. Graph now has ${nextSnapshot.branches.length} branches.`,
-      );
-      queryClient.setQueryData(["graph"], nextSnapshot);
-      setComposerValue("");
-      setSelectionDraft(null);
-      const latestAssistantMessageId = getLatestAssistantMessageId(nextSnapshot);
-      setSelectedMessageId(latestAssistantMessageId);
-      setActivePathMessageId(latestAssistantMessageId);
-      clearBrowserSelection();
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-    },
-    onError: (error) => {
-      logWeb("error", `Branch creation failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
-    },
-  });
+        if (event.type === "assistant.patch") {
+          setLiveAssistantStates((current) => ({
+            ...current,
+            [event.assistantMessageId]: event.state,
+          }));
+          return;
+        }
 
-  const branchTurnMutation = useMutation({
-    mutationFn: async (variables: { branchId: string; input: CreateBranchTurnInput }) => {
-      logWeb(
-        "info",
-        `Sending branch turn for ${variables.branchId} (${variables.input.prompt.length} chars).`,
-      );
-      return request<GraphSnapshot>(`/api/branches/${variables.branchId}/turns`, {
-        method: "POST",
-        body: JSON.stringify(variables.input),
+        if (event.type === "turn.committed") {
+          queryClient.setQueryData(["graph"], event.snapshot);
+          const persistedAssistantState = event.snapshot.assistantStates?.[event.assistantMessageId] ?? null;
+          const committedMessage =
+            event.snapshot.messages.find((message) => message.id === event.assistantMessageId) ?? null;
+          setActiveStreamedTurn(null);
+          setLiveAssistantStates((current) => ({
+            ...current,
+            [event.assistantMessageId]:
+              persistedAssistantState ??
+              finalizeAssistantState(current[event.assistantMessageId], committedMessage?.content ?? ""),
+          }));
+          setSelectedMessageId(event.assistantMessageId);
+          setActivePathMessageId(event.assistantMessageId);
+          await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+          logWeb("info", `${logLabel} completed.`);
+          return;
+        }
+
+        setActiveStreamedTurn((current) =>
+          current?.turnId === event.turnId
+            ? {
+                ...current,
+                isPending: false,
+              }
+            : current,
+        );
+        setStreamErrorMessage(event.message);
+        logWeb("error", `${logLabel} failed: ${event.message}`);
       });
-    },
-    onSuccess: async (nextSnapshot) => {
-      logWeb(
-        "info",
-        `Branch turn completed. Graph now has ${nextSnapshot.messages.length} messages.`,
+    } catch (error) {
+      const message = formatErrorMessage(error) ?? "Unknown error";
+      setActiveStreamedTurn((current) =>
+        current?.turnId === optimisticTurn.turnId
+          ? {
+              ...current,
+              isPending: false,
+            }
+          : current,
       );
-      queryClient.setQueryData(["graph"], nextSnapshot);
-      setComposerValue("");
-      setSelectionDraft(null);
-      const latestAssistantMessageId = getLatestAssistantMessageId(nextSnapshot);
-      setSelectedMessageId(latestAssistantMessageId);
-      setActivePathMessageId(latestAssistantMessageId);
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-    },
-    onError: (error) => {
-      logWeb("error", `Branch turn failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
-    },
-  });
+      setLiveAssistantStates((current) => ({
+        ...current,
+        [optimisticTurn.assistantMessageId]: {
+          ...(current[optimisticTurn.assistantMessageId] ?? optimisticTurn.assistantState),
+          status: "error",
+          errorMessage: message,
+        },
+      }));
+      setStreamErrorMessage(message);
+      logWeb("error", `${logLabel} failed: ${message}`);
+    }
+  }
   const createNetMutation = useMutation({
     mutationFn: async (input: CreateNetInput) => {
       logWeb("info", `Creating a new net for workspace ${workspace?.workspaceId ?? "active"}.`);
@@ -399,8 +425,7 @@ function NetchatApp() {
       logWeb("error", `Deleting a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
-  const isThinking =
-    rootTurnMutation.isPending || branchMutation.isPending || branchTurnMutation.isPending;
+  const isThinking = activeStreamedTurn?.isPending ?? false;
 
   function focusComposer() {
     window.requestAnimationFrame(() => {
@@ -529,6 +554,7 @@ function NetchatApp() {
     }
 
     return buildFlowGraph({
+      liveAssistantStates,
       snapshot,
       activePathMessageId,
       onPickMessage: pickMessage,
@@ -541,6 +567,7 @@ function NetchatApp() {
     });
   }, [
     activePathMessageId,
+    liveAssistantStates,
     measuredNodeHeights,
     reportMessageNodeHeight,
     selectionDraft,
@@ -664,6 +691,30 @@ function NetchatApp() {
   }, [snapshot]);
 
   useEffect(() => {
+    if (!snapshot) {
+      setLiveAssistantStates({});
+      return;
+    }
+
+    const liveMessageIds = new Set(snapshot.messages.map((message) => message.id));
+    setLiveAssistantStates((current) => {
+      let changed = false;
+      const next: Record<string, AssistantStreamState> = {};
+
+      for (const [messageId, state] of Object.entries(current)) {
+        if (liveMessageIds.has(messageId)) {
+          next[messageId] = state;
+          continue;
+        }
+
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [snapshot]);
+
+  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         activateMessagePath(null);
@@ -756,50 +807,187 @@ function NetchatApp() {
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
 
+  function beginOptimisticTurn(optimisticTurn: PendingTurnMetadata) {
+    setActiveStreamedTurn({
+      turnId: optimisticTurn.turnId,
+      assistantMessageId: optimisticTurn.assistantMessageId,
+      optimisticSnapshot: optimisticTurn.optimisticSnapshot,
+      isPending: true,
+    });
+    setLiveAssistantStates((current) => ({
+      ...current,
+      [optimisticTurn.assistantMessageId]: optimisticTurn.assistantState,
+    }));
+    setSelectedMessageId(optimisticTurn.assistantMessageId);
+    setActivePathMessageId(optimisticTurn.assistantMessageId);
+  }
+
   function submitCurrentPrompt() {
     const prompt = composerValue.trim();
     if (prompt.length === 0) {
       return;
     }
 
+    setComposerValue("");
+    setSelectionDraft(null);
+    setStreamErrorMessage(null);
+    clearBrowserSelection();
+
     if (sendMode === "root" || sendMode === "continue-root") {
-      rootTurnMutation.mutate({
-        prompt,
-        machineId: rootMachine?.id,
-        selectedText: selectionForSelectedMessage?.selectedText,
-      });
+      const optimisticTurn =
+        snapshot && rootMachine
+          ? buildOptimisticRootStreamTurn(snapshot, {
+              machineId: rootMachine.id,
+              prompt,
+            })
+          : null;
+      if (optimisticTurn) {
+        beginOptimisticTurn(optimisticTurn);
+      }
+      void runStreamedTurn(
+        "/api/root-turn/stream",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            prompt,
+            machineId: rootMachine?.id,
+            selectedText: selectionForSelectedMessage?.selectedText,
+            clientTurnId: optimisticTurn?.turnId,
+            clientUserMessageId: optimisticTurn?.userMessageId,
+            clientAssistantMessageId: optimisticTurn?.assistantMessageId,
+            clientCreatedAt: optimisticTurn?.createdAt,
+          } satisfies CreateRootTurnInput),
+        },
+        "Root turn",
+        optimisticTurn ??
+          buildFallbackOptimisticTurn({
+            prompt,
+            machineId: rootMachine?.id ?? "machine_pending",
+            snapshot,
+          }),
+      );
       return;
     }
 
     if (sendMode === "continue-branch" && selectedBranch) {
-      branchTurnMutation.mutate({
-        branchId: selectedBranch.id,
-        input: {
-          prompt,
-          selectedText: selectionForSelectedMessage?.selectedText,
+      const optimisticTurn =
+        snapshot && runtimeMachine
+          ? buildOptimisticBranchTurnStreamTurn(snapshot, {
+              branchId: selectedBranch.id,
+              machineId: runtimeMachine.id,
+              prompt,
+            })
+          : null;
+      if (optimisticTurn) {
+        beginOptimisticTurn(optimisticTurn);
+      }
+      void runStreamedTurn(
+        `/api/branches/${selectedBranch.id}/turns/stream`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            prompt,
+            selectedText: selectionForSelectedMessage?.selectedText,
+            clientTurnId: optimisticTurn?.turnId,
+            clientUserMessageId: optimisticTurn?.userMessageId,
+            clientAssistantMessageId: optimisticTurn?.assistantMessageId,
+            clientCreatedAt: optimisticTurn?.createdAt,
+          } satisfies CreateBranchTurnInput),
         },
-      });
+        "Branch turn",
+        optimisticTurn ??
+          buildFallbackOptimisticTurn({
+            prompt,
+            machineId: runtimeMachine?.id ?? "machine_pending",
+            snapshot,
+          }),
+      );
       return;
     }
 
     if (sendMode === "branch-from-selection" && selectedMessage && selectionForSelectedMessage) {
-      branchMutation.mutate({
-        sourceMessageId: selectedMessage.id,
-        mode: "selection",
-        selectedText: selectionForSelectedMessage.selectedText,
-        startOffset: selectionForSelectedMessage.startOffset,
-        endOffset: selectionForSelectedMessage.endOffset,
-        prompt,
-      });
+      const optimisticTurn =
+        snapshot && selectedMessage.machineId
+          ? buildOptimisticBranchCreationStreamTurn(snapshot, {
+              input: {
+                sourceMessageId: selectedMessage.id,
+                mode: "selection",
+                selectedText: selectionForSelectedMessage.selectedText,
+                startOffset: selectionForSelectedMessage.startOffset,
+                endOffset: selectionForSelectedMessage.endOffset,
+                prompt,
+              } satisfies CreateBranchInput,
+            })
+          : null;
+      if (optimisticTurn) {
+        beginOptimisticTurn(optimisticTurn);
+      }
+      void runStreamedTurn(
+        "/api/branches/stream",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sourceMessageId: selectedMessage.id,
+            mode: "selection",
+            selectedText: selectionForSelectedMessage.selectedText,
+            startOffset: selectionForSelectedMessage.startOffset,
+            endOffset: selectionForSelectedMessage.endOffset,
+            prompt,
+            clientTurnId: optimisticTurn?.turnId,
+            clientUserMessageId: optimisticTurn?.userMessageId,
+            clientAssistantMessageId: optimisticTurn?.assistantMessageId,
+            clientCreatedAt: optimisticTurn?.createdAt,
+            clientBranchId: optimisticTurn?.branchId,
+          } satisfies CreateBranchInput),
+        },
+        "Branch creation",
+        optimisticTurn ??
+          buildFallbackOptimisticTurn({
+            prompt,
+            machineId: selectedMessage.machineId ?? "machine_pending",
+            snapshot,
+          }),
+      );
       return;
     }
 
     if (sendMode === "branch-from-message" && selectedMessage) {
-      branchMutation.mutate({
-        sourceMessageId: selectedMessage.id,
-        mode: "message",
-        prompt,
-      });
+      const optimisticTurn =
+        snapshot && selectedMessage.machineId
+          ? buildOptimisticBranchCreationStreamTurn(snapshot, {
+              input: {
+                sourceMessageId: selectedMessage.id,
+                mode: "message",
+                prompt,
+              } satisfies CreateBranchInput,
+            })
+          : null;
+      if (optimisticTurn) {
+        beginOptimisticTurn(optimisticTurn);
+      }
+      void runStreamedTurn(
+        "/api/branches/stream",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sourceMessageId: selectedMessage.id,
+            mode: "message",
+            prompt,
+            clientTurnId: optimisticTurn?.turnId,
+            clientUserMessageId: optimisticTurn?.userMessageId,
+            clientAssistantMessageId: optimisticTurn?.assistantMessageId,
+            clientCreatedAt: optimisticTurn?.createdAt,
+            clientBranchId: optimisticTurn?.branchId,
+          } satisfies CreateBranchInput),
+        },
+        "Branch creation",
+        optimisticTurn ??
+          buildFallbackOptimisticTurn({
+            prompt,
+            machineId: selectedMessage.machineId ?? "machine_pending",
+            snapshot,
+          }),
+      );
     }
   }
 
@@ -844,9 +1032,10 @@ function NetchatApp() {
       : selectedMessage
         ? "Continue lane"
         : "Main canvas";
-  const composerErrorMessage = formatErrorMessage(
-    rootTurnMutation.error ?? branchMutation.error ?? branchTurnMutation.error,
-  );
+  const composerErrorMessage =
+    activeStreamedTurn && !activeStreamedTurn.isPending
+      ? liveAssistantStates[activeStreamedTurn.assistantMessageId]?.errorMessage ?? streamErrorMessage
+      : streamErrorMessage;
   const netErrorMessage = formatErrorMessage(
     createNetMutation.error ??
       selectNetMutation.error ??
@@ -1180,11 +1369,7 @@ function NetchatApp() {
                     disabled={sendDisabled}
                     type="submit"
                   >
-                    {isThinking ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <ArrowUp className="size-4" />
-                    )}
+                    <ArrowUp className="size-4" />
                   </Button>
                 </div>
               </div>
@@ -1239,11 +1424,7 @@ function NetchatApp() {
                   disabled={sendDisabled}
                   type="submit"
                 >
-                  {isThinking ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <ArrowUp className="size-4" />
-                  )}
+                  <ArrowUp className="size-4" />
                 </Button>
               </div>
 
@@ -1304,6 +1485,13 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const roleLabel = isUser ? "User" : "Claude";
   const bubbleRef = useRef<HTMLDivElement>(null);
   const sessionIdLabel = data.message.sessionId ?? "pending";
+  const liveAssistantState = !isUser ? data.liveAssistantState : null;
+  const responseContent = !isUser
+    ? liveAssistantState?.responseText || data.message.content
+    : data.message.content;
+  const canSelectAssistantResponse = !liveAssistantState || liveAssistantState.status === "complete";
+  const showPendingAssistantState =
+    !isUser && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
 
   useEffect(() => {
     const bubbleElement = bubbleRef.current;
@@ -1366,6 +1554,10 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
             ? data.isActiveMessage
               ? "border-t-[var(--block-slate)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(58,64,66,0.12)]"
               : "border-t-[var(--block-slate)]"
+            : liveAssistantState?.status === "error"
+              ? "border-dashed border-rose-300 border-t-rose-500 bg-rose-50 shadow-[10px_10px_0_rgba(190,24,93,0.1)]"
+            : showPendingAssistantState
+              ? "border-dashed border-[var(--block-ochre)] border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.12)]"
             : data.hasSelectionDraft
               ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
             : data.isActiveMessage
@@ -1399,17 +1591,22 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         }}
       >
         <div className="relative flex items-center justify-between gap-4 border-b border-[var(--node-border)] px-5 py-4">
-          <div
-            className={cn(
-              "editorial-meta",
-              isUser
-                ? "text-[rgba(58,64,66,0.72)]"
-                : data.hasSelectionDraft
-                  ? "text-[var(--block-ochre)]"
-                  : "text-[var(--block-green)]",
-            )}
-          >
-            {roleLabel}
+          <div className="flex items-center gap-2">
+            <div
+              className={cn(
+                "editorial-meta",
+                isUser
+                  ? "text-[rgba(58,64,66,0.72)]"
+                  : showPendingAssistantState || data.hasSelectionDraft
+                    ? "text-[var(--block-ochre)]"
+                    : liveAssistantState?.status === "error"
+                      ? "text-rose-700"
+                      : "text-[var(--block-green)]",
+              )}
+            >
+              {roleLabel}
+            </div>
+            {showPendingAssistantState ? <LoaderCircle className="size-3.5 animate-spin text-[var(--block-ochre)]" /> : null}
           </div>
           <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
             {formatMessageTime(data.message.createdAt)}
@@ -1417,13 +1614,125 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         </div>
 
         <div className="relative px-5 py-5">
-          <SelectableMessage
-            content={data.message.content}
-            anchors={data.selectionAnchors}
-            disabled={isUser}
-            onActivateAnchor={data.onActivateMessagePath}
-            onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
-          />
+          {!isUser && liveAssistantState ? (
+            <div className="space-y-4">
+              {liveAssistantState.blocks.map((block) => (
+                <details
+                  key={block.id}
+                  open
+                  className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-4 py-3">
+                    <span className="editorial-meta text-[rgba(26,26,26,0.66)]">
+                      {block.kind === "thinking" ? "Thinking" : `Tool · ${block.toolName}`}
+                    </span>
+                    <span
+                      className={cn(
+                        "editorial-meta",
+                        block.kind === "thinking"
+                          ? block.status === "complete"
+                            ? "text-[rgba(26,26,26,0.44)]"
+                            : "text-[var(--block-ochre)]"
+                          : block.status === "error"
+                            ? "text-rose-700"
+                            : block.status === "complete"
+                              ? "text-[rgba(26,26,26,0.44)]"
+                              : "text-[var(--block-ochre)]",
+                      )}
+                    >
+                      {block.status === "error"
+                        ? "Error"
+                        : block.status === "complete"
+                          ? "Complete"
+                          : "Streaming"}
+                    </span>
+                  </summary>
+                  <div className="space-y-3 px-4 py-4">
+                    {block.kind === "thinking" ? (
+                      <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
+                        {block.text || "Waiting for Claude to think..."}
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
+                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[12px] leading-6 text-[rgba(26,26,26,0.78)]">
+                            {block.inputText || "Waiting for tool arguments..."}
+                          </pre>
+                        </div>
+                        {block.outputText ? (
+                          <div>
+                            <div className="editorial-meta text-[rgba(26,26,26,0.44)]">
+                              {block.isError ? "Tool error" : "Tool result"}
+                            </div>
+                            <pre
+                              className={cn(
+                                "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[12px] leading-6",
+                                block.isError
+                                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                                  : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
+                              )}
+                            >
+                              {block.outputText}
+                            </pre>
+                          </div>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                </details>
+              ))}
+
+              <div
+                className={cn(
+                  "border px-4 py-4",
+                  showPendingAssistantState
+                    ? "border-dashed border-[var(--block-ochre)] bg-[rgba(255,249,242,0.72)]"
+                    : liveAssistantState.status === "error"
+                      ? "border-rose-200 bg-rose-50"
+                      : "border-[var(--node-border)] bg-white",
+                )}
+              >
+                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Response</div>
+                <div className="mt-3">
+                  {responseContent ? (
+                    canSelectAssistantResponse ? (
+                      <SelectableMessage
+                        content={responseContent}
+                        anchors={data.selectionAnchors}
+                        disabled={false}
+                        onActivateAnchor={data.onActivateMessagePath}
+                        onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
+                      />
+                    ) : (
+                      <div className="message-copy whitespace-pre-wrap text-[17px] font-medium leading-9 text-[var(--text-main)]">
+                        {responseContent}
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex min-h-[72px] items-center gap-3 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
+                      <LoaderCircle className="size-4 animate-spin text-[var(--block-ochre)]" />
+                      <span>Waiting for Claude to respond…</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {liveAssistantState.errorMessage ? (
+                <div className="border border-rose-200 bg-rose-50 px-4 py-3 text-[13px] leading-6 text-rose-700">
+                  {liveAssistantState.errorMessage}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <SelectableMessage
+              content={responseContent}
+              anchors={data.selectionAnchors}
+              disabled={isUser}
+              onActivateAnchor={data.onActivateMessagePath}
+              onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -1594,6 +1903,7 @@ function makeSelectionAnchorHandleId(branchId: string) {
 }
 
 function buildFlowGraph({
+  liveAssistantStates,
   snapshot,
   activePathMessageId,
   selectionDraft,
@@ -1604,6 +1914,7 @@ function buildFlowGraph({
   onSelectionDraft,
   showSessionIds,
 }: {
+  liveAssistantStates: Record<string, AssistantStreamState>;
   snapshot: GraphSnapshot;
   activePathMessageId: string | null;
   selectionDraft: SelectionDraft | null;
@@ -1736,6 +2047,7 @@ function buildFlowGraph({
         targetPosition: Position.Top,
         data: {
           message,
+          liveAssistantState: liveAssistantStates[message.id] ?? snapshot.assistantStates[message.id] ?? null,
           isActiveMessage: message.id === activePathMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
           selectionAnchors: selectionAnchorsByMessageId.get(message.id) ?? [],
@@ -1903,6 +2215,222 @@ function getLatestAssistantMessageId(snapshot: GraphSnapshot) {
   return null;
 }
 
+function buildOptimisticRootStreamTurn(
+  snapshot: GraphSnapshot,
+  input: {
+    prompt: string;
+    machineId: string;
+  },
+): PendingTurnMetadata {
+  const turnId = makeId("turn");
+  const userMessageId = makeId("msg");
+  const assistantMessageId = makeId("msg");
+  const createdAt = new Date().toISOString();
+  const assistantState = createPendingAssistantState();
+  const messages = [
+    ...snapshot.messages,
+    {
+      id: userMessageId,
+      branchId: rootBranchId,
+      role: "user",
+      content: input.prompt,
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt,
+    } satisfies MessageNode,
+    {
+      id: assistantMessageId,
+      branchId: rootBranchId,
+      role: "assistant",
+      content: "",
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt,
+    } satisfies MessageNode,
+  ];
+
+  return {
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    createdAt,
+    assistantState,
+    optimisticSnapshot: {
+      branches: snapshot.branches,
+      messages,
+      edges: buildGraphEdges({
+        branches: snapshot.branches,
+        messages,
+      }),
+      assistantStates: {
+        ...snapshot.assistantStates,
+        [assistantMessageId]: assistantState,
+      },
+    },
+  };
+}
+
+function buildOptimisticBranchCreationStreamTurn(
+  snapshot: GraphSnapshot,
+  input: {
+    input: CreateBranchInput;
+  },
+): PendingTurnMetadata {
+  const sourceMessage = snapshot.messages.find((message) => message.id === input.input.sourceMessageId);
+  if (!sourceMessage) {
+    throw new Error(`Unknown source message: ${input.input.sourceMessageId}`);
+  }
+
+  const turnId = makeId("turn");
+  const branchId = makeId("branch");
+  const userMessageId = makeId("msg");
+  const assistantMessageId = makeId("msg");
+  const createdAt = new Date().toISOString();
+  const assistantState = createPendingAssistantState();
+  const { branchTitle, userMessageContent } = describeBranchCreation(input.input, sourceMessage);
+  const branch = {
+    id: branchId,
+    parentBranchId: sourceMessage.branchId,
+    sourceMessageId: sourceMessage.id,
+    sessionId: null,
+    machineId: sourceMessage.machineId,
+    title: branchTitle,
+    selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
+    startOffset: input.input.mode === "selection" ? input.input.startOffset ?? null : null,
+    endOffset: input.input.mode === "selection" ? input.input.endOffset ?? null : null,
+    createdAt,
+  };
+  const branches = [...snapshot.branches, branch];
+  const messages = [
+    ...snapshot.messages,
+    {
+      id: userMessageId,
+      branchId,
+      role: "user",
+      content: userMessageContent,
+      sessionId: null,
+      machineId: sourceMessage.machineId,
+      createdAt,
+    } satisfies MessageNode,
+    {
+      id: assistantMessageId,
+      branchId,
+      role: "assistant",
+      content: "",
+      sessionId: null,
+      machineId: sourceMessage.machineId,
+      createdAt,
+    } satisfies MessageNode,
+  ];
+
+  return {
+    turnId,
+    branchId,
+    userMessageId,
+    assistantMessageId,
+    createdAt,
+    assistantState,
+    optimisticSnapshot: {
+      branches,
+      messages,
+      edges: buildGraphEdges({ branches, messages }),
+      assistantStates: {
+        ...snapshot.assistantStates,
+        [assistantMessageId]: assistantState,
+      },
+    },
+  };
+}
+
+function buildOptimisticBranchTurnStreamTurn(
+  snapshot: GraphSnapshot,
+  input: {
+    branchId: string;
+    prompt: string;
+    machineId: string;
+  },
+): PendingTurnMetadata {
+  const turnId = makeId("turn");
+  const userMessageId = makeId("msg");
+  const assistantMessageId = makeId("msg");
+  const createdAt = new Date().toISOString();
+  const assistantState = createPendingAssistantState();
+  const messages = [
+    ...snapshot.messages,
+    {
+      id: userMessageId,
+      branchId: input.branchId,
+      role: "user",
+      content: input.prompt,
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt,
+    } satisfies MessageNode,
+    {
+      id: assistantMessageId,
+      branchId: input.branchId,
+      role: "assistant",
+      content: "",
+      sessionId: null,
+      machineId: input.machineId,
+      createdAt,
+    } satisfies MessageNode,
+  ];
+
+  return {
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    createdAt,
+    assistantState,
+    optimisticSnapshot: {
+      branches: snapshot.branches,
+      messages,
+      edges: buildGraphEdges({
+        branches: snapshot.branches,
+        messages,
+      }),
+      assistantStates: {
+        ...snapshot.assistantStates,
+        [assistantMessageId]: assistantState,
+      },
+    },
+  };
+}
+
+function buildFallbackOptimisticTurn(input: {
+  prompt: string;
+  machineId: string;
+  snapshot: GraphSnapshot | undefined;
+}): PendingTurnMetadata {
+  return buildOptimisticRootStreamTurn(input.snapshot ?? createEmptyRootSnapshot(), {
+    prompt: input.prompt,
+    machineId: input.machineId,
+  });
+}
+
+function createEmptyRootSnapshot(): GraphSnapshot {
+  return {
+    branches: [
+      {
+        id: rootBranchId,
+        parentBranchId: null,
+        sourceMessageId: null,
+        sessionId: null,
+        machineId: null,
+        title: "Root session",
+        selectedText: null,
+        startOffset: null,
+        endOffset: null,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    messages: [],
+    edges: [],
+    assistantStates: {},
+  };
+}
+
 function formatNetTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -2006,6 +2534,60 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+async function streamRequest<T>(path: string, init: RequestInit, onEvent: (event: T) => Promise<void> | void) {
+  const headers = new Headers(init.headers);
+  const hasBody = init.body !== undefined && init.body !== null;
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+
+  if (hasBody && !isFormData && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    ...init,
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, "Streaming request failed"));
+  }
+
+  if (!response.body) {
+    throw new Error("The streaming response body was empty.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), {
+      stream: !done,
+    });
+
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+
+      if (line) {
+        await onEvent(JSON.parse(line) as T);
+      }
+
+      newlineIndex = buffer.indexOf("\n");
+    }
+
+    if (done) {
+      const tail = buffer.trim();
+      if (tail) {
+        await onEvent(JSON.parse(tail) as T);
+      }
+      break;
+    }
+  }
 }
 
 async function readErrorMessage(response: Response, fallback: string) {

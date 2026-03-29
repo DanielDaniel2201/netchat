@@ -1,5 +1,6 @@
 import {
   CompleteMachineJobInput,
+  CreateMachineJobEventInput,
   CreateMachineHeartbeatInput,
   CreateMachineRegisterInput,
   MachineJob,
@@ -7,6 +8,7 @@ import {
   MachineRegistration,
   PairingSession,
   RuntimeResponse,
+  RuntimeStreamEvent,
   makeId,
   nowIso,
 } from "@netchat/shared";
@@ -50,6 +52,15 @@ type InFlightJob = {
   timeout: NodeJS.Timeout;
 };
 
+type JobEventListener = (event: RuntimeStreamEvent) => void;
+
+export type StreamingJobHandle = {
+  jobId: string;
+  result: Promise<RuntimeResponse>;
+  subscribe: (listener: JobEventListener) => () => void;
+  dispose: () => void;
+};
+
 type PairingEntry = {
   code: string;
   expiresAt: string;
@@ -61,6 +72,8 @@ export class MachineStore {
   private readonly machines = new Map<string, RegisteredMachine>();
   private readonly pendingJobs = new Map<string, PendingJob[]>();
   private readonly inFlightJobs = new Map<string, InFlightJob>();
+  private readonly jobEventHistory = new Map<string, RuntimeStreamEvent[]>();
+  private readonly jobEventListeners = new Map<string, Set<JobEventListener>>();
   private readonly localMode = (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true";
   private readonly onlineThresholdMs = Number(process.env.NETCHAT_MACHINE_ONLINE_THRESHOLD_MS ?? 30000);
   private readonly jobTimeoutMs = Number(process.env.NETCHAT_JOB_TIMEOUT_MS ?? 600000);
@@ -187,6 +200,12 @@ export class MachineStore {
   }
 
   enqueueJob(machineId: string, job: EnqueuedJob): Promise<RuntimeResponse> {
+    const handle = this.enqueueStreamingJob(machineId, job);
+    handle.result.finally(handle.dispose);
+    return handle.result;
+  }
+
+  enqueueStreamingJob(machineId: string, job: EnqueuedJob): StreamingJobHandle {
     const machine = this.resolveMachine(machineId);
     const pending = this.pendingJobs.get(machine.id) ?? [];
     const base = {
@@ -216,19 +235,23 @@ export class MachineStore {
 
     pending.push(queuedJob);
     this.pendingJobs.set(machine.id, pending);
+    this.jobEventHistory.set(queuedJob.id, []);
+    this.jobEventListeners.set(queuedJob.id, new Set());
     this.diagnostics?.log(
       "info",
       `Enqueued job ${queuedJob.id} (${queuedJob.kind}) for ${machine.name}. Pending jobs: ${pending.length}.`,
     );
     this.syncDiagnostics();
 
-    return new Promise<RuntimeResponse>((resolve, reject) => {
+    const result = new Promise<RuntimeResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.inFlightJobs.delete(queuedJob.id);
         this.pendingJobs.set(
           machine.id,
           (this.pendingJobs.get(machine.id) ?? []).filter((candidate) => candidate.id !== queuedJob.id),
         );
+        this.jobEventHistory.delete(queuedJob.id);
+        this.jobEventListeners.delete(queuedJob.id);
         this.diagnostics?.log(
           "error",
           `Job ${queuedJob.id} (${queuedJob.kind}) timed out after ${formatDuration(this.jobTimeoutMs)} on ${machine.name}.`,
@@ -248,6 +271,28 @@ export class MachineStore {
       });
       this.syncDiagnostics();
     });
+
+    return {
+      jobId: queuedJob.id,
+      result,
+      subscribe: (listener) => {
+        const listeners = this.jobEventListeners.get(queuedJob.id);
+        const history = this.jobEventHistory.get(queuedJob.id) ?? [];
+
+        listeners?.add(listener);
+        for (const event of history) {
+          listener(event);
+        }
+
+        return () => {
+          listeners?.delete(listener);
+        };
+      },
+      dispose: () => {
+        this.jobEventHistory.delete(queuedJob.id);
+        this.jobEventListeners.delete(queuedJob.id);
+      },
+    };
   }
 
   claimJob(machineId: string, machineSecret: string): MachineJob | null {
@@ -315,6 +360,27 @@ export class MachineStore {
       ...input.response,
       machineId: input.machineId,
     });
+  }
+
+  recordJobEvent(jobId: string, input: CreateMachineJobEventInput): void {
+    this.authenticate(input.machineId, input.machineSecret).lastSeenAt = nowIso();
+    const inFlight = this.inFlightJobs.get(jobId);
+    if (!inFlight) {
+      throw new Error("Unknown machine job.");
+    }
+
+    if (inFlight.machineId !== input.machineId) {
+      throw new Error("Machine is not allowed to publish events for this job.");
+    }
+
+    const history = this.jobEventHistory.get(jobId);
+    if (history) {
+      history.push(input.event);
+    }
+
+    for (const listener of this.jobEventListeners.get(jobId) ?? []) {
+      listener(input.event);
+    }
   }
 
   private authenticate(machineId: string, machineSecret: string): RegisteredMachine {

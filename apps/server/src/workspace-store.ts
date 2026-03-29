@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  AssistantStreamState,
   Branch,
   CreateBranchInput,
   CreateNetInput,
@@ -162,23 +163,53 @@ export class WorkspaceStore {
     return this.getWorkspaceState();
   }
 
-  applyRootTurn(prompt: string, runtime: RuntimeResponse): GraphSnapshot {
+  applyRootTurn(
+    prompt: string,
+    runtime: RuntimeResponse,
+    options?: {
+      userMessageId?: string;
+      assistantMessageId?: string;
+      assistantState?: AssistantStreamState;
+    },
+  ): GraphSnapshot {
     const shouldRetitle = this.activeStore.getSnapshot().messages.length === 0;
-    const nextSnapshot = this.activeStore.applyRootTurn(prompt, runtime);
+    const nextSnapshot = this.activeStore.applyRootTurn(prompt, runtime, options);
     this.touchActiveNet(shouldRetitle ? prompt : null);
     return nextSnapshot;
   }
 
-  applyBranchCreation(input: CreateBranchInput, runtime: RuntimeResponse): GraphSnapshot {
-    const nextSnapshot = this.activeStore.applyBranchCreation(input, runtime);
+  applyBranchCreation(
+    input: CreateBranchInput,
+    runtime: RuntimeResponse,
+    options?: {
+      branchId?: string;
+      userMessageId?: string;
+      assistantMessageId?: string;
+      assistantState?: AssistantStreamState;
+    },
+  ): GraphSnapshot {
+    const nextSnapshot = this.activeStore.applyBranchCreation(input, runtime, options);
     this.touchActiveNet();
     return nextSnapshot;
   }
 
-  applyBranchTurn(branchId: string, prompt: string, runtime: RuntimeResponse): GraphSnapshot {
-    const nextSnapshot = this.activeStore.applyBranchTurn(branchId, prompt, runtime);
+  applyBranchTurn(
+    branchId: string,
+    prompt: string,
+    runtime: RuntimeResponse,
+    options?: {
+      userMessageId?: string;
+      assistantMessageId?: string;
+      assistantState?: AssistantStreamState;
+    },
+  ): GraphSnapshot {
+    const nextSnapshot = this.activeStore.applyBranchTurn(branchId, prompt, runtime, options);
     this.touchActiveNet();
     return nextSnapshot;
+  }
+
+  saveAssistantState(messageId: string, state: AssistantStreamState) {
+    this.activeStore.saveAssistantState(messageId, state);
   }
 
   private loadManifest(): WorkspaceManifest {

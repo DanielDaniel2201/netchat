@@ -7,12 +7,14 @@ import {
   CreateBranchRuntimeRequest,
   ContinueBranchRuntimeRequest,
   CreateMachineHeartbeatInput,
+  CreateMachineJobEventInput,
   CreateMachineRegisterInput,
   MachineJob,
   MachineRegistration,
   RootTurnRuntimeRequest,
   RuntimeEnvironment,
   RuntimeResponse,
+  RuntimeStreamEvent,
 } from "@netchat/shared";
 
 type MachineState = {
@@ -40,9 +42,18 @@ export class MachineClient {
     private readonly runtime: {
       getMode(): "mock" | "claude";
       getWorkingDirectory(): string;
-      runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse>;
-      createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse>;
-      continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse>;
+      runRootTurn(
+        input: RootTurnRuntimeRequest,
+        options?: { onEvent?: (event: RuntimeStreamEvent) => void },
+      ): Promise<RuntimeResponse>;
+      createBranch(
+        input: CreateBranchRuntimeRequest,
+        options?: { onEvent?: (event: RuntimeStreamEvent) => void },
+      ): Promise<RuntimeResponse>;
+      continueBranch(
+        input: ContinueBranchRuntimeRequest,
+        options?: { onEvent?: (event: RuntimeStreamEvent) => void },
+      ): Promise<RuntimeResponse>;
     },
     private readonly detectEnvironment: () => Promise<RuntimeEnvironment>,
     private readonly diagnostics?: {
@@ -223,20 +234,33 @@ export class MachineClient {
       return;
     }
 
+    let eventPublishChain = Promise.resolve();
+
     try {
       let response: RuntimeResponse;
+      const emitEvent = (event: RuntimeStreamEvent) => {
+        eventPublishChain = eventPublishChain.then(() => this.publishJobEvent(job.id, event));
+      };
 
       switch (job.kind) {
         case "root-turn":
-          response = await this.runtime.runRootTurn(job.payload);
+          response = await this.runtime.runRootTurn(job.payload, {
+            onEvent: emitEvent,
+          });
           break;
         case "branch-create":
-          response = await this.runtime.createBranch(job.payload);
+          response = await this.runtime.createBranch(job.payload, {
+            onEvent: emitEvent,
+          });
           break;
         case "branch-turn":
-          response = await this.runtime.continueBranch(job.payload);
+          response = await this.runtime.continueBranch(job.payload, {
+            onEvent: emitEvent,
+          });
           break;
       }
+
+      await eventPublishChain;
 
       this.diagnostics?.log(
         "info",
@@ -257,6 +281,7 @@ export class MachineClient {
       this.diagnostics?.clearError();
       this.diagnostics?.recordServerContact(`Completed job ${job.id}.`);
     } catch (error) {
+      await eventPublishChain;
       const message =
         error instanceof Error ? error.message : "Unknown daemon execution error";
       this.diagnostics?.recordError(
@@ -281,6 +306,26 @@ export class MachineClient {
         );
         throw reportError;
       }
+    }
+  }
+
+  private async publishJobEvent(jobId: string, event: RuntimeStreamEvent) {
+    if (!this.state) {
+      return;
+    }
+
+    try {
+      await this.request(`/api/daemon/jobs/${jobId}/events`, {
+        method: "POST",
+        body: JSON.stringify({
+          machineId: this.state.machineId,
+          machineSecret: this.state.machineSecret,
+          event,
+        } satisfies CreateMachineJobEventInput),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown job event reporting error";
+      this.diagnostics?.log("warn", `Streaming event delivery failed for job ${jobId}: ${message}`);
     }
   }
 

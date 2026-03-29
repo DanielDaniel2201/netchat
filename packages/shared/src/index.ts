@@ -36,6 +36,7 @@ export type GraphSnapshot = {
   branches: Branch[];
   messages: MessageNode[];
   edges: GraphEdge[];
+  assistantStates: Record<string, AssistantStreamState>;
 };
 
 export type WorkspaceNetSummary = {
@@ -178,6 +179,39 @@ export const completeMachineJobInputSchema = z.object({
 
 export type CompleteMachineJobInput = z.infer<typeof completeMachineJobInputSchema>;
 
+export type RuntimeStreamEvent =
+  | {
+      type: "thinking.update";
+      blockId: string;
+      order: number;
+      text: string;
+      isComplete: boolean;
+    }
+  | {
+      type: "tool.update";
+      blockId: string;
+      order: number;
+      toolCallId: string;
+      toolName: string;
+      inputText: string;
+      outputText: string;
+      isComplete: boolean;
+      isError: boolean;
+    }
+  | {
+      type: "response.update";
+      text: string;
+      isComplete: boolean;
+    };
+
+export const createMachineJobEventInputSchema = z.object({
+  machineId: z.string().min(1),
+  machineSecret: z.string().min(1),
+  event: z.custom<RuntimeStreamEvent>(),
+});
+
+export type CreateMachineJobEventInput = z.infer<typeof createMachineJobEventInputSchema>;
+
 export type MachineJob =
   | {
       id: string;
@@ -200,10 +234,23 @@ export type MachineJob =
 
 export const rootBranchId = "branch_root";
 
+export const clientStreamTurnMetadataSchema = z.object({
+  clientTurnId: z.string().trim().min(1).max(80).optional(),
+  clientUserMessageId: z.string().trim().min(1).max(80).optional(),
+  clientAssistantMessageId: z.string().trim().min(1).max(80).optional(),
+  clientCreatedAt: z.string().trim().min(1).max(80).optional(),
+});
+
+export type ClientStreamTurnMetadata = z.infer<typeof clientStreamTurnMetadataSchema>;
+
 export const createRootTurnInputSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
   machineId: z.string().trim().min(1).optional(),
   selectedText: z.string().trim().max(1000).optional(),
+  clientTurnId: clientStreamTurnMetadataSchema.shape.clientTurnId,
+  clientUserMessageId: clientStreamTurnMetadataSchema.shape.clientUserMessageId,
+  clientAssistantMessageId: clientStreamTurnMetadataSchema.shape.clientAssistantMessageId,
+  clientCreatedAt: clientStreamTurnMetadataSchema.shape.clientCreatedAt,
 });
 
 export type CreateRootTurnInput = z.infer<typeof createRootTurnInputSchema>;
@@ -216,6 +263,11 @@ export const createBranchInputSchema = z
     startOffset: z.number().int().nonnegative().optional(),
     endOffset: z.number().int().positive().optional(),
     prompt: z.string().trim().max(4000).default(""),
+    clientTurnId: clientStreamTurnMetadataSchema.shape.clientTurnId,
+    clientUserMessageId: clientStreamTurnMetadataSchema.shape.clientUserMessageId,
+    clientAssistantMessageId: clientStreamTurnMetadataSchema.shape.clientAssistantMessageId,
+    clientCreatedAt: clientStreamTurnMetadataSchema.shape.clientCreatedAt,
+    clientBranchId: z.string().trim().min(1).max(80).optional(),
   })
   .superRefine((input, ctx) => {
     if (input.mode === "selection") {
@@ -270,6 +322,10 @@ export type CreateBranchInput = z.infer<typeof createBranchInputSchema>;
 export const createBranchTurnInputSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
   selectedText: z.string().trim().max(1000).optional(),
+  clientTurnId: clientStreamTurnMetadataSchema.shape.clientTurnId,
+  clientUserMessageId: clientStreamTurnMetadataSchema.shape.clientUserMessageId,
+  clientAssistantMessageId: clientStreamTurnMetadataSchema.shape.clientAssistantMessageId,
+  clientCreatedAt: clientStreamTurnMetadataSchema.shape.clientCreatedAt,
 });
 
 export type CreateBranchTurnInput = z.infer<typeof createBranchTurnInputSchema>;
@@ -305,6 +361,81 @@ export type RuntimeResponse = {
   assistantMessage: string;
   machineId: string;
 };
+
+export type AssistantStreamBlock =
+  | {
+      id: string;
+      order: number;
+      kind: "thinking";
+      text: string;
+      status: "streaming" | "complete";
+    }
+  | {
+      id: string;
+      order: number;
+      kind: "tool_call";
+      toolCallId: string;
+      toolName: string;
+      inputText: string;
+      outputText: string;
+      isError: boolean;
+      status: "streaming" | "complete" | "error";
+    };
+
+export type AssistantStreamState = {
+  status: "pending" | "streaming" | "complete" | "error";
+  blocks: AssistantStreamBlock[];
+  responseText: string;
+  errorMessage: string | null;
+};
+
+export function createPendingAssistantState(): AssistantStreamState {
+  return {
+    status: "pending",
+    blocks: [],
+    responseText: "",
+    errorMessage: null,
+  };
+}
+
+export function finalizeAssistantState(
+  current: AssistantStreamState | null | undefined,
+  responseText: string,
+): AssistantStreamState {
+  return {
+    status: current?.errorMessage ? "error" : "complete",
+    blocks: current?.blocks ?? [],
+    responseText: responseText || current?.responseText || "",
+    errorMessage: current?.errorMessage ?? null,
+  };
+}
+
+export type TurnStreamEvent =
+  | {
+      type: "turn.bootstrap";
+      turnId: string;
+      assistantMessageId: string;
+      snapshot: GraphSnapshot;
+      assistantState: AssistantStreamState;
+    }
+  | {
+      type: "assistant.patch";
+      turnId: string;
+      assistantMessageId: string;
+      state: AssistantStreamState;
+    }
+  | {
+      type: "turn.committed";
+      turnId: string;
+      assistantMessageId: string;
+      snapshot: GraphSnapshot;
+    }
+  | {
+      type: "turn.error";
+      turnId: string;
+      assistantMessageId: string;
+      message: string;
+    };
 
 export function makeId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
@@ -388,6 +519,24 @@ export function buildPrefixReplayPrompt(input: {
   lines.push(normalizedUserPrompt);
 
   return lines.join("\n");
+}
+
+export function describeBranchCreation(input: CreateBranchInput, sourceMessage: Pick<MessageNode, "role">) {
+  const isSelectionBranch = input.mode === "selection";
+  const normalizedPrompt = input.prompt.trim();
+  const branchTitle = isSelectionBranch
+    ? input.selectedText!.trim()
+    : normalizedPrompt || `Alternate path from ${sourceMessage.role}`;
+  const userMessageContent = isSelectionBranch
+    ? normalizedPrompt.length > 0
+      ? normalizedPrompt
+      : `Explain "${input.selectedText!}" in context.`
+    : normalizedPrompt;
+
+  return {
+    branchTitle,
+    userMessageContent,
+  };
 }
 
 export function buildGraphEdges(snapshot: Pick<GraphSnapshot, "branches" | "messages">): GraphEdge[] {

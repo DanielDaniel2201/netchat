@@ -8,6 +8,7 @@ import {
   ContinueBranchRuntimeRequest,
   RootTurnRuntimeRequest,
   RuntimeResponse,
+  RuntimeStreamEvent,
   makeId,
 } from "@netchat/shared";
 
@@ -28,8 +29,11 @@ type ClaudeCliResult = {
 
 type ClaudeStreamEvent = {
   errors?: unknown;
-  result?: unknown;
+  event?: ClaudeRawMessageStreamEvent;
+  message?: ClaudeSdkMessagePayload;
+  sessionId?: unknown;
   session_id?: unknown;
+  result?: unknown;
   subtype?: unknown;
   type?: unknown;
 };
@@ -60,10 +64,102 @@ type ClaudeTranscriptEntry = {
   type?: string;
 };
 
+type RuntimeExecutionOptions = {
+  onEvent?: (event: RuntimeStreamEvent) => void;
+  resume?: string;
+};
+
+type ClaudeSdkMessagePayload = {
+  content?: ClaudeMessageContentBlock[];
+  id?: string;
+  role?: string;
+  stop_reason?: string | null;
+  type?: string;
+};
+
+type ClaudeMessageContentBlock =
+  | {
+      type?: "text";
+      text?: string;
+    }
+  | {
+      signature?: string;
+      thinking?: string;
+      type?: "thinking" | "redacted_thinking";
+    }
+  | {
+      id?: string;
+      input?: unknown;
+      name?: string;
+      type?: "tool_use";
+    }
+  | {
+      content?: unknown;
+      is_error?: boolean;
+      tool_use_id?: string;
+      type?: "tool_result";
+    };
+
+type ClaudeRawMessageStreamEvent =
+  | {
+      content_block: {
+        id?: string;
+        input?: unknown;
+        name?: string;
+        text?: string;
+        thinking?: string;
+        type?: string;
+      };
+      index: number;
+      type: "content_block_start";
+    }
+  | {
+      delta: {
+        partial_json?: string;
+        text?: string;
+        thinking?: string;
+        type?: string;
+      };
+      index: number;
+      type: "content_block_delta";
+    }
+  | {
+      index: number;
+      type: "content_block_stop";
+    }
+  | {
+      message?: {
+        id?: string;
+      };
+      type: "message_start" | "message_delta" | "message_stop";
+    };
+
+type ThinkingBlockState = {
+  kind: "thinking";
+  order: number;
+  text: string;
+};
+
+type ToolBlockState = {
+  kind: "tool";
+  inputText: string;
+  order: number;
+  outputText: string;
+  toolCallId: string;
+  toolName: string;
+};
+
+type StreamState = {
+  blockOrder: number;
+  blocksById: Map<string, ThinkingBlockState | ToolBlockState>;
+  blockIdByIndex: Map<number, string>;
+  responseText: string;
+};
+
 export interface RuntimeAdapter {
-  runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse>;
-  createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse>;
-  continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse>;
+  runRootTurn(input: RootTurnRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse>;
+  createBranch(input: CreateBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse>;
+  continueBranch(input: ContinueBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse>;
   getMode(): "mock" | "claude";
   getWorkingDirectory(): string;
 }
@@ -95,18 +191,25 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     return this.cwd;
   }
 
-  async runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse> {
+  async runRootTurn(input: RootTurnRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
     return this.executePrompt("root-turn", input.prompt, {
+      onEvent: options?.onEvent,
       resume: input.sessionId ?? undefined,
     });
   }
 
-  async createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse> {
-    return this.executePrompt("branch-create", input.prompt, {});
+  async createBranch(input: CreateBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
+    return this.executePrompt("branch-create", input.prompt, {
+      onEvent: options?.onEvent,
+    });
   }
 
-  async continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse> {
+  async continueBranch(
+    input: ContinueBranchRuntimeRequest,
+    options?: RuntimeExecutionOptions,
+  ): Promise<RuntimeResponse> {
     return this.executePrompt("branch-turn", input.prompt, {
+      onEvent: options?.onEvent,
       resume: input.sessionId,
     });
   }
@@ -114,9 +217,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private async executePrompt(
     kind: "root-turn" | "branch-create" | "branch-turn",
     prompt: string,
-    options: {
-      resume?: string;
-    },
+    options: RuntimeExecutionOptions,
   ): Promise<RuntimeResponse> {
     if (!this.binaryPath) {
       throw new Error(
@@ -139,7 +240,10 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     let stdout = "";
     let stderr = "";
     try {
-      const result = await this.executeCli(args);
+      const liveState = createStreamState();
+      const result = await this.executeCli(args, (line) => {
+        this.handleStreamLine(line, liveState, options.onEvent);
+      });
       stdout = result.stdout;
       stderr = result.stderr;
     } catch (error) {
@@ -188,7 +292,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       resume?: string;
     },
   ) {
-    const args = ["-p", "--verbose", "--output-format", "stream-json"];
+    const args = ["-p", "--verbose", "--output-format", "stream-json", "--include-partial-messages"];
 
     if (this.settingSources) {
       args.push("--setting-sources", this.settingSources);
@@ -210,7 +314,10 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     return args;
   }
 
-  private executeCli(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  private executeCli(
+    args: string[],
+    onStdoutLine?: (line: string) => void,
+  ): Promise<{ stdout: string; stderr: string }> {
     if (!this.binaryPath) {
       throw new Error("Claude binary path is required.");
     }
@@ -226,6 +333,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       child.stdin.end();
       let stdout = "";
       let stderr = "";
+      let stdoutLineBuffer = "";
       let settled = false;
       let timedOut = false;
       let hadActivity = false;
@@ -277,7 +385,9 @@ class ClaudeCliRuntime implements RuntimeAdapter {
 
       child.stdout.on("data", (chunk: string) => {
         stdout += chunk;
+        stdoutLineBuffer += chunk;
         noteActivity();
+        flushStdoutLines();
         if (Buffer.byteLength(stdout, "utf8") > maxBufferBytes) {
           const error = new Error("Claude CLI stdout exceeded the maximum buffer size.") as ClaudeCliExecutionError;
           child.kill();
@@ -323,6 +433,8 @@ class ClaudeCliRuntime implements RuntimeAdapter {
           return;
         }
 
+        flushStdoutLines(true);
+
         if (code === 0) {
           resolve({ stdout, stderr });
           return;
@@ -336,7 +448,262 @@ class ClaudeCliRuntime implements RuntimeAdapter {
         error.signal = signal;
         reject(error);
       });
+
+      function flushStdoutLines(flushTail = false) {
+        let newlineIndex = stdoutLineBuffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = stdoutLineBuffer.slice(0, newlineIndex).trim();
+          stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
+          if (line) {
+            onStdoutLine?.(line);
+          }
+
+          newlineIndex = stdoutLineBuffer.indexOf("\n");
+        }
+
+        if (flushTail) {
+          const tail = stdoutLineBuffer.trim();
+          stdoutLineBuffer = "";
+          if (tail) {
+            onStdoutLine?.(tail);
+          }
+        }
+      }
     });
+  }
+
+  private handleStreamLine(
+    line: string,
+    state: StreamState,
+    onEvent?: (event: RuntimeStreamEvent) => void,
+  ) {
+    let message: ClaudeStreamEvent;
+    try {
+      message = JSON.parse(line) as ClaudeStreamEvent;
+    } catch {
+      return;
+    }
+
+    if (message.type === "stream_event" && message.event) {
+      this.handleRawStreamEvent(message.event, state, onEvent);
+      return;
+    }
+
+    if (message.type === "assistant" && message.message) {
+      this.handleAssistantMessage(message.message, state, onEvent);
+      return;
+    }
+
+    if (message.type === "user" && message.message) {
+      this.handleUserMessage(message.message, state, onEvent);
+      return;
+    }
+
+    if (message.type === "result" && typeof message.result === "string") {
+      onEvent?.({
+        type: "response.update",
+        text: message.result,
+        isComplete: true,
+      });
+    }
+  }
+
+  private handleRawStreamEvent(
+    event: ClaudeRawMessageStreamEvent,
+    state: StreamState,
+    onEvent?: (event: RuntimeStreamEvent) => void,
+  ) {
+    if (event.type === "content_block_start") {
+      const block = event.content_block;
+      if (block.type === "text") {
+        state.blockIdByIndex.set(event.index, "response");
+        return;
+      }
+
+      if (block.type === "thinking" || block.type === "redacted_thinking") {
+        const blockId = `thinking_${event.index}`;
+        const thinkingText = block.type === "thinking" ? block.thinking ?? "" : "";
+        state.blockIdByIndex.set(event.index, blockId);
+        state.blocksById.set(blockId, {
+          kind: "thinking",
+          order: nextBlockOrder(state),
+          text: thinkingText,
+        });
+        emitThinkingUpdate(state, blockId, false, onEvent);
+        return;
+      }
+
+      if (block.type === "tool_use") {
+        const toolCallId = typeof block.id === "string" && block.id.trim().length > 0 ? block.id : `tool_${event.index}`;
+        const blockId = toolCallId;
+        state.blockIdByIndex.set(event.index, blockId);
+        state.blocksById.set(blockId, {
+          kind: "tool",
+          inputText: formatStructuredBlock(block.input),
+          order: nextBlockOrder(state),
+          outputText: "",
+          toolCallId,
+          toolName: block.name?.trim() || "Tool",
+        });
+        emitToolUpdate(state, blockId, false, false, onEvent);
+        return;
+      }
+
+      return;
+    }
+
+    if (event.type === "content_block_delta") {
+      const blockId = state.blockIdByIndex.get(event.index);
+      if (!blockId) {
+        return;
+      }
+
+      if (blockId === "response") {
+        if (event.delta.type === "text_delta" && typeof event.delta.text === "string") {
+          state.responseText += event.delta.text;
+          onEvent?.({
+            type: "response.update",
+            text: state.responseText,
+            isComplete: false,
+          });
+        }
+
+        return;
+      }
+
+      const block = state.blocksById.get(blockId);
+      if (!block) {
+        return;
+      }
+
+      if (block.kind === "thinking") {
+        if (event.delta.type === "thinking_delta" && typeof event.delta.thinking === "string") {
+          block.text += event.delta.thinking;
+          emitThinkingUpdate(state, blockId, false, onEvent);
+        }
+
+        return;
+      }
+
+      if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
+        block.inputText += event.delta.partial_json;
+        emitToolUpdate(state, blockId, false, false, onEvent);
+        return;
+      }
+      return;
+    }
+
+    if (event.type === "content_block_stop") {
+      const blockId = state.blockIdByIndex.get(event.index);
+      if (!blockId) {
+        return;
+      }
+
+      if (blockId === "response") {
+        return;
+      }
+
+      const block = state.blocksById.get(blockId);
+      if (!block) {
+        return;
+      }
+
+      if (block.kind === "thinking") {
+        emitThinkingUpdate(state, blockId, true, onEvent);
+      } else {
+        emitToolUpdate(state, blockId, false, false, onEvent);
+      }
+    }
+  }
+
+  private handleAssistantMessage(
+    message: ClaudeSdkMessagePayload,
+    state: StreamState,
+    onEvent?: (event: RuntimeStreamEvent) => void,
+  ) {
+    for (const block of message.content ?? []) {
+      if (block.type === "thinking") {
+        const blockId = `thinking_${state.blockOrder + 1}`;
+        const existingId = Array.from(state.blocksById.entries()).find(
+          ([, candidate]) => candidate.kind === "thinking" && candidate.text === (block.thinking ?? ""),
+        )?.[0];
+        const targetId = existingId ?? blockId;
+        if (!state.blocksById.has(targetId)) {
+          state.blocksById.set(targetId, {
+            kind: "thinking",
+            order: nextBlockOrder(state),
+            text: block.thinking ?? "",
+          });
+        } else {
+          const existing = state.blocksById.get(targetId);
+          if (existing?.kind === "thinking") {
+            existing.text = block.thinking ?? existing.text;
+          }
+        }
+
+        emitThinkingUpdate(state, targetId, true, onEvent);
+        continue;
+      }
+
+      if (block.type === "tool_use") {
+        const blockId = block.id?.trim() || `tool_${state.blockOrder + 1}`;
+        if (!state.blocksById.has(blockId)) {
+          state.blocksById.set(blockId, {
+            kind: "tool",
+            inputText: formatStructuredBlock(block.input),
+            order: nextBlockOrder(state),
+            outputText: "",
+            toolCallId: block.id?.trim() || blockId,
+            toolName: block.name?.trim() || "Tool",
+          });
+        } else {
+          const existing = state.blocksById.get(blockId);
+          if (existing?.kind === "tool") {
+            existing.inputText = formatStructuredBlock(block.input) || existing.inputText;
+            existing.toolName = block.name?.trim() || existing.toolName;
+          }
+        }
+
+        emitToolUpdate(state, blockId, false, false, onEvent);
+        continue;
+      }
+
+      if (block.type === "text" && typeof block.text === "string") {
+        if (block.text.length >= state.responseText.length) {
+          state.responseText = block.text;
+          onEvent?.({
+            type: "response.update",
+            text: state.responseText,
+            isComplete: false,
+          });
+        }
+      }
+    }
+  }
+
+  private handleUserMessage(
+    message: ClaudeSdkMessagePayload,
+    state: StreamState,
+    onEvent?: (event: RuntimeStreamEvent) => void,
+  ) {
+    for (const block of message.content ?? []) {
+      if (block.type !== "tool_result") {
+        continue;
+      }
+
+      const toolCallId = block.tool_use_id?.trim();
+      if (!toolCallId) {
+        continue;
+      }
+
+      const existing = state.blocksById.get(toolCallId);
+      if (!existing || existing.kind !== "tool") {
+        continue;
+      }
+
+      existing.outputText = formatToolResultContent(block.content);
+      emitToolUpdate(state, toolCallId, true, Boolean(block.is_error), onEvent);
+    }
   }
 
   private parseStreamResult(stdout: string, stderr: string): ClaudeCliResult {
@@ -510,9 +877,19 @@ class MockRuntimeAdapter implements RuntimeAdapter {
     return this.cwd;
   }
 
-  async runRootTurn(input: RootTurnRuntimeRequest): Promise<RuntimeResponse> {
+  async runRootTurn(input: RootTurnRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
     const session = this.ensureSession(input.sessionId);
     session.turns.push(input.prompt);
+    await emitMockRuntimeEvents(options?.onEvent, {
+      responseText: [
+        "Mock Claude runtime",
+        `Session: ${session.id}`,
+        "",
+        `You asked: ${input.prompt}`,
+        "",
+        "This is the place where the real local Claude CLI root turn will run.",
+      ].join("\n"),
+    });
 
     return {
       machineId: this.machineId,
@@ -528,9 +905,19 @@ class MockRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
-  async createBranch(input: CreateBranchRuntimeRequest): Promise<RuntimeResponse> {
+  async createBranch(input: CreateBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
     const session = this.ensureSession(null);
     session.turns.push(input.prompt);
+    await emitMockRuntimeEvents(options?.onEvent, {
+      responseText: [
+        "Mock replay-backed branch",
+        `Session: ${session.id}`,
+        "",
+        "The branch started in a fresh session with a replay prompt built from the visible path only.",
+        "",
+        `Prompt:\n${input.prompt}`,
+      ].join("\n"),
+    });
 
     return {
       machineId: this.machineId,
@@ -546,9 +933,21 @@ class MockRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
-  async continueBranch(input: ContinueBranchRuntimeRequest): Promise<RuntimeResponse> {
+  async continueBranch(
+    input: ContinueBranchRuntimeRequest,
+    options?: RuntimeExecutionOptions,
+  ): Promise<RuntimeResponse> {
     const session = this.ensureSession(input.sessionId);
     session.turns.push(input.prompt);
+    await emitMockRuntimeEvents(options?.onEvent, {
+      responseText: [
+        "Mock branch continuation",
+        `Session: ${session.id}`,
+        `Turn count: ${session.turns.length}`,
+        "",
+        `Follow-up:\n${input.prompt}`,
+      ].join("\n"),
+    });
 
     return {
       machineId: this.machineId,
@@ -644,4 +1043,163 @@ function formatDuration(durationMs: number) {
   }
 
   return `${(seconds / 60).toFixed(1)}m`;
+}
+
+function createStreamState(): StreamState {
+  return {
+    blockOrder: 0,
+    blocksById: new Map(),
+    blockIdByIndex: new Map(),
+    responseText: "",
+  };
+}
+
+function nextBlockOrder(state: StreamState) {
+  state.blockOrder += 1;
+  return state.blockOrder;
+}
+
+function emitThinkingUpdate(
+  state: StreamState,
+  blockId: string,
+  isComplete: boolean,
+  onEvent?: (event: RuntimeStreamEvent) => void,
+) {
+  const block = state.blocksById.get(blockId);
+  if (!block || block.kind !== "thinking") {
+    return;
+  }
+
+  onEvent?.({
+    type: "thinking.update",
+    blockId,
+    order: block.order,
+    text: block.text,
+    isComplete,
+  });
+}
+
+function emitToolUpdate(
+  state: StreamState,
+  blockId: string,
+  isComplete: boolean,
+  isError: boolean,
+  onEvent?: (event: RuntimeStreamEvent) => void,
+) {
+  const block = state.blocksById.get(blockId);
+  if (!block || block.kind !== "tool") {
+    return;
+  }
+
+  onEvent?.({
+    type: "tool.update",
+    blockId,
+    order: block.order,
+    toolCallId: block.toolCallId,
+    toolName: block.toolName,
+    inputText: block.inputText,
+    outputText: block.outputText,
+    isComplete,
+    isError,
+  });
+}
+
+function formatStructuredBlock(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatToolResultContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+
+        if (item && typeof item === "object" && "text" in item && typeof item.text === "string") {
+          return item.text;
+        }
+
+        return formatStructuredBlock(item);
+      })
+      .join("\n\n");
+  }
+
+  return formatStructuredBlock(content);
+}
+
+async function emitMockRuntimeEvents(
+  onEvent: ((event: RuntimeStreamEvent) => void) | undefined,
+  input: { responseText: string },
+) {
+  if (!onEvent) {
+    return;
+  }
+
+  const thinkingText = "Planning the mock response before emitting the final answer.";
+  const responseParts = chunkText(input.responseText, 48);
+
+  onEvent({
+    type: "thinking.update",
+    blockId: "mock-thinking",
+    order: 1,
+    text: thinkingText,
+    isComplete: false,
+  });
+  await waitForMockStreamStep();
+  onEvent({
+    type: "thinking.update",
+    blockId: "mock-thinking",
+    order: 1,
+    text: thinkingText,
+    isComplete: true,
+  });
+
+  let responseText = "";
+  for (const part of responseParts) {
+    responseText += part;
+    await waitForMockStreamStep();
+    onEvent({
+      type: "response.update",
+      text: responseText,
+      isComplete: false,
+    });
+  }
+
+  onEvent({
+    type: "response.update",
+    text: input.responseText,
+    isComplete: true,
+  });
+}
+
+function waitForMockStreamStep() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 24);
+  });
+}
+
+function chunkText(value: string, size: number) {
+  const chunks: string[] = [];
+  for (let index = 0; index < value.length; index += size) {
+    chunks.push(value.slice(index, index + size));
+  }
+
+  return chunks.length > 0 ? chunks : [value];
 }

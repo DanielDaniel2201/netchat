@@ -4,12 +4,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  AssistantStreamState,
   Branch,
   CreateBranchInput,
   GraphSnapshot,
   MessageNode,
   RuntimeResponse,
   buildGraphEdges,
+  describeBranchCreation,
   makeId,
   nowIso,
   rootBranchId,
@@ -39,6 +41,12 @@ type MessageRow = {
   created_at: string;
 };
 
+type AssistantStateRow = {
+  message_id: string;
+  state_json: string;
+  updated_at: string;
+};
+
 export class GraphStore {
   private readonly database: DatabaseSync;
   private readonly databasePath: string;
@@ -64,11 +72,13 @@ export class GraphStore {
   getSnapshot(): GraphSnapshot {
     const branches = this.listBranches();
     const messages = this.listMessages();
+    const assistantStates = this.listAssistantStates();
 
     return {
       branches,
       messages,
       edges: buildGraphEdges({ branches, messages }),
+      assistantStates,
     };
   }
 
@@ -168,9 +178,19 @@ export class GraphStore {
     return visibleMessages;
   }
 
-  applyRootTurn(prompt: string, runtime: RuntimeResponse): GraphSnapshot {
+  applyRootTurn(
+    prompt: string,
+    runtime: RuntimeResponse,
+    options?: {
+      userMessageId?: string;
+      assistantMessageId?: string;
+      assistantState?: AssistantStreamState;
+    },
+  ): GraphSnapshot {
     this.runInTransaction(() => {
       const branch = this.ensureRootBranch();
+      const userMessageId = options?.userMessageId ?? makeId("msg");
+      const assistantMessageId = options?.assistantMessageId ?? makeId("msg");
       this.database
         .prepare(
           `UPDATE branches
@@ -181,7 +201,7 @@ export class GraphStore {
 
       const nextOrdinal = this.getNextMessageOrdinal(branch.id);
       this.insertMessage({
-        id: makeId("msg"),
+        id: userMessageId,
         branchId: branch.id,
         role: "user",
         content: prompt,
@@ -190,7 +210,7 @@ export class GraphStore {
         ordinalInBranch: nextOrdinal,
       });
       this.insertMessage({
-        id: makeId("msg"),
+        id: assistantMessageId,
         branchId: branch.id,
         role: "assistant",
         content: runtime.assistantMessage,
@@ -198,30 +218,34 @@ export class GraphStore {
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal + 1,
       });
+      this.upsertAssistantState(assistantMessageId, options?.assistantState);
     });
 
     return this.getSnapshot();
   }
 
-  applyBranchCreation(input: CreateBranchInput, runtime: RuntimeResponse): GraphSnapshot {
+  applyBranchCreation(
+    input: CreateBranchInput,
+    runtime: RuntimeResponse,
+    options?: {
+      branchId?: string;
+      userMessageId?: string;
+      assistantMessageId?: string;
+      assistantState?: AssistantStreamState;
+    },
+  ): GraphSnapshot {
     const sourceMessage = this.getMessage(input.sourceMessageId);
     if (!sourceMessage) {
       throw new Error(`Unknown source message: ${input.sourceMessageId}`);
     }
 
     const isSelectionBranch = input.mode === "selection";
-    const normalizedPrompt = input.prompt.trim();
-    const branchTitle = isSelectionBranch
-      ? input.selectedText!.trim()
-      : normalizedPrompt || `Alternate path from ${sourceMessage.role}`;
-    const userMessageContent = isSelectionBranch
-      ? normalizedPrompt.length > 0
-        ? normalizedPrompt
-        : `Explain "${input.selectedText!}" in context.`
-      : normalizedPrompt;
+    const { branchTitle, userMessageContent } = describeBranchCreation(input, sourceMessage);
 
     this.runInTransaction(() => {
-      const branchId = makeId("branch");
+      const branchId = options?.branchId ?? makeId("branch");
+      const userMessageId = options?.userMessageId ?? makeId("msg");
+      const assistantMessageId = options?.assistantMessageId ?? makeId("msg");
       this.database
         .prepare(
           `INSERT INTO branches (
@@ -251,7 +275,7 @@ export class GraphStore {
         );
 
       this.insertMessage({
-        id: makeId("msg"),
+        id: userMessageId,
         branchId,
         role: "user",
         content: userMessageContent,
@@ -260,7 +284,7 @@ export class GraphStore {
         ordinalInBranch: 0,
       });
       this.insertMessage({
-        id: makeId("msg"),
+        id: assistantMessageId,
         branchId,
         role: "assistant",
         content: runtime.assistantMessage,
@@ -268,18 +292,30 @@ export class GraphStore {
         machineId: runtime.machineId,
         ordinalInBranch: 1,
       });
+      this.upsertAssistantState(assistantMessageId, options?.assistantState);
     });
 
     return this.getSnapshot();
   }
 
-  applyBranchTurn(branchId: string, prompt: string, runtime: RuntimeResponse): GraphSnapshot {
+  applyBranchTurn(
+    branchId: string,
+    prompt: string,
+    runtime: RuntimeResponse,
+    options?: {
+      userMessageId?: string;
+      assistantMessageId?: string;
+      assistantState?: AssistantStreamState;
+    },
+  ): GraphSnapshot {
     const branch = this.getBranch(branchId);
     if (!branch) {
       throw new Error(`Unknown branch: ${branchId}`);
     }
 
     this.runInTransaction(() => {
+      const userMessageId = options?.userMessageId ?? makeId("msg");
+      const assistantMessageId = options?.assistantMessageId ?? makeId("msg");
       this.database
         .prepare(
           `UPDATE branches
@@ -290,7 +326,7 @@ export class GraphStore {
 
       const nextOrdinal = this.getNextMessageOrdinal(branchId);
       this.insertMessage({
-        id: makeId("msg"),
+        id: userMessageId,
         branchId,
         role: "user",
         content: prompt,
@@ -299,7 +335,7 @@ export class GraphStore {
         ordinalInBranch: nextOrdinal,
       });
       this.insertMessage({
-        id: makeId("msg"),
+        id: assistantMessageId,
         branchId,
         role: "assistant",
         content: runtime.assistantMessage,
@@ -307,9 +343,14 @@ export class GraphStore {
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal + 1,
       });
+      this.upsertAssistantState(assistantMessageId, options?.assistantState);
     });
 
     return this.getSnapshot();
+  }
+
+  saveAssistantState(messageId: string, state: AssistantStreamState) {
+    this.upsertAssistantState(messageId, state);
   }
 
   private listBranches() {
@@ -334,6 +375,25 @@ export class GraphStore {
       .all() as MessageRow[];
 
     return rows.map(mapMessageRow);
+  }
+
+  private listAssistantStates() {
+    const rows = this.database
+      .prepare(
+        `SELECT message_id, state_json, updated_at
+         FROM assistant_states`,
+      )
+      .all() as AssistantStateRow[];
+
+    return rows.reduce<Record<string, AssistantStreamState>>((states, row) => {
+      try {
+        states[row.message_id] = JSON.parse(row.state_json) as AssistantStreamState;
+      } catch {
+        return states;
+      }
+
+      return states;
+    }, {});
   }
 
   private ensureSchema() {
@@ -364,6 +424,12 @@ export class GraphStore {
 
       CREATE UNIQUE INDEX IF NOT EXISTS messages_branch_ordinal_idx
         ON messages (branch_id, ordinal_in_branch);
+
+      CREATE TABLE IF NOT EXISTS assistant_states (
+        message_id TEXT PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -461,6 +527,25 @@ export class GraphStore {
       .get(branchId) as { next_ordinal: number };
 
     return row.next_ordinal;
+  }
+
+  private upsertAssistantState(messageId: string, state: AssistantStreamState | undefined) {
+    if (!state) {
+      return;
+    }
+
+    this.database
+      .prepare(
+        `INSERT INTO assistant_states (
+           message_id,
+           state_json,
+           updated_at
+         ) VALUES (?, ?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET
+           state_json = excluded.state_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run(messageId, JSON.stringify(state), nowIso());
   }
 
   private runInTransaction<T>(callback: () => T) {
