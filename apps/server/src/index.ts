@@ -295,6 +295,7 @@ app.post("/api/root-turn/stream", async (request, reply) => {
       createdAt,
       machineId: machine.id,
       prompt: input.data.prompt,
+      selectedText: input.data.selectedText ?? null,
       userMessageId,
     });
 
@@ -312,6 +313,7 @@ app.post("/api/root-turn/stream", async (request, reply) => {
         const nextSnapshot = store.applyRootTurn(input.data.prompt, runtime, {
           assistantMessageId,
           assistantState,
+          selectedText: input.data.selectedText ?? null,
           userMessageId,
         });
         diagnostics.log(
@@ -433,6 +435,7 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
       createdAt,
       machineId: branch.machineId,
       prompt: input.data.prompt,
+      selectedText: input.data.selectedText ?? null,
       userMessageId,
     });
     const streamingJob = machines.enqueueStreamingJob(branch.machineId, {
@@ -457,6 +460,7 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
         const nextSnapshot = store.applyBranchTurn(branchId, input.data.prompt, runtime, {
           assistantMessageId,
           assistantState,
+          selectedText: input.data.selectedText ?? null,
           userMessageId,
         });
         diagnostics.log(
@@ -506,7 +510,9 @@ app.post("/api/root-turn", async (request, reply) => {
       },
     });
 
-    const nextSnapshot = store.applyRootTurn(input.data.prompt, runtime);
+    const nextSnapshot = store.applyRootTurn(input.data.prompt, runtime, {
+      selectedText: input.data.selectedText ?? null,
+    });
     diagnostics.log(
       "info",
       `Root turn completed on ${formatMachineLabel(runtime.machineId, machine.name)}. Graph now has ${nextSnapshot.messages.length} messages across ${nextSnapshot.branches.length} branches.`,
@@ -593,7 +599,9 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
       },
     });
 
-    const nextSnapshot = store.applyBranchTurn(branchId, input.data.prompt, runtime);
+    const nextSnapshot = store.applyBranchTurn(branchId, input.data.prompt, runtime, {
+      selectedText: input.data.selectedText ?? null,
+    });
     diagnostics.log(
       "info",
       `Branch turn ${branchId} completed on machine ${runtime.machineId}. Branch now has ${nextSnapshot.messages.filter((message) => message.branchId === branchId).length} messages.`,
@@ -787,6 +795,7 @@ function buildOptimisticRootTurnSnapshot(
     userMessageId: string;
     assistantMessageId: string;
     prompt: string;
+    selectedText: string | null;
     machineId: string;
     createdAt: string;
   },
@@ -798,6 +807,7 @@ function buildOptimisticRootTurnSnapshot(
       branchId: rootBranchId,
       role: "user",
       content: input.prompt,
+      selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
       createdAt: input.createdAt,
@@ -807,6 +817,7 @@ function buildOptimisticRootTurnSnapshot(
       branchId: rootBranchId,
       role: "assistant",
       content: "",
+      selectedText: null,
       sessionId: null,
       machineId: input.machineId,
       createdAt: input.createdAt,
@@ -862,6 +873,7 @@ function buildOptimisticBranchCreationSnapshot(
       branchId: input.branchId,
       role: "user",
       content: userMessageContent,
+      selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
       sessionId: null,
       machineId: sourceMessage.machineId,
       createdAt: input.createdAt,
@@ -871,6 +883,7 @@ function buildOptimisticBranchCreationSnapshot(
       branchId: input.branchId,
       role: "assistant",
       content: "",
+      selectedText: null,
       sessionId: null,
       machineId: sourceMessage.machineId,
       createdAt: input.createdAt,
@@ -896,6 +909,7 @@ function buildOptimisticBranchTurnSnapshot(
     userMessageId: string;
     assistantMessageId: string;
     prompt: string;
+    selectedText: string | null;
     machineId: string;
     createdAt: string;
   },
@@ -907,6 +921,7 @@ function buildOptimisticBranchTurnSnapshot(
       branchId: input.branchId,
       role: "user",
       content: input.prompt,
+      selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
       createdAt: input.createdAt,
@@ -916,6 +931,7 @@ function buildOptimisticBranchTurnSnapshot(
       branchId: input.branchId,
       role: "assistant",
       content: "",
+      selectedText: null,
       sessionId: null,
       machineId: input.machineId,
       createdAt: input.createdAt,

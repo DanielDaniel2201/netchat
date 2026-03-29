@@ -152,8 +152,9 @@ type ToolBlockState = {
 type StreamState = {
   blockOrder: number;
   blocksById: Map<string, ThinkingBlockState | ToolBlockState>;
-  blockIdByIndex: Map<number, string>;
+  blockIdByIndex: Map<string, string>;
   responseText: string;
+  streamMessageOrdinal: number;
 };
 
 export interface RuntimeAdapter {
@@ -513,17 +514,27 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     state: StreamState,
     onEvent?: (event: RuntimeStreamEvent) => void,
   ) {
+    if (event.type === "message_start") {
+      state.streamMessageOrdinal += 1;
+      return;
+    }
+
+    if (event.type === "message_delta" || event.type === "message_stop") {
+      return;
+    }
+
     if (event.type === "content_block_start") {
       const block = event.content_block;
+      const indexKey = makeStreamIndexKey(state, event.index);
       if (block.type === "text") {
-        state.blockIdByIndex.set(event.index, "response");
+        state.blockIdByIndex.set(indexKey, "response");
         return;
       }
 
       if (block.type === "thinking" || block.type === "redacted_thinking") {
-        const blockId = `thinking_${event.index}`;
+        const blockId = `thinking_${state.streamMessageOrdinal}_${event.index}`;
         const thinkingText = block.type === "thinking" ? block.thinking ?? "" : "";
-        state.blockIdByIndex.set(event.index, blockId);
+        state.blockIdByIndex.set(indexKey, blockId);
         state.blocksById.set(blockId, {
           kind: "thinking",
           order: nextBlockOrder(state),
@@ -534,9 +545,12 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       }
 
       if (block.type === "tool_use") {
-        const toolCallId = typeof block.id === "string" && block.id.trim().length > 0 ? block.id : `tool_${event.index}`;
+        const toolCallId =
+          typeof block.id === "string" && block.id.trim().length > 0
+            ? block.id
+            : `tool_${state.streamMessageOrdinal}_${event.index}`;
         const blockId = toolCallId;
-        state.blockIdByIndex.set(event.index, blockId);
+        state.blockIdByIndex.set(indexKey, blockId);
         state.blocksById.set(blockId, {
           kind: "tool",
           inputText: formatStructuredBlock(block.input),
@@ -553,7 +567,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     }
 
     if (event.type === "content_block_delta") {
-      const blockId = state.blockIdByIndex.get(event.index);
+      const blockId = state.blockIdByIndex.get(makeStreamIndexKey(state, event.index));
       if (!blockId) {
         return;
       }
@@ -594,7 +608,8 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     }
 
     if (event.type === "content_block_stop") {
-      const blockId = state.blockIdByIndex.get(event.index);
+      const indexKey = makeStreamIndexKey(state, event.index);
+      const blockId = state.blockIdByIndex.get(indexKey);
       if (!blockId) {
         return;
       }
@@ -613,6 +628,8 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       } else {
         emitToolUpdate(state, blockId, false, false, onEvent);
       }
+
+      state.blockIdByIndex.delete(indexKey);
     }
   }
 
@@ -1051,7 +1068,12 @@ function createStreamState(): StreamState {
     blocksById: new Map(),
     blockIdByIndex: new Map(),
     responseText: "",
+    streamMessageOrdinal: -1,
   };
+}
+
+function makeStreamIndexKey(state: StreamState, index: number) {
+  return `${Math.max(state.streamMessageOrdinal, 0)}:${index}`;
 }
 
 function nextBlockOrder(state: StreamState) {

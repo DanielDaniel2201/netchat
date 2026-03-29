@@ -20,6 +20,7 @@ export type MessageNode = {
   branchId: string;
   role: Role;
   content: string;
+  selectedText: string | null;
   sessionId: string | null;
   machineId: string | null;
   createdAt: string;

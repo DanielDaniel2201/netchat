@@ -870,6 +870,7 @@ function NetchatApp() {
           ? buildOptimisticRootStreamTurn(snapshot, {
               machineId: rootMachine.id,
               prompt,
+              selectedText: selectionForSelectedMessage?.selectedText ?? null,
             })
           : null;
       if (optimisticTurn) {
@@ -894,6 +895,7 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: rootMachine?.id ?? "machine_pending",
+            selectedText: selectionForSelectedMessage?.selectedText ?? null,
             snapshot,
           }),
       );
@@ -907,6 +909,7 @@ function NetchatApp() {
               branchId: selectedBranch.id,
               machineId: runtimeMachine.id,
               prompt,
+              selectedText: selectionForSelectedMessage?.selectedText ?? null,
             })
           : null;
       if (optimisticTurn) {
@@ -930,6 +933,7 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: runtimeMachine?.id ?? "machine_pending",
+            selectedText: selectionForSelectedMessage?.selectedText ?? null,
             snapshot,
           }),
       );
@@ -976,6 +980,7 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: selectedMessage.machineId ?? "machine_pending",
+            selectedText: selectionForSelectedMessage.selectedText,
             snapshot,
           }),
       );
@@ -1016,6 +1021,7 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: selectedMessage.machineId ?? "machine_pending",
+            selectedText: null,
             snapshot,
           }),
       );
@@ -1523,6 +1529,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     liveAssistantState?.blocks.filter(
       (block) => block.kind !== "thinking" || block.text.trim().length > 0 || block.status !== "complete",
     ) ?? [];
+  const selectedPassage = isUser ? data.message.selectedText?.trim() ?? "" : "";
 
   useEffect(() => {
     const bubbleElement = bubbleRef.current;
@@ -1645,6 +1652,14 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         </div>
 
         <div className="relative px-5 py-5">
+          {isUser && selectedPassage ? (
+            <div className="mb-5 border border-[var(--node-border)] bg-[rgba(244,241,234,0.56)] px-4 py-4">
+              <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Selected passage</div>
+              <div className="mt-3 whitespace-pre-wrap text-[14px] leading-7 text-[rgba(26,26,26,0.72)]">
+                {selectedPassage}
+              </div>
+            </div>
+          ) : null}
           {!isUser && liveAssistantState ? (
             <div className="space-y-4">
               {visibleAssistantBlocks.map((block) => (
@@ -2129,13 +2144,21 @@ function buildFlowGraph({
 
 function estimateMessageBubbleHeight(message: MessageNode) {
   const normalized = message.content.replace(/\r\n/g, "\n");
+  const selectedPassage = message.selectedText?.replace(/\r\n/g, "\n").trim() ?? "";
+  const selectionLines = selectedPassage
+    ? selectedPassage.split("\n").reduce((count, line) => {
+        const visibleLength = Math.max(line.trim().length, 1);
+        return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
+      }, 0)
+    : 0;
   const wrappedLines = normalized.split("\n").reduce((count, line) => {
     const visibleLength = Math.max(line.trim().length, 1);
     return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
   }, 0);
   const codeBlockBonus = (normalized.match(/```/g)?.length ?? 0) * 48;
+  const selectionBonus = selectedPassage ? 96 + selectionLines * 24 : 0;
 
-  return Math.max(230, 150 + wrappedLines * messageEstimateLineHeight + codeBlockBonus);
+  return Math.max(230, 150 + wrappedLines * messageEstimateLineHeight + codeBlockBonus + selectionBonus);
 }
 
 function getActiveEdgeIds(snapshot: GraphSnapshot, selectedMessageId: string | null) {
@@ -2253,6 +2276,7 @@ function buildOptimisticRootStreamTurn(
   input: {
     prompt: string;
     machineId: string;
+    selectedText: string | null;
   },
 ): PendingTurnMetadata {
   const turnId = makeId("turn");
@@ -2267,6 +2291,7 @@ function buildOptimisticRootStreamTurn(
       branchId: rootBranchId,
       role: "user",
       content: input.prompt,
+      selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
       createdAt,
@@ -2276,6 +2301,7 @@ function buildOptimisticRootStreamTurn(
       branchId: rootBranchId,
       role: "assistant",
       content: "",
+      selectedText: null,
       sessionId: null,
       machineId: input.machineId,
       createdAt,
@@ -2415,6 +2441,7 @@ function buildOptimisticBranchCreationStreamTurn(
       branchId,
       role: "user",
       content: userMessageContent,
+      selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
       sessionId: null,
       machineId: sourceMessage.machineId,
       createdAt,
@@ -2424,6 +2451,7 @@ function buildOptimisticBranchCreationStreamTurn(
       branchId,
       role: "assistant",
       content: "",
+      selectedText: null,
       sessionId: null,
       machineId: sourceMessage.machineId,
       createdAt,
@@ -2455,6 +2483,7 @@ function buildOptimisticBranchTurnStreamTurn(
     branchId: string;
     prompt: string;
     machineId: string;
+    selectedText: string | null;
   },
 ): PendingTurnMetadata {
   const turnId = makeId("turn");
@@ -2469,6 +2498,7 @@ function buildOptimisticBranchTurnStreamTurn(
       branchId: input.branchId,
       role: "user",
       content: input.prompt,
+      selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
       createdAt,
@@ -2478,6 +2508,7 @@ function buildOptimisticBranchTurnStreamTurn(
       branchId: input.branchId,
       role: "assistant",
       content: "",
+      selectedText: null,
       sessionId: null,
       machineId: input.machineId,
       createdAt,
@@ -2508,11 +2539,13 @@ function buildOptimisticBranchTurnStreamTurn(
 function buildFallbackOptimisticTurn(input: {
   prompt: string;
   machineId: string;
+  selectedText: string | null;
   snapshot: GraphSnapshot | undefined;
 }): PendingTurnMetadata {
   return buildOptimisticRootStreamTurn(input.snapshot ?? createEmptyRootSnapshot(), {
     prompt: input.prompt,
     machineId: input.machineId,
+    selectedText: input.selectedText,
   });
 }
 

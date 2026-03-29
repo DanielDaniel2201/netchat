@@ -35,6 +35,7 @@ type MessageRow = {
   branch_id: string;
   role: MessageNode["role"];
   content: string;
+  selected_text: string | null;
   session_id: string | null;
   machine_id: string | null;
   ordinal_in_branch: number;
@@ -97,7 +98,7 @@ export class GraphStore {
   getMessage(messageId: string): MessageNode | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, branch_id, role, content, session_id, machine_id, ordinal_in_branch, created_at
+        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, ordinal_in_branch, created_at
          FROM messages
          WHERE id = ?`,
       )
@@ -185,6 +186,7 @@ export class GraphStore {
       userMessageId?: string;
       assistantMessageId?: string;
       assistantState?: AssistantStreamState;
+      selectedText?: string | null;
     },
   ): GraphSnapshot {
     this.runInTransaction(() => {
@@ -205,6 +207,7 @@ export class GraphStore {
         branchId: branch.id,
         role: "user",
         content: prompt,
+        selectedText: options?.selectedText ?? null,
         sessionId: runtime.sessionId,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal,
@@ -214,6 +217,7 @@ export class GraphStore {
         branchId: branch.id,
         role: "assistant",
         content: runtime.assistantMessage,
+        selectedText: null,
         sessionId: runtime.sessionId,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal + 1,
@@ -279,6 +283,7 @@ export class GraphStore {
         branchId,
         role: "user",
         content: userMessageContent,
+        selectedText: isSelectionBranch ? input.selectedText! : null,
         sessionId: runtime.sessionId,
         machineId: runtime.machineId,
         ordinalInBranch: 0,
@@ -288,6 +293,7 @@ export class GraphStore {
         branchId,
         role: "assistant",
         content: runtime.assistantMessage,
+        selectedText: null,
         sessionId: runtime.sessionId,
         machineId: runtime.machineId,
         ordinalInBranch: 1,
@@ -306,6 +312,7 @@ export class GraphStore {
       userMessageId?: string;
       assistantMessageId?: string;
       assistantState?: AssistantStreamState;
+      selectedText?: string | null;
     },
   ): GraphSnapshot {
     const branch = this.getBranch(branchId);
@@ -330,6 +337,7 @@ export class GraphStore {
         branchId,
         role: "user",
         content: prompt,
+        selectedText: options?.selectedText ?? null,
         sessionId: runtime.sessionId,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal,
@@ -339,6 +347,7 @@ export class GraphStore {
         branchId,
         role: "assistant",
         content: runtime.assistantMessage,
+        selectedText: null,
         sessionId: runtime.sessionId,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal + 1,
@@ -368,7 +377,7 @@ export class GraphStore {
   private listMessages() {
     const rows = this.database
       .prepare(
-        `SELECT id, branch_id, role, content, session_id, machine_id, ordinal_in_branch, created_at
+        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, ordinal_in_branch, created_at
          FROM messages
          ORDER BY created_at ASC, ordinal_in_branch ASC, id ASC`,
       )
@@ -416,6 +425,7 @@ export class GraphStore {
         branch_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
+        selected_text TEXT,
         session_id TEXT,
         machine_id TEXT,
         ordinal_in_branch INTEGER NOT NULL,
@@ -431,6 +441,8 @@ export class GraphStore {
         updated_at TEXT NOT NULL
       );
     `);
+
+    this.ensureMessageSelectedTextColumn();
   }
 
   private ensureRootBranch(): Branch {
@@ -488,6 +500,7 @@ export class GraphStore {
     branchId: string;
     role: MessageNode["role"];
     content: string;
+    selectedText: string | null;
     sessionId: string | null;
     machineId: string | null;
     ordinalInBranch: number;
@@ -499,17 +512,19 @@ export class GraphStore {
            branch_id,
            role,
            content,
+           selected_text,
            session_id,
            machine_id,
            ordinal_in_branch,
            created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
         input.branchId,
         input.role,
         input.content,
+        input.selectedText,
         input.sessionId,
         input.machineId,
         input.ordinalInBranch,
@@ -558,6 +573,15 @@ export class GraphStore {
       this.database.exec("ROLLBACK;");
       throw error;
     }
+  }
+
+  private ensureMessageSelectedTextColumn() {
+    const columns = this.database.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "selected_text")) {
+      return;
+    }
+
+    this.database.exec(`ALTER TABLE messages ADD COLUMN selected_text TEXT;`);
   }
 }
 
@@ -618,6 +642,7 @@ function mapMessageRow(row: MessageRow): MessageNode {
     branchId: row.branch_id,
     role: row.role,
     content: row.content,
+    selectedText: row.selected_text,
     sessionId: row.session_id,
     machineId: row.machine_id,
     createdAt: row.created_at,

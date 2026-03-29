@@ -170,6 +170,7 @@ export class WorkspaceStore {
       userMessageId?: string;
       assistantMessageId?: string;
       assistantState?: AssistantStreamState;
+      selectedText?: string | null;
     },
   ): GraphSnapshot {
     const shouldRetitle = this.activeStore.getSnapshot().messages.length === 0;
@@ -201,6 +202,7 @@ export class WorkspaceStore {
       userMessageId?: string;
       assistantMessageId?: string;
       assistantState?: AssistantStreamState;
+      selectedText?: string | null;
     },
   ): GraphSnapshot {
     const nextSnapshot = this.activeStore.applyBranchTurn(branchId, prompt, runtime, options);
