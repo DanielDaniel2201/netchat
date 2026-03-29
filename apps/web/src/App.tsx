@@ -611,7 +611,6 @@ function NetchatApp() {
       }
     };
   }, [
-    measuredNodeHeights,
     nodesInitialized,
     reactFlow,
     snapshot?.branches.length,
@@ -1492,6 +1491,10 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const canSelectAssistantResponse = !liveAssistantState || liveAssistantState.status === "complete";
   const showPendingAssistantState =
     !isUser && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
+  const visibleAssistantBlocks =
+    liveAssistantState?.blocks.filter(
+      (block) => block.kind !== "thinking" || block.text.trim().length > 0 || block.status !== "complete",
+    ) ?? [];
 
   useEffect(() => {
     const bubbleElement = bubbleRef.current;
@@ -1514,7 +1517,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     return () => {
       observer.disconnect();
     };
-  }, [data]);
+  }, [data.message.id, data.onMeasureHeight]);
 
   return (
     <div className="relative w-[420px]">
@@ -1616,10 +1619,9 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         <div className="relative px-5 py-5">
           {!isUser && liveAssistantState ? (
             <div className="space-y-4">
-              {liveAssistantState.blocks.map((block) => (
+              {visibleAssistantBlocks.map((block) => (
                 <details
                   key={block.id}
-                  open
                   className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
                 >
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-4 py-3">
@@ -1650,7 +1652,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                   <div className="space-y-3 px-4 py-4">
                     {block.kind === "thinking" ? (
                       <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
-                        {block.text || "Waiting for Claude to think..."}
+                        {block.text || "Claude is thinking..."}
                       </div>
                     ) : (
                       <>
