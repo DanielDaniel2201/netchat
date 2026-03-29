@@ -45,14 +45,14 @@ import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/cn";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-const messageNodeWidth = 420;
-const branchLaneWidth = 620;
+const messageNodeWidth = 1260;
+const branchLaneWidth = 1860;
 const branchMessageGap = 96;
 const branchForkGap = 92;
 const bubbleComposerGap = 20;
-const bubbleComposerWidth = 560;
-const messageEstimateCharsPerLine = 30;
-const messageEstimateLineHeight = 34;
+const bubbleComposerWidth = 840;
+const messageEstimateCharsPerLine = 90;
+const messageEstimateLineHeight = 38;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -1093,7 +1093,7 @@ function NetchatApp() {
         <div className="pointer-events-none absolute right-6 top-6 z-20 flex flex-col items-end gap-3">
           <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
             <div className="border-b border-[var(--node-border)] px-5 py-4">
-              <div className="flex items-start justify-between gap-4 text-[13px] font-medium leading-5">
+              <div className="flex items-start justify-between gap-4 text-[15px] font-medium leading-6">
                 <div className="flex min-w-0 items-center gap-2 text-[var(--text-main)]">
                   <span>Claude Code</span>
                   <span
@@ -1116,7 +1116,7 @@ function NetchatApp() {
                 </div>
               </div>
 
-              <div className="mt-5 text-center text-[20px] font-medium leading-7 text-[var(--text-main)]">
+              <div className="mt-5 text-center text-[22px] font-medium leading-8 text-[var(--text-main)]">
                 {activeNet?.title ?? "Loading..."}
               </div>
             </div>
@@ -1124,7 +1124,7 @@ function NetchatApp() {
             <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
               <button
                 type="button"
-                className="bg-white px-5 py-4 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
                 disabled={workspaceQuery.isLoading}
                 onClick={() => {
                   setOpenNetMenuId(null);
@@ -1135,7 +1135,7 @@ function NetchatApp() {
               </button>
               <button
                 type="button"
-                className="bg-white px-5 py-4 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
                 disabled={isSwitchingNet || workspaceQuery.isLoading}
                 onClick={() => {
                   setOpenNetMenuId(null);
@@ -1155,13 +1155,13 @@ function NetchatApp() {
 
           {showNetHistory ? (
             <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-              <div className="border-b border-[var(--node-border)] px-5 py-4 text-[15px] font-medium text-[var(--text-main)]">
+              <div className="border-b border-[var(--node-border)] px-5 py-4 text-[17px] font-medium text-[var(--text-main)]">
                 History nets
               </div>
 
               <div className="max-h-[360px] overflow-y-auto">
                 {workspaceQuery.isLoading ? (
-                  <div className="px-5 py-5 text-[14px] leading-6 text-[rgba(26,26,26,0.62)]">
+                  <div className="px-5 py-5 text-[16px] leading-7 text-[rgba(26,26,26,0.62)]">
                     Loading workspace nets...
                   </div>
                 ) : workspaceNets.length ? (
@@ -1186,7 +1186,7 @@ function NetchatApp() {
                               <div className="space-y-3">
                                 <Input
                                   autoFocus
-                                  className="h-11 rounded-none border-[var(--text-main)] px-3 text-[15px] font-medium shadow-none focus:border-[var(--text-main)]"
+                                  className="h-11 rounded-none border-[var(--text-main)] px-3 text-[17px] font-medium shadow-none focus:border-[var(--text-main)]"
                                   disabled={isRenamingNet}
                                   maxLength={120}
                                   value={editingNetTitle}
@@ -1206,7 +1206,7 @@ function NetchatApp() {
                                 <div className="flex items-center gap-2">
                                   <button
                                     type="button"
-                                    className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                                    className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[14px] font-medium text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
                                     disabled={isRenamingNet || editingNetTitle.trim().length === 0}
                                     onClick={() => submitNetRename(net.id, net.title)}
                                   >
@@ -1214,7 +1214,7 @@ function NetchatApp() {
                                   </button>
                                   <button
                                     type="button"
-                                    className="border border-[var(--node-border)] bg-white px-3 py-2 text-[12px] font-medium text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
+                                    className="border border-[var(--node-border)] bg-white px-3 py-2 text-[14px] font-medium text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
                                     disabled={isRenamingNet}
                                     onClick={cancelNetRename}
                                   >
@@ -1229,12 +1229,12 @@ function NetchatApp() {
                                 disabled={isSwitchingNet || isActiveNet}
                                 onClick={() => selectNetMutation.mutate(net.id)}
                               >
-                                <div className={cn("truncate text-[15px] font-medium leading-6", isActiveNet ? "text-white" : "text-[var(--text-main)]")}>
+                                <div className={cn("truncate text-[17px] font-medium leading-7", isActiveNet ? "text-white" : "text-[var(--text-main)]")}>
                                   {net.title}
                                 </div>
                                 <div
                                   className={cn(
-                                    "mt-1 text-[12px] leading-5",
+                                    "mt-1 text-[14px] leading-6",
                                     isActiveNet ? "text-white/64" : "text-[rgba(26,26,26,0.56)]",
                                   )}
                                 >
@@ -1270,7 +1270,7 @@ function NetchatApp() {
                                 <div className="absolute right-0 top-full z-30 mt-2 w-36 border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
                                   <button
                                     type="button"
-                                    className="block w-full border-b border-[var(--node-border)] px-4 py-3 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
+                                    className="block w-full border-b border-[var(--node-border)] px-4 py-3 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
                                     disabled={isSwitchingNet || isDeletingNet}
                                     onClick={() => beginNetRename(net.id, net.title)}
                                   >
@@ -1278,7 +1278,7 @@ function NetchatApp() {
                                   </button>
                                   <button
                                     type="button"
-                                    className="block w-full px-4 py-3 text-left text-[13px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
+                                    className="block w-full px-4 py-3 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
                                     disabled={isSwitchingNet || isDeletingNet}
                                     onClick={() => requestNetDeletion(net.id, net.title)}
                                   >
@@ -1293,7 +1293,7 @@ function NetchatApp() {
                     );
                   })
                 ) : (
-                  <div className="px-5 py-5 text-[14px] leading-6 text-[rgba(26,26,26,0.62)]">
+                  <div className="px-5 py-5 text-[16px] leading-7 text-[rgba(26,26,26,0.62)]">
                     This workspace does not have any saved nets yet.
                   </div>
                 )}
@@ -1349,12 +1349,12 @@ function NetchatApp() {
                 <div className="border-b border-[var(--node-border)] px-8 py-8 md:border-b-0 md:border-r">
                   <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Start here</div>
                   <h1
-                    className="mt-4 max-w-[12ch] text-4xl leading-[1.03] tracking-[-0.05em] text-[var(--text-main)]"
+                    className="mt-4 max-w-[12ch] text-[44px] leading-[1.03] tracking-[-0.05em] text-[var(--text-main)]"
                     style={{ fontFamily: "var(--font-display)" }}
                   >
                     Turn one prompt into a branchable canvas.
                   </h1>
-                  <p className="mt-5 max-w-[56ch] text-[16px] leading-8 text-[rgba(26,26,26,0.8)]">
+                  <p className="mt-5 max-w-[56ch] text-[18px] leading-9 text-[rgba(26,26,26,0.8)]">
                     Conversations read like an editorial layout instead of a chat feed. Click Claude replies or
                     highlight a passage later to open new lanes from the exact point you want to explore.
                   </p>
@@ -1362,10 +1362,10 @@ function NetchatApp() {
 
                 <div className="bg-[var(--block-slate)] px-6 py-8 text-white">
                   <div className="editorial-meta text-white/58">Current issue</div>
-                  <div className="mt-4 text-[26px] leading-[1.08] tracking-[-0.03em]" style={{ fontFamily: "var(--font-display)" }}>
+                  <div className="mt-4 text-[30px] leading-[1.08] tracking-[-0.03em]" style={{ fontFamily: "var(--font-display)" }}>
                     Local-first branching.
                   </div>
-                  <div className="mt-5 space-y-4 text-[15px] leading-8 text-white/82">
+                  <div className="mt-5 space-y-4 text-[17px] leading-9 text-white/82">
                     <p>{netCount} nets available in this workspace.</p>
                     <p>{branchCount} branches archived on the canvas.</p>
                     <p>{messageCount} messages currently mapped.</p>
@@ -1379,7 +1379,7 @@ function NetchatApp() {
                 <div className="relative mt-4">
                   <Textarea
                     ref={composerRef}
-                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[17px] font-medium leading-9 text-white shadow-none placeholder:text-white focus-visible:ring-0"
+                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[19px] font-medium leading-10 text-white shadow-none placeholder:text-white focus-visible:ring-0"
                     placeholder={composerPlaceholder}
                     value={composerValue}
                     onChange={(event) => setComposerValue(event.target.value)}
@@ -1392,7 +1392,7 @@ function NetchatApp() {
                       }
                     }}
                   />
-                  <div className="pointer-events-none absolute bottom-0 left-0 flex max-w-[calc(100%-6rem)] items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/68">
+                  <div className="pointer-events-none absolute bottom-0 left-0 flex max-w-[calc(100%-6rem)] items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.22em] text-white/68">
                     <span>{composerMetaLabel}</span>
                     <span className="inline-flex h-px w-6 bg-white/36" />
                     <span className="truncate">{composerHint}</span>
@@ -1429,7 +1429,7 @@ function NetchatApp() {
             >
               {selectionForSelectedMessage ? (
                 <div className="border-b border-white/24 px-6 py-4">
-                  <div className="break-words text-[15px] font-medium leading-8 text-white">
+                  <div className="break-words text-[17px] font-medium leading-9 text-white">
                     {truncate(selectionForSelectedMessage.selectedText, 160)}
                   </div>
                 </div>
@@ -1438,7 +1438,7 @@ function NetchatApp() {
               <div className="relative px-6 py-5">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[17px] font-medium leading-9 text-white shadow-none placeholder:text-white focus-visible:ring-0"
+                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[19px] font-medium leading-10 text-white shadow-none placeholder:text-white focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -1480,17 +1480,17 @@ function NetchatApp() {
               onClick={(event) => event.stopPropagation()}
             >
               <div className="border-b border-[var(--node-border)] px-6 py-5">
-                <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">Delete net?</div>
+                <div className="text-[20px] font-medium leading-8 text-[var(--text-main)]">Delete net?</div>
               </div>
 
-              <div className="px-6 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.76)]">
+              <div className="px-6 py-5 text-[17px] leading-8 text-[rgba(26,26,26,0.76)]">
                 Delete "{pendingNetDeletion.title}" from history?
               </div>
 
               <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
                 <button
                   type="button"
-                  className="bg-white px-5 py-4 text-left text-[13px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+                  className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
                   disabled={isConfirmingDeletion}
                   onClick={cancelNetDeletion}
                 >
@@ -1498,7 +1498,7 @@ function NetchatApp() {
                 </button>
                 <button
                   type="button"
-                  className="bg-rose-50 px-5 py-4 text-left text-[13px] font-medium text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:text-rose-300"
+                  className="bg-rose-50 px-5 py-4 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:text-rose-300"
                   disabled={isConfirmingDeletion}
                   onClick={confirmNetDeletion}
                 >
@@ -1555,7 +1555,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   }, [data.message.id, data.onMeasureHeight]);
 
   return (
-    <div className="relative w-[420px]">
+    <div className="relative" style={{ width: messageNodeWidth }}>
       {data.showSessionId ? (
         <div
           className={cn(
@@ -1565,7 +1565,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
           title={sessionIdLabel}
         >
           <div className="editorial-meta text-[rgba(26,26,26,0.38)]">session_id</div>
-          <div className="mt-2 break-all font-mono text-[10px] leading-5 text-[rgba(26,26,26,0.68)]">
+          <div className="mt-2 break-all font-mono text-[12px] leading-6 text-[rgba(26,26,26,0.68)]">
             {sessionIdLabel}
           </div>
         </div>
@@ -1587,7 +1587,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
       <div
         ref={bubbleRef}
         className={cn(
-          "group relative w-[420px] overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
+          "group relative overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
           isUser
             ? data.isActiveMessage
               ? "border-t-[var(--block-slate)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(58,64,66,0.12)]"
@@ -1602,6 +1602,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.16)]"
               : "border-t-[var(--block-green)] hover:-translate-y-0.5",
         )}
+        style={{ width: messageNodeWidth }}
         onClickCapture={(event) => {
           if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
             return;
@@ -1655,7 +1656,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
           {isUser && selectedPassage ? (
             <div className="mb-5 border border-[var(--node-border)] bg-[rgba(244,241,234,0.56)] px-4 py-4">
               <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Selected passage</div>
-              <div className="mt-3 whitespace-pre-wrap text-[14px] leading-7 text-[rgba(26,26,26,0.72)]">
+              <div className="mt-3 whitespace-pre-wrap text-[16px] leading-8 text-[rgba(26,26,26,0.72)]">
                 {selectedPassage}
               </div>
             </div>
@@ -1694,14 +1695,14 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                   </summary>
                   <div className="space-y-3 px-4 py-4">
                     {block.kind === "thinking" ? (
-                      <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
+                      <div className="message-copy whitespace-pre-wrap text-[17px] leading-8 text-[rgba(26,26,26,0.78)]">
                         {block.text || "Claude is thinking..."}
                       </div>
                     ) : (
                       <>
                         <div>
                           <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
-                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[12px] leading-6 text-[rgba(26,26,26,0.78)]">
+                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[14px] leading-7 text-[rgba(26,26,26,0.78)]">
                             {block.inputText || "Waiting for tool arguments..."}
                           </pre>
                         </div>
@@ -1712,7 +1713,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                             </div>
                             <pre
                               className={cn(
-                                "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[12px] leading-6",
+                                "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[14px] leading-7",
                                 block.isError
                                   ? "border-rose-200 bg-rose-50 text-rose-700"
                                   : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
@@ -1750,12 +1751,12 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                         onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
                       />
                     ) : (
-                      <div className="message-copy whitespace-pre-wrap text-[17px] font-medium leading-9 text-[var(--text-main)]">
+                      <div className="message-copy whitespace-pre-wrap text-[19px] font-medium leading-10 text-[var(--text-main)]">
                         {responseContent}
                       </div>
                     )
                   ) : (
-                    <div className="flex min-h-[72px] items-center gap-3 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
+                    <div className="flex min-h-[72px] items-center gap-3 text-[17px] leading-8 text-[rgba(26,26,26,0.58)]">
                       <LoaderCircle className="size-4 animate-spin text-[var(--block-ochre)]" />
                       <span>Waiting for Claude to respond…</span>
                     </div>
@@ -1764,7 +1765,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               </div>
 
               {liveAssistantState.errorMessage ? (
-                <div className="border border-rose-200 bg-rose-50 px-4 py-3 text-[13px] leading-6 text-rose-700">
+                <div className="border border-rose-200 bg-rose-50 px-4 py-3 text-[15px] leading-7 text-rose-700">
                   {liveAssistantState.errorMessage}
                 </div>
               ) : null}
@@ -1802,7 +1803,7 @@ function SelectableMessage({
   return (
     <div
       className={cn(
-        "message-copy whitespace-pre-wrap text-[17px] font-medium leading-9 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
+        "message-copy whitespace-pre-wrap text-[19px] font-medium leading-10 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
         disabled ? "cursor-default" : "nodrag nopan cursor-text select-text",
       )}
       onClick={(event) => {
