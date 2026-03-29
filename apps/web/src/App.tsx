@@ -139,6 +139,7 @@ function NetchatApp() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const openNetMenuRef = useRef<HTMLDivElement>(null);
   const lastAutoSelectedMessageIdRef = useRef<string | null>(null);
+  const lastAutoFitNetIdRef = useRef<string | null>(null);
   const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
   const [activePathMessageId, setActivePathMessageId] = useState<string | null>(null);
@@ -267,9 +268,10 @@ function NetchatApp() {
             optimisticSnapshot: event.snapshot,
             isPending: true,
           });
+          const renderableState = projectAssistantStateForRender(event.assistantState);
           setLiveAssistantStates((current) => ({
             ...current,
-            [event.assistantMessageId]: event.assistantState,
+            [event.assistantMessageId]: renderableState ?? event.assistantState,
           }));
           setSelectedMessageId(event.assistantMessageId);
           setActivePathMessageId(event.assistantMessageId);
@@ -277,16 +279,26 @@ function NetchatApp() {
         }
 
         if (event.type === "assistant.patch") {
-          setLiveAssistantStates((current) => ({
-            ...current,
-            [event.assistantMessageId]: event.state,
-          }));
+          const renderableState = projectAssistantStateForRender(event.state);
+          setLiveAssistantStates((current) => {
+            const nextState = renderableState ?? event.state;
+            if (assistantStatesEqual(current[event.assistantMessageId] ?? null, nextState)) {
+              return current;
+            }
+
+            return {
+              ...current,
+              [event.assistantMessageId]: nextState,
+            };
+          });
           return;
         }
 
         if (event.type === "turn.committed") {
           queryClient.setQueryData(["graph"], event.snapshot);
-          const persistedAssistantState = event.snapshot.assistantStates?.[event.assistantMessageId] ?? null;
+          const persistedAssistantState = projectAssistantStateForRender(
+            event.snapshot.assistantStates?.[event.assistantMessageId] ?? null,
+          );
           const committedMessage =
             event.snapshot.messages.find((message) => message.id === event.assistantMessageId) ?? null;
           setActiveStreamedTurn(null);
@@ -294,6 +306,9 @@ function NetchatApp() {
             ...current,
             [event.assistantMessageId]:
               persistedAssistantState ??
+              projectAssistantStateForRender(
+                finalizeAssistantState(current[event.assistantMessageId], committedMessage?.content ?? ""),
+              ) ??
               finalizeAssistantState(current[event.assistantMessageId], committedMessage?.content ?? ""),
           }));
           setSelectedMessageId(event.assistantMessageId);
@@ -326,7 +341,11 @@ function NetchatApp() {
       );
       setLiveAssistantStates((current) => ({
         ...current,
-        [optimisticTurn.assistantMessageId]: {
+        [optimisticTurn.assistantMessageId]: projectAssistantStateForRender({
+          ...(current[optimisticTurn.assistantMessageId] ?? optimisticTurn.assistantState),
+          status: "error",
+          errorMessage: message,
+        }) ?? {
           ...(current[optimisticTurn.assistantMessageId] ?? optimisticTurn.assistantState),
           status: "error",
           errorMessage: message,
@@ -574,6 +593,12 @@ function NetchatApp() {
     snapshot,
     uiConfig?.showSessionIds,
   ]);
+  const nodeTypes = useMemo(
+    () => ({
+      message: MessageGraphNode,
+    }),
+    [],
+  );
 
   useOnViewportChange({
     onChange: syncBubbleComposerAnchor,
@@ -582,6 +607,11 @@ function NetchatApp() {
 
   useEffect(() => {
     if (!snapshot || snapshot.messages.length === 0 || !nodesInitialized) {
+      return;
+    }
+
+    const autoFitTargetId = activeNetId ?? "__active-net__";
+    if (lastAutoFitNetIdRef.current === autoFitTargetId) {
       return;
     }
 
@@ -600,6 +630,7 @@ function NetchatApp() {
           minZoom: 0.34,
           maxZoom: 1.1,
         });
+        lastAutoFitNetIdRef.current = autoFitTargetId;
       }, 80);
     });
 
@@ -611,6 +642,7 @@ function NetchatApp() {
       }
     };
   }, [
+    activeNetId,
     nodesInitialized,
     reactFlow,
     snapshot?.branches.length,
@@ -1266,8 +1298,6 @@ function NetchatApp() {
 
         <ReactFlow
           className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
-          fitView
-          fitViewOptions={{ padding: 0.18, minZoom: 0.34, maxZoom: 1.1 }}
           nodes={graph.nodes}
           edges={graph.edges}
           onNodeClick={(_event, node) => {
@@ -1277,9 +1307,7 @@ function NetchatApp() {
               pickMessage(node.id);
             }
           }}
-          nodeTypes={{
-            message: MessageGraphNode,
-          }}
+          nodeTypes={nodeTypes}
           minZoom={0.35}
           maxZoom={1.45}
           nodesDraggable={false}
@@ -2049,7 +2077,10 @@ function buildFlowGraph({
         targetPosition: Position.Top,
         data: {
           message,
-          liveAssistantState: liveAssistantStates[message.id] ?? snapshot.assistantStates[message.id] ?? null,
+          liveAssistantState:
+            liveAssistantStates[message.id] ??
+            projectAssistantStateForRender(snapshot.assistantStates[message.id] ?? null) ??
+            null,
           isActiveMessage: message.id === activePathMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
           selectionAnchors: selectionAnchorsByMessageId.get(message.id) ?? [],
@@ -2270,6 +2301,80 @@ function buildOptimisticRootStreamTurn(
       },
     },
   };
+}
+
+function projectAssistantStateForRender(state: AssistantStreamState | null | undefined): AssistantStreamState | null {
+  if (!state) {
+    return null;
+  }
+
+  return {
+    ...state,
+    blocks: state.blocks.filter((block) =>
+      block.kind === "thinking"
+        ? block.status === "complete" && block.text.trim().length > 0
+        : block.status === "complete" || block.status === "error",
+    ),
+    responseText: state.status === "complete" ? state.responseText : "",
+  };
+}
+
+function assistantStatesEqual(left: AssistantStreamState | null, right: AssistantStreamState | null) {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  if (
+    left.status !== right.status ||
+    left.responseText !== right.responseText ||
+    left.errorMessage !== right.errorMessage ||
+    left.blocks.length !== right.blocks.length
+  ) {
+    return false;
+  }
+
+  for (let index = 0; index < left.blocks.length; index += 1) {
+    const leftBlock = left.blocks[index];
+    const rightBlock = right.blocks[index];
+
+    if (!rightBlock) {
+      return false;
+    }
+
+    if (
+      leftBlock.id !== rightBlock.id ||
+      leftBlock.order !== rightBlock.order ||
+      leftBlock.kind !== rightBlock.kind ||
+      leftBlock.status !== rightBlock.status
+    ) {
+      return false;
+    }
+
+    if (leftBlock.kind === "thinking" && rightBlock.kind === "thinking") {
+      if (leftBlock.text !== rightBlock.text) {
+        return false;
+      }
+      continue;
+    }
+
+    if (
+      leftBlock.kind !== "thinking" &&
+      rightBlock.kind !== "thinking" &&
+      (leftBlock.toolCallId !== rightBlock.toolCallId ||
+        leftBlock.toolName !== rightBlock.toolName ||
+        leftBlock.inputText !== rightBlock.inputText ||
+        leftBlock.outputText !== rightBlock.outputText ||
+        leftBlock.isError !== rightBlock.isError)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function buildOptimisticBranchCreationStreamTurn(
