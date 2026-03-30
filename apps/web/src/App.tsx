@@ -16,6 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, LoaderCircle, MoreHorizontal } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import {
   AssistantStreamState,
   DaemonDiagnostics,
@@ -37,6 +38,7 @@ import {
   makeId,
   rootBranchId,
 } from "@netchat/shared";
+import remarkGfm from "remark-gfm";
 import { create } from "zustand";
 
 import { Button } from "./components/ui/button";
@@ -85,18 +87,19 @@ type MessageNodeData = {
   sessionLabelSide: "left" | "right";
   onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
-  onActivateMessagePath: (messageId: string) => void;
+  onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
 };
 
 type MessageSelectionAnchor = {
   id: string;
   handleId: string;
+  sourceMessageId: string;
   targetMessageId: string;
   label: string;
-  startOffset: number;
-  endOffset: number;
-  isActive: boolean;
+  startOffset: number | null;
+  endOffset: number | null;
+  isExpanded: boolean;
 };
 
 type ActiveStreamedTurn = {
@@ -116,6 +119,12 @@ type PendingTurnMetadata = {
   assistantState: AssistantStreamState;
 };
 
+type CanvasViewport = {
+  x: number;
+  y: number;
+  zoom: number;
+};
+
 const useComposerStore = create<{
   selectedMessageId: string | null;
   setSelectedMessageId: (messageId: string | null) => void;
@@ -123,6 +132,72 @@ const useComposerStore = create<{
   selectedMessageId: null,
   setSelectedMessageId: (selectedMessageId) => set({ selectedMessageId }),
 }));
+
+const markdownComponents: Components = {
+  h1: ({ children }) => (
+    <h1 className="mb-4 text-[30px] font-semibold leading-[1.18] tracking-[-0.03em] text-[var(--text-main)]">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mb-4 text-[26px] font-semibold leading-[1.24] tracking-[-0.02em] text-[var(--text-main)]">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => <h3 className="mb-3 text-[22px] font-semibold leading-[1.3] text-[var(--text-main)]">{children}</h3>,
+  p: ({ children }) => <p className="mb-4 whitespace-pre-wrap last:mb-0">{children}</p>,
+  ul: ({ children }) => <ul className="mb-4 ml-6 list-disc space-y-2 last:mb-0">{children}</ul>,
+  ol: ({ children }) => <ol className="mb-4 ml-6 list-decimal space-y-2 last:mb-0">{children}</ol>,
+  li: ({ children }) => <li className="pl-1">{children}</li>,
+  blockquote: ({ children }) => (
+    <blockquote className="mb-4 border-l-2 border-[var(--block-ochre)] pl-4 italic text-[rgba(26,26,26,0.72)] last:mb-0">
+      {children}
+    </blockquote>
+  ),
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      target={href?.startsWith("#") ? undefined : "_blank"}
+      rel={href?.startsWith("#") ? undefined : "noreferrer"}
+      className="break-words text-[var(--block-ochre)] underline decoration-[rgba(194,142,85,0.4)] underline-offset-4"
+    >
+      {children}
+    </a>
+  ),
+  hr: () => <hr className="my-5 border-0 border-t border-[var(--node-border)]" />,
+  table: ({ children }) => (
+    <div className="mb-4 overflow-x-auto last:mb-0">
+      <table className="min-w-full border-collapse border border-[var(--node-border)] text-[16px] leading-7">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-[rgba(244,241,234,0.66)]">{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => <tr className="border-b border-[var(--node-border)] last:border-b-0">{children}</tr>,
+  th: ({ children }) => <th className="border-r border-[var(--node-border)] px-3 py-2 text-left font-semibold last:border-r-0">{children}</th>,
+  td: ({ children }) => <td className="border-r border-[var(--node-border)] px-3 py-2 align-top last:border-r-0">{children}</td>,
+  pre: ({ children }) => (
+    <pre className="my-4 overflow-x-auto border border-[var(--node-border)] bg-[rgba(244,241,234,0.46)] px-4 py-4 text-[15px] leading-7 last:mb-0">
+      {children}
+    </pre>
+  ),
+  code: ({ children, className }) => {
+    const normalizedClassName = className ?? "";
+    const isBlockCode = normalizedClassName.includes("language-");
+    const content = String(children).replace(/\n$/, "");
+
+    if (isBlockCode) {
+      return <code className={cn(normalizedClassName, "font-mono text-[15px]")}>{content}</code>;
+    }
+
+    return (
+      <code className="rounded bg-[rgba(244,241,234,0.84)] px-1.5 py-0.5 font-mono text-[0.92em] text-[rgba(26,26,26,0.84)]">
+        {content}
+      </code>
+    );
+  },
+};
 
 export default function App() {
   return (
@@ -136,6 +211,7 @@ function NetchatApp() {
   const queryClient = useQueryClient();
   const reactFlow = useReactFlow();
   const nodesInitialized = useNodesInitialized();
+  const canvasHostRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const openNetMenuRef = useRef<HTMLDivElement>(null);
   const lastAutoSelectedMessageIdRef = useRef<string | null>(null);
@@ -146,6 +222,9 @@ function NetchatApp() {
   const [composerValue, setComposerValue] = useState("");
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
+  const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
+  const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
   const [editingNetId, setEditingNetId] = useState<string | null>(null);
   const [editingNetTitle, setEditingNetTitle] = useState("");
@@ -368,6 +447,7 @@ function NetchatApp() {
       queryClient.setQueryData(["workspace"], nextWorkspace);
       setComposerValue("");
       setSelectionDraft(null);
+      setExpandedBranchIds([]);
       setSelectedMessageId(null);
       setActivePathMessageId(null);
       clearBrowserSelection();
@@ -389,6 +469,7 @@ function NetchatApp() {
       queryClient.setQueryData(["workspace"], nextWorkspace);
       setComposerValue("");
       setSelectionDraft(null);
+      setExpandedBranchIds([]);
       setSelectedMessageId(null);
       setActivePathMessageId(null);
       clearBrowserSelection();
@@ -434,6 +515,7 @@ function NetchatApp() {
       if (activeNetChanged) {
         setComposerValue("");
         setSelectionDraft(null);
+        setExpandedBranchIds([]);
         setSelectedMessageId(null);
         setActivePathMessageId(null);
         clearBrowserSelection();
@@ -494,13 +576,6 @@ function NetchatApp() {
     setSelectedMessageId(draft.sourceMessageId);
     setSelectionDraft(draft);
     focusComposer();
-  }
-
-  function activateSelectionAnchorTarget(messageId: string) {
-    activateMessagePath(messageId);
-    setSelectedMessageId(null);
-    setSelectionDraft(null);
-    clearBrowserSelection();
   }
 
   function beginNetRename(netId: string, title: string) {
@@ -566,6 +641,31 @@ function NetchatApp() {
           },
     );
   }, []);
+  const expandedBranchIdSet = useMemo(() => new Set(expandedBranchIds), [expandedBranchIds]);
+
+  const toggleSelectionAnchor = useCallback(
+    (anchor: MessageSelectionAnchor) => {
+      if (!snapshot) {
+        return;
+      }
+
+      setSelectedMessageId(null);
+      setSelectionDraft(null);
+      clearBrowserSelection();
+
+      if (anchor.isExpanded) {
+        const descendantBranchIds = new Set(getDescendantBranchIds(snapshot, anchor.id));
+        descendantBranchIds.add(anchor.id);
+        setExpandedBranchIds((current) => current.filter((branchId) => !descendantBranchIds.has(branchId)));
+        activateMessagePath(anchor.sourceMessageId);
+        return;
+      }
+
+      setExpandedBranchIds((current) => (current.includes(anchor.id) ? current : [...current, anchor.id]));
+      activateMessagePath(anchor.targetMessageId);
+    },
+    [snapshot, setSelectedMessageId],
+  );
 
   const graph = useMemo(() => {
     if (!snapshot) {
@@ -573,11 +673,12 @@ function NetchatApp() {
     }
 
     return buildFlowGraph({
+      expandedBranchIds: expandedBranchIdSet,
       liveAssistantStates,
       snapshot,
       activePathMessageId,
       onPickMessage: pickMessage,
-      onActivateMessagePath: activateSelectionAnchorTarget,
+      onToggleSelectionAnchor: toggleSelectionAnchor,
       selectionDraft,
       measuredNodeHeights,
       onMeasureHeight: reportMessageNodeHeight,
@@ -586,11 +687,13 @@ function NetchatApp() {
     });
   }, [
     activePathMessageId,
+    expandedBranchIdSet,
     liveAssistantStates,
     measuredNodeHeights,
     reportMessageNodeHeight,
     selectionDraft,
     snapshot,
+    toggleSelectionAnchor,
     uiConfig?.showSessionIds,
   ]);
   const nodeTypes = useMemo(
@@ -601,9 +704,41 @@ function NetchatApp() {
   );
 
   useOnViewportChange({
-    onChange: syncBubbleComposerAnchor,
-    onEnd: syncBubbleComposerAnchor,
+    onChange: (nextViewport) => {
+      setViewport(nextViewport);
+      syncBubbleComposerAnchor();
+    },
+    onEnd: (nextViewport) => {
+      setViewport(nextViewport);
+      syncBubbleComposerAnchor();
+    },
   });
+
+  useEffect(() => {
+    const hostElement = canvasHostRef.current;
+    if (!hostElement) {
+      return;
+    }
+
+    const updateCanvasSize = () => {
+      setCanvasSize({
+        width: hostElement.clientWidth,
+        height: hostElement.clientHeight,
+      });
+    };
+
+    updateCanvasSize();
+
+    const observer = new ResizeObserver(() => {
+      updateCanvasSize();
+    });
+
+    observer.observe(hostElement);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (!snapshot || snapshot.messages.length === 0 || !nodesInitialized) {
@@ -696,6 +831,19 @@ function NetchatApp() {
       setActivePathMessageId(null);
     }
   }, [activePathMessageId, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot) {
+      setExpandedBranchIds([]);
+      return;
+    }
+
+    const liveBranchIds = new Set(snapshot.branches.map((branch) => branch.id));
+    setExpandedBranchIds((current) => {
+      const next = current.filter((branchId) => branchId !== rootBranchId && liveBranchIds.has(branchId));
+      return next.length === current.length && next.every((branchId, index) => branchId === current[index]) ? current : next;
+    });
+  }, [snapshot]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -955,6 +1103,11 @@ function NetchatApp() {
             })
           : null;
       if (optimisticTurn) {
+        if (optimisticTurn.branchId) {
+          setExpandedBranchIds((current) =>
+            current.includes(optimisticTurn.branchId!) ? current : [...current, optimisticTurn.branchId!],
+          );
+        }
         beginOptimisticTurn(optimisticTurn);
       }
       void runStreamedTurn(
@@ -1041,19 +1194,6 @@ function NetchatApp() {
     null;
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
   const workspaceName = resolveWorkspaceName(workingDirectoryPath);
-  const composerHint = selectedMessage
-    ? runtimeMachine && runtimeMachine.status !== "online"
-      ? "Reconnect the local runtime to send from this bubble."
-      : selectionForSelectedMessage
-        ? selectedMessageIsTail
-          ? "You are continuing from a highlighted passage in this reply."
-          : "You are branching from a highlighted passage in this reply."
-      : sendMode === "branch-from-message"
-        ? "Next message creates a new branch."
-        : "Next message continues this branch."
-    : rootMachine
-      ? "Your next message starts the main branch."
-      : "Bring one local runtime online to start chatting.";
   const composerPlaceholder = selectedMessage
     ? selectionForSelectedMessage
       ? "Ask about the selected text in this context..."
@@ -1061,14 +1201,6 @@ function NetchatApp() {
         ? "Start a branch from this reply..."
         : "Continue from this reply..."
     : "Start the first turn...";
-  const composerMetaLabel =
-    selectionForSelectedMessage
-      ? "Selected passage"
-      : sendMode === "branch-from-message"
-        ? "New branch"
-      : selectedMessage
-        ? "Continue lane"
-        : "Main canvas";
   const composerErrorMessage =
     activeStreamedTurn && !activeStreamedTurn.isPending
       ? liveAssistantStates[activeStreamedTurn.assistantMessageId]?.errorMessage ?? streamErrorMessage
@@ -1079,15 +1211,12 @@ function NetchatApp() {
       renameNetMutation.error ??
       deleteNetMutation.error,
   );
-  const branchCount = snapshot?.branches.length ?? 0;
-  const messageCount = snapshot?.messages.length ?? 0;
-  const netCount = workspaceNets.length;
   const pendingDeletionNetId = pendingNetDeletion?.id ?? null;
   const isConfirmingDeletion = deleteNetMutation.isPending && deleteNetMutation.variables === pendingDeletionNetId;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
-      <div className="relative flex-1 overflow-hidden">
+      <div ref={canvasHostRef} className="relative flex-1 overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
 
         <div className="pointer-events-none absolute right-6 top-6 z-20 flex flex-col items-end gap-3">
@@ -1331,9 +1460,21 @@ function NetchatApp() {
           <Background gap={96} size={1} color="var(--line-color)" />
         </ReactFlow>
 
+        {graph.nodes.length > 0 ? (
+          <CanvasThumbnail
+            canvasSize={canvasSize}
+            measuredNodeHeights={measuredNodeHeights}
+            nodes={graph.nodes as Node<MessageNodeData>[]}
+            viewport={viewport}
+            onViewportChange={(nextViewport) => {
+              void reactFlow.setViewport(nextViewport, { duration: 0 });
+            }}
+          />
+        ) : null}
+
         {graphQuery.isLoading ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
-            <div className="border border-[var(--text-main)] bg-white px-6 py-4 text-sm uppercase tracking-[0.16em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
+            <div className="border border-[var(--text-main)] bg-white px-6 py-4 text-sm tracking-[0.08em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
               Loading conversation canvas...
             </div>
           </div>
@@ -1341,74 +1482,40 @@ function NetchatApp() {
 
         {!graphQuery.isLoading && !hasMessages ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
-            <form
-              className="pointer-events-auto w-full max-w-[880px] border border-[var(--text-main)] bg-white shadow-[14px_14px_0_rgba(26,26,26,0.08)]"
-              onSubmit={handleSubmit}
-            >
-              <div className="grid md:grid-cols-[minmax(0,1.2fr)_280px]">
-                <div className="border-b border-[var(--node-border)] px-8 py-8 md:border-b-0 md:border-r">
-                  <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Start here</div>
-                  <h1
-                    className="mt-4 max-w-[12ch] text-[44px] leading-[1.03] tracking-[-0.05em] text-[var(--text-main)]"
-                    style={{ fontFamily: "var(--font-display)" }}
-                  >
-                    Turn one prompt into a branchable canvas.
-                  </h1>
-                  <p className="mt-5 max-w-[56ch] text-[18px] leading-9 text-[rgba(26,26,26,0.8)]">
-                    Conversations read like an editorial layout instead of a chat feed. Click Claude replies or
-                    highlight a passage later to open new lanes from the exact point you want to explore.
-                  </p>
-                </div>
-
-                <div className="bg-[var(--block-slate)] px-6 py-8 text-white">
-                  <div className="editorial-meta text-white/58">Current issue</div>
-                  <div className="mt-4 text-[30px] leading-[1.08] tracking-[-0.03em]" style={{ fontFamily: "var(--font-display)" }}>
-                    Local-first branching.
-                  </div>
-                  <div className="mt-5 space-y-4 text-[17px] leading-9 text-white/82">
-                    <p>{netCount} nets available in this workspace.</p>
-                    <p>{branchCount} branches archived on the canvas.</p>
-                    <p>{messageCount} messages currently mapped.</p>
-                    <p>The active machine determines where the next lane is written.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="border-t border-[var(--text-main)] bg-[var(--block-ochre)] px-8 py-7 text-white">
-                <div className="editorial-meta text-white/72">{composerMetaLabel}</div>
-                <div className="relative mt-4">
-                  <Textarea
-                    ref={composerRef}
-                    className="!min-h-[152px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-14 !pr-24 text-[19px] font-medium leading-10 text-white shadow-none placeholder:text-white focus-visible:ring-0"
-                    placeholder={composerPlaceholder}
-                    value={composerValue}
-                    onChange={(event) => setComposerValue(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        if (!sendDisabled) {
-                          submitCurrentPrompt();
-                        }
+            <form className="pointer-events-auto w-full max-w-[920px]" onSubmit={handleSubmit}>
+              <div className="relative border border-[var(--text-main)] bg-white px-7 py-6 shadow-[14px_14px_0_rgba(26,26,26,0.08)]">
+                <Textarea
+                  ref={composerRef}
+                  className="!min-h-[188px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-16 !pr-20 text-[20px] font-medium leading-10 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
+                  placeholder={composerPlaceholder}
+                  value={composerValue}
+                  onChange={(event) => setComposerValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      if (!sendDisabled) {
+                        submitCurrentPrompt();
                       }
-                    }}
-                  />
-                  <div className="pointer-events-none absolute bottom-0 left-0 flex max-w-[calc(100%-6rem)] items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.22em] text-white/68">
-                    <span>{composerMetaLabel}</span>
-                    <span className="inline-flex h-px w-6 bg-white/36" />
-                    <span className="truncate">{composerHint}</span>
-                  </div>
-                  <Button
-                    className="absolute bottom-0 right-0 h-12 w-12 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
-                    disabled={sendDisabled}
-                    type="submit"
-                  >
-                    <ArrowUp className="size-4" />
-                  </Button>
+                    }
+                  }}
+                />
+                <div
+                  className="pointer-events-none absolute bottom-6 left-7 max-w-[calc(100%-7.5rem)] truncate text-[14px] leading-6 text-[rgba(26,26,26,0.46)]"
+                  title={workingDirectoryPath}
+                >
+                  {truncateMiddle(workingDirectoryPath, 88)}
                 </div>
+                <Button
+                  className="absolute bottom-4 right-4 h-12 w-12 rounded-none border border-[var(--text-main)] bg-[var(--text-main)] px-0 text-white shadow-none hover:bg-[var(--block-slate)]"
+                  disabled={sendDisabled}
+                  type="submit"
+                >
+                  <ArrowUp className="size-4" />
+                </Button>
               </div>
 
               {composerErrorMessage ? (
-                <div className="border-t border-rose-200 bg-rose-50 px-8 py-4 text-sm leading-6 text-rose-700">
+                <div className="border-x border-b border-rose-200 bg-rose-50 px-7 py-4 text-sm leading-6 text-rose-700">
                   {composerErrorMessage}
                 </div>
               ) : null}
@@ -1429,8 +1536,9 @@ function NetchatApp() {
             >
               {selectionForSelectedMessage ? (
                 <div className="border-b border-white/24 px-6 py-4">
-                  <div className="break-words text-[17px] font-medium leading-9 text-white">
-                    {truncate(selectionForSelectedMessage.selectedText, 160)}
+                  <div className="text-[14px] font-medium leading-6 text-white/72">User</div>
+                  <div className="mt-2 break-words text-[17px] italic leading-9 text-white/82">
+                    {`“${truncate(selectionForSelectedMessage.selectedText, 160)}”`}
                   </div>
                 </div>
               ) : null}
@@ -1438,7 +1546,7 @@ function NetchatApp() {
               <div className="relative px-6 py-5">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[19px] font-medium leading-10 text-white shadow-none placeholder:text-white focus-visible:ring-0"
+                  className="!min-h-[126px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-20 text-[19px] font-medium leading-10 text-white shadow-none placeholder:font-normal placeholder:text-white/48 focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -1513,6 +1621,241 @@ function NetchatApp() {
   );
 }
 
+function CanvasThumbnail({
+  nodes,
+  measuredNodeHeights,
+  viewport,
+  canvasSize,
+  onViewportChange,
+}: {
+  nodes: Node<MessageNodeData>[];
+  measuredNodeHeights: Record<string, number>;
+  viewport: CanvasViewport;
+  canvasSize: { width: number; height: number };
+  onViewportChange: (viewport: CanvasViewport) => void;
+}) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [dragState, setDragState] = useState<{ offsetX: number; offsetY: number } | null>(null);
+  const thumbnailWidth = 248;
+  const thumbnailHeight = 176;
+
+  const bounds = useMemo(() => {
+    if (nodes.length === 0) {
+      return null;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const node of nodes) {
+      const data = node.data as MessageNodeData | undefined;
+      const messageHeight =
+        measuredNodeHeights[node.id] ??
+        (data?.message ? estimateMessageBubbleHeight(data.message) : 240);
+
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + messageNodeWidth);
+      maxY = Math.max(maxY, node.position.y + messageHeight);
+    }
+
+    const paddedMinX = minX - 180;
+    const paddedMinY = minY - 140;
+    const paddedMaxX = maxX + 180;
+    const paddedMaxY = maxY + 140;
+
+    return {
+      minX: paddedMinX,
+      minY: paddedMinY,
+      maxX: paddedMaxX,
+      maxY: paddedMaxY,
+      width: Math.max(1, paddedMaxX - paddedMinX),
+      height: Math.max(1, paddedMaxY - paddedMinY),
+    };
+  }, [measuredNodeHeights, nodes]);
+
+  const thumbnailGeometry = useMemo(() => {
+    if (!bounds) {
+      return null;
+    }
+
+    const scale = Math.min(thumbnailWidth / bounds.width, thumbnailHeight / bounds.height);
+    const contentWidth = bounds.width * scale;
+    const contentHeight = bounds.height * scale;
+
+    return {
+      scale,
+      offsetX: (thumbnailWidth - contentWidth) / 2,
+      offsetY: (thumbnailHeight - contentHeight) / 2,
+    };
+  }, [bounds, thumbnailHeight, thumbnailWidth]);
+
+  const viewportRect = useMemo(() => {
+    if (!bounds || !thumbnailGeometry || canvasSize.width <= 0 || canvasSize.height <= 0 || viewport.zoom <= 0) {
+      return null;
+    }
+
+    const flowLeft = -viewport.x / viewport.zoom;
+    const flowTop = -viewport.y / viewport.zoom;
+    const flowWidth = canvasSize.width / viewport.zoom;
+    const flowHeight = canvasSize.height / viewport.zoom;
+
+    return {
+      left: thumbnailGeometry.offsetX + (flowLeft - bounds.minX) * thumbnailGeometry.scale,
+      top: thumbnailGeometry.offsetY + (flowTop - bounds.minY) * thumbnailGeometry.scale,
+      width: flowWidth * thumbnailGeometry.scale,
+      height: flowHeight * thumbnailGeometry.scale,
+      flowLeft,
+      flowTop,
+      flowWidth,
+      flowHeight,
+    };
+  }, [bounds, canvasSize.height, canvasSize.width, thumbnailGeometry, viewport.x, viewport.y, viewport.zoom]);
+
+  const flowPointFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!bounds || !thumbnailGeometry || !frameRef.current) {
+        return null;
+      }
+
+      const rect = frameRef.current.getBoundingClientRect();
+      const localX = clamp(clientX - rect.left, 0, rect.width);
+      const localY = clamp(clientY - rect.top, 0, rect.height);
+
+      return {
+        x: bounds.minX + (localX - thumbnailGeometry.offsetX) / thumbnailGeometry.scale,
+        y: bounds.minY + (localY - thumbnailGeometry.offsetY) / thumbnailGeometry.scale,
+      };
+    },
+    [bounds, thumbnailGeometry],
+  );
+
+  const moveViewport = useCallback(
+    (flowLeft: number, flowTop: number) => {
+      if (!bounds || !viewportRect) {
+        return;
+      }
+
+      const nextLeft = clamp(flowLeft, bounds.minX, Math.max(bounds.minX, bounds.maxX - viewportRect.flowWidth));
+      const nextTop = clamp(flowTop, bounds.minY, Math.max(bounds.minY, bounds.maxY - viewportRect.flowHeight));
+
+      onViewportChange({
+        x: -nextLeft * viewport.zoom,
+        y: -nextTop * viewport.zoom,
+        zoom: viewport.zoom,
+      });
+    },
+    [bounds, onViewportChange, viewport.zoom, viewportRect],
+  );
+
+  useEffect(() => {
+    if (!dragState) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const flowPoint = flowPointFromClient(event.clientX, event.clientY);
+      if (!flowPoint) {
+        return;
+      }
+
+      moveViewport(flowPoint.x - dragState.offsetX, flowPoint.y - dragState.offsetY);
+    };
+
+    const handlePointerUp = () => {
+      setDragState(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [dragState, flowPointFromClient, moveViewport]);
+
+  if (!bounds || !thumbnailGeometry || !viewportRect) {
+    return null;
+  }
+
+  return (
+    <div className="pointer-events-none absolute bottom-6 right-6 z-20">
+      <div className="pointer-events-auto border border-[var(--text-main)] bg-white p-2 shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+        <div
+          ref={frameRef}
+          className="relative overflow-hidden bg-[rgba(244,241,234,0.78)]"
+          style={{ width: thumbnailWidth, height: thumbnailHeight }}
+        >
+          {nodes.map((node) => {
+            const data = node.data as MessageNodeData | undefined;
+            const height =
+              measuredNodeHeights[node.id] ??
+              (data?.message ? estimateMessageBubbleHeight(data.message) : 240);
+            const left = thumbnailGeometry.offsetX + (node.position.x - bounds.minX) * thumbnailGeometry.scale;
+            const top = thumbnailGeometry.offsetY + (node.position.y - bounds.minY) * thumbnailGeometry.scale;
+            const width = messageNodeWidth * thumbnailGeometry.scale;
+            const scaledHeight = height * thumbnailGeometry.scale;
+            const message = data?.message;
+            const isAssistant = message?.role === "assistant";
+
+            return (
+              <div
+                key={node.id}
+                className="absolute border"
+                style={{
+                  left,
+                  top,
+                  width,
+                  height: scaledHeight,
+                  borderColor:
+                    data?.liveAssistantState?.status === "error"
+                      ? "#BE185D"
+                      : isAssistant
+                        ? "#3E4E42"
+                        : "#3A4042",
+                  borderTopWidth: Math.max(1, Math.round(4 * thumbnailGeometry.scale)),
+                  backgroundColor: isAssistant ? "rgba(255,255,255,0.9)" : "rgba(247,247,242,0.96)",
+                  opacity: 0.96,
+                }}
+              />
+            );
+          })}
+
+          <button
+            type="button"
+            data-thumbnail-viewport="true"
+            aria-label="Drag visible canvas area"
+            className="absolute border-2 border-[rgba(26,26,26,0.8)] bg-[rgba(26,26,26,0.08)] transition-colors hover:bg-[rgba(26,26,26,0.12)]"
+            style={{
+              left: viewportRect.left,
+              top: viewportRect.top,
+              width: Math.max(24, viewportRect.width),
+              height: Math.max(24, viewportRect.height),
+            }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+
+              const flowPoint = flowPointFromClient(event.clientX, event.clientY);
+              if (!flowPoint) {
+                return;
+              }
+
+              setDragState({
+                offsetX: flowPoint.x - viewportRect.flowLeft,
+                offsetY: flowPoint.y - viewportRect.flowTop,
+              });
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const isUser = data.message.role === "user";
   const roleLabel = isUser ? "User" : "Claude";
@@ -1526,8 +1869,10 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const showPendingAssistantState =
     !isUser && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
   const visibleAssistantBlocks =
-    liveAssistantState?.blocks.filter(
-      (block) => block.kind !== "thinking" || block.text.trim().length > 0 || block.status !== "complete",
+    liveAssistantState?.blocks.filter((block) =>
+      block.kind === "thinking"
+        ? block.text.trim().length > 0
+        : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
     ) ?? [];
   const selectedPassage = isUser ? data.message.selectedText?.trim() ?? "" : "";
 
@@ -1604,7 +1949,9 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         )}
         style={{ width: messageNodeWidth }}
         onClickCapture={(event) => {
-          if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
+          const target = event.target as HTMLElement;
+          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-stream-block=\"true\"]")) {
+            event.stopPropagation();
             return;
           }
 
@@ -1615,14 +1962,18 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
           event.stopPropagation();
         }}
         onMouseDownCapture={(event) => {
-          if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
+          const target = event.target as HTMLElement;
+          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-stream-block=\"true\"]")) {
+            event.stopPropagation();
             return;
           }
 
           event.stopPropagation();
         }}
         onPointerDownCapture={(event) => {
-          if ((event.target as HTMLElement).closest("[data-selection-anchor=\"true\"]")) {
+          const target = event.target as HTMLElement;
+          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-stream-block=\"true\"]")) {
+            event.stopPropagation();
             return;
           }
 
@@ -1655,9 +2006,9 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         <div className="relative px-5 py-5">
           {isUser && selectedPassage ? (
             <div className="mb-5 border border-[var(--node-border)] bg-[rgba(244,241,234,0.56)] px-4 py-4">
-              <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Selected passage</div>
-              <div className="mt-3 whitespace-pre-wrap text-[16px] leading-8 text-[rgba(26,26,26,0.72)]">
-                {selectedPassage}
+              <div className="text-[14px] font-medium leading-6 text-[rgba(26,26,26,0.56)]">User</div>
+              <div className="mt-2 whitespace-pre-wrap text-[16px] italic leading-8 text-[rgba(26,26,26,0.62)]">
+                {`“${selectedPassage}”`}
               </div>
             </div>
           ) : null}
@@ -1666,6 +2017,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               {visibleAssistantBlocks.map((block) => (
                 <details
                   key={block.id}
+                  data-stream-block="true"
                   className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
                 >
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-4 py-3">
@@ -1742,19 +2094,14 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                 <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Response</div>
                 <div className="mt-3">
                   {responseContent ? (
-                    canSelectAssistantResponse ? (
-                      <SelectableMessage
-                        content={responseContent}
-                        anchors={data.selectionAnchors}
-                        disabled={false}
-                        onActivateAnchor={data.onActivateMessagePath}
-                        onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
-                      />
-                    ) : (
-                      <div className="message-copy whitespace-pre-wrap text-[19px] font-medium leading-10 text-[var(--text-main)]">
-                        {responseContent}
-                      </div>
-                    )
+                    <SelectableMessage
+                      content={responseContent}
+                      anchors={data.selectionAnchors}
+                      disabled={!canSelectAssistantResponse}
+                      renderMarkdown
+                      onToggleAnchor={data.onToggleSelectionAnchor}
+                      onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
+                    />
                   ) : (
                     <div className="flex min-h-[72px] items-center gap-3 text-[17px] leading-8 text-[rgba(26,26,26,0.58)]">
                       <LoaderCircle className="size-4 animate-spin text-[var(--block-ochre)]" />
@@ -1775,7 +2122,8 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               content={responseContent}
               anchors={data.selectionAnchors}
               disabled={isUser}
-              onActivateAnchor={data.onActivateMessagePath}
+              renderMarkdown={!isUser}
+              onToggleAnchor={data.onToggleSelectionAnchor}
               onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
             />
           )}
@@ -1789,21 +2137,24 @@ function SelectableMessage({
   content,
   anchors,
   disabled,
-  onActivateAnchor,
+  renderMarkdown,
+  onToggleAnchor,
   onSelection,
 }: {
   content: string;
   anchors: MessageSelectionAnchor[];
   disabled: boolean;
-  onActivateAnchor: (messageId: string) => void;
+  renderMarkdown: boolean;
+  onToggleAnchor: (anchor: MessageSelectionAnchor) => void;
   onSelection: (draft: Omit<SelectionDraft, "sourceMessageId">) => void;
 }) {
   const renderableAnchors = getRenderableSelectionAnchors(content, anchors);
+  const hasInlineAnchors = renderableAnchors.length > 0;
 
   return (
     <div
       className={cn(
-        "message-copy whitespace-pre-wrap text-[19px] font-medium leading-10 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
+        "message-copy text-[19px] font-medium leading-10 text-[var(--text-main)] selection:bg-[rgba(194,142,85,0.24)] selection:text-[var(--text-main)]",
         disabled ? "cursor-default" : "nodrag nopan cursor-text select-text",
       )}
       onClick={(event) => {
@@ -1859,7 +2210,7 @@ function SelectableMessage({
         });
       }}
     >
-      {renderableAnchors.length > 0
+      {hasInlineAnchors
         ? renderableAnchors.map((anchor, index) => {
             const previousEndOffset = renderableAnchors[index - 1]?.endOffset ?? 0;
             const nextLeadingText = content.slice(previousEndOffset, anchor.startOffset);
@@ -1870,15 +2221,16 @@ function SelectableMessage({
                 <button
                   type="button"
                   data-selection-anchor="true"
+                  title={anchor.label}
                   className={cn(
                     "relative inline-flex max-w-full items-center border px-1.5 py-0.5 text-left align-baseline text-[0.95em] leading-[1.7] transition-colors",
-                    anchor.isActive
+                    anchor.isExpanded
                       ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
                       : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
                   )}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onActivateAnchor(anchor.targetMessageId);
+                    onToggleAnchor(anchor);
                   }}
                   onMouseDown={(event) => {
                     event.stopPropagation();
@@ -1899,8 +2251,16 @@ function SelectableMessage({
               </span>
             );
           })
-        : content}
-      {renderableAnchors.length > 0 ? content.slice(renderableAnchors.at(-1)?.endOffset ?? 0) : null}
+        : renderMarkdown
+          ? (
+              <div className="message-markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                  {content}
+                </ReactMarkdown>
+              </div>
+            )
+          : <div className="whitespace-pre-wrap break-words">{content}</div>}
+      {hasInlineAnchors ? content.slice(renderableAnchors.at(-1)?.endOffset ?? 0) : null}
     </div>
   );
 }
@@ -1911,20 +2271,28 @@ function getRenderableSelectionAnchors(content: string, anchors: MessageSelectio
   }
 
   const sortedAnchors = [...anchors].sort((left, right) => {
-    if (left.startOffset !== right.startOffset) {
-      return left.startOffset - right.startOffset;
+    const leftStartOffset = typeof left.startOffset === "number" ? left.startOffset : Number.MAX_SAFE_INTEGER;
+    const rightStartOffset = typeof right.startOffset === "number" ? right.startOffset : Number.MAX_SAFE_INTEGER;
+    if (leftStartOffset !== rightStartOffset) {
+      return leftStartOffset - rightStartOffset;
     }
 
-    if (left.endOffset !== right.endOffset) {
-      return left.endOffset - right.endOffset;
+    const leftEndOffset = typeof left.endOffset === "number" ? left.endOffset : Number.MAX_SAFE_INTEGER;
+    const rightEndOffset = typeof right.endOffset === "number" ? right.endOffset : Number.MAX_SAFE_INTEGER;
+    if (leftEndOffset !== rightEndOffset) {
+      return leftEndOffset - rightEndOffset;
     }
 
     return left.id.localeCompare(right.id);
   });
-  const renderableAnchors: MessageSelectionAnchor[] = [];
+  const renderableAnchors: Array<MessageSelectionAnchor & { startOffset: number; endOffset: number }> = [];
   let cursor = 0;
 
   for (const anchor of sortedAnchors) {
+    if (typeof anchor.startOffset !== "number" || typeof anchor.endOffset !== "number") {
+      continue;
+    }
+
     const startOffset = clamp(anchor.startOffset, 0, content.length);
     const endOffset = clamp(anchor.endOffset, 0, content.length);
 
@@ -1949,6 +2317,7 @@ function makeSelectionAnchorHandleId(branchId: string) {
 }
 
 function buildFlowGraph({
+  expandedBranchIds,
   liveAssistantStates,
   snapshot,
   activePathMessageId,
@@ -1956,10 +2325,11 @@ function buildFlowGraph({
   measuredNodeHeights,
   onMeasureHeight,
   onPickMessage,
-  onActivateMessagePath,
+  onToggleSelectionAnchor,
   onSelectionDraft,
   showSessionIds,
 }: {
+  expandedBranchIds: Set<string>;
   liveAssistantStates: Record<string, AssistantStreamState>;
   snapshot: GraphSnapshot;
   activePathMessageId: string | null;
@@ -1967,7 +2337,7 @@ function buildFlowGraph({
   measuredNodeHeights: Record<string, number>;
   onMeasureHeight: (messageId: string, height: number) => void;
   onPickMessage: (messageId: string) => void;
-  onActivateMessagePath: (messageId: string) => void;
+  onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
   showSessionIds: boolean;
 }) {
@@ -1978,17 +2348,27 @@ function buildFlowGraph({
     return { nodes, edges: [] };
   }
 
+  const visibleBranchIds = getVisibleBranchIds(snapshot, activePathMessageId, expandedBranchIds);
   const branchOrder = new Map(snapshot.branches.map((branch, index) => [branch.id, index]));
   const messagesById = new Map(snapshot.messages.map((message) => [message.id, message]));
-  const messagesByBranch = new Map<string, MessageNode[]>();
+  const allMessagesByBranch = new Map<string, MessageNode[]>();
   const childBranchesBySourceMessage = new Map<string, typeof snapshot.branches>();
   const selectionAnchorsByMessageId = new Map<string, MessageSelectionAnchor[]>();
   const sourceHandleByEdgeId = new Map<string, string>();
+  const visibleBranches = snapshot.branches.filter((branch) => visibleBranchIds.has(branch.id));
+  const visibleMessages = snapshot.messages.filter((message) => visibleBranchIds.has(message.branchId));
+  const visibleMessagesByBranch = new Map<string, MessageNode[]>();
 
   for (const message of snapshot.messages) {
-    const branchMessages = messagesByBranch.get(message.branchId) ?? [];
+    const branchMessages = allMessagesByBranch.get(message.branchId) ?? [];
     branchMessages.push(message);
-    messagesByBranch.set(message.branchId, branchMessages);
+    allMessagesByBranch.set(message.branchId, branchMessages);
+  }
+
+  for (const message of visibleMessages) {
+    const branchMessages = visibleMessagesByBranch.get(message.branchId) ?? [];
+    branchMessages.push(message);
+    visibleMessagesByBranch.set(message.branchId, branchMessages);
   }
 
   for (const branch of snapshot.branches) {
@@ -2000,18 +2380,8 @@ function buildFlowGraph({
     childBranches.push(branch);
     childBranchesBySourceMessage.set(branch.sourceMessageId, childBranches);
 
-    const firstBranchMessage = messagesByBranch.get(branch.id)?.[0];
-    const sourceMessage = messagesById.get(branch.sourceMessageId);
-    if (
-      !firstBranchMessage ||
-      !sourceMessage ||
-      !branch.selectedText ||
-      typeof branch.startOffset !== "number" ||
-      typeof branch.endOffset !== "number" ||
-      branch.startOffset < 0 ||
-      branch.endOffset > sourceMessage.content.length ||
-      branch.endOffset <= branch.startOffset
-    ) {
+    const firstBranchMessage = allMessagesByBranch.get(branch.id)?.[0];
+    if (!firstBranchMessage || !messagesById.get(branch.sourceMessageId) || !branch.selectedText?.trim()) {
       continue;
     }
 
@@ -2022,21 +2392,29 @@ function buildFlowGraph({
     anchors.push({
       id: branch.id,
       handleId: makeSelectionAnchorHandleId(branch.id),
+      sourceMessageId: branch.sourceMessageId,
       targetMessageId: firstBranchMessage.id,
       label,
-      startOffset: branch.startOffset,
-      endOffset: branch.endOffset,
-      isActive: activeEdgeIds.has(forkEdgeId),
+      startOffset: branch.startOffset ?? null,
+      endOffset: branch.endOffset ?? null,
+      isExpanded: visibleBranchIds.has(branch.id),
     });
     selectionAnchorsByMessageId.set(branch.sourceMessageId, anchors);
-    sourceHandleByEdgeId.set(forkEdgeId, makeSelectionAnchorHandleId(branch.id));
+
+    if (visibleBranchIds.has(branch.id)) {
+      sourceHandleByEdgeId.set(forkEdgeId, makeSelectionAnchorHandleId(branch.id));
+    }
   }
 
   for (const childBranches of childBranchesBySourceMessage.values()) {
     childBranches.sort((left, right) => (branchOrder.get(left.id) ?? 0) - (branchOrder.get(right.id) ?? 0));
   }
 
-  const edges: Edge[] = snapshot.edges.map((edge) => {
+  const visibleEdgeSnapshot = buildGraphEdges({
+    branches: visibleBranches,
+    messages: visibleMessages,
+  });
+  const edges: Edge[] = visibleEdgeSnapshot.map((edge) => {
     const isActive = activeEdgeIds.has(edge.id);
     const strokeColor = isActive ? "#1A1A1A" : edge.kind === "fork" ? "#C2B7A1" : "#8A9288";
 
@@ -2072,7 +2450,7 @@ function buildFlowGraph({
   function placeBranch(branchId: string, startY: number) {
     const laneIndex = branchLaneById.get(branchId) ?? 0;
     const centerX = laneIndex * branchLaneWidth;
-    const branchMessages = messagesByBranch.get(branchId) ?? [];
+    const branchMessages = visibleMessagesByBranch.get(branchId) ?? [];
     let cursorY = startY;
 
     branchMessages.forEach((message) => {
@@ -2104,7 +2482,7 @@ function buildFlowGraph({
           sessionLabelSide: laneIndex < 0 ? "left" : "right",
           onMeasureHeight,
           onPickMessage,
-          onActivateMessagePath,
+          onToggleSelectionAnchor,
           onSelectionDraft,
         } satisfies MessageNodeData,
       });
@@ -2112,6 +2490,10 @@ function buildFlowGraph({
       const childBranches = childBranchesBySourceMessage.get(message.id) ?? [];
 
       childBranches.forEach((childBranch) => {
+        if (!visibleBranchIds.has(childBranch.id)) {
+          return;
+        }
+
         assignLaneToBranch(childBranch.id, branchId);
         placeBranch(childBranch.id, cursorY + height + branchForkGap);
       });
@@ -2160,6 +2542,63 @@ function estimateMessageBubbleHeight(message: MessageNode) {
   const selectionBonus = selectedPassage ? 96 + selectionLines * 24 : 0;
 
   return Math.max(230, 150 + wrappedLines * messageEstimateLineHeight + codeBlockBonus + selectionBonus);
+}
+
+function getVisibleBranchIds(
+  snapshot: GraphSnapshot,
+  activePathMessageId: string | null,
+  expandedBranchIds: Set<string>,
+) {
+  const visibleBranchIds = new Set<string>();
+  const branchesById = new Map(snapshot.branches.map((branch) => [branch.id, branch]));
+  const messagesById = new Map(snapshot.messages.map((message) => [message.id, message]));
+
+  for (const branch of snapshot.branches) {
+    if (branch.id === rootBranchId || !branch.selectedText?.trim()) {
+      visibleBranchIds.add(branch.id);
+    }
+  }
+
+  for (const branchId of expandedBranchIds) {
+    if (branchesById.has(branchId)) {
+      visibleBranchIds.add(branchId);
+    }
+  }
+
+  let currentBranchId = activePathMessageId ? (messagesById.get(activePathMessageId)?.branchId ?? null) : null;
+  while (currentBranchId) {
+    visibleBranchIds.add(currentBranchId);
+    currentBranchId = branchesById.get(currentBranchId)?.parentBranchId ?? null;
+  }
+
+  return visibleBranchIds;
+}
+
+function getDescendantBranchIds(snapshot: GraphSnapshot, parentBranchId: string) {
+  const childBranchIdsByParent = new Map<string, string[]>();
+  for (const branch of snapshot.branches) {
+    if (!branch.parentBranchId) {
+      continue;
+    }
+
+    const childBranchIds = childBranchIdsByParent.get(branch.parentBranchId) ?? [];
+    childBranchIds.push(branch.id);
+    childBranchIdsByParent.set(branch.parentBranchId, childBranchIds);
+  }
+
+  const descendants: string[] = [];
+  const queue = [...(childBranchIdsByParent.get(parentBranchId) ?? [])];
+  while (queue.length > 0) {
+    const branchId = queue.shift();
+    if (!branchId) {
+      continue;
+    }
+
+    descendants.push(branchId);
+    queue.push(...(childBranchIdsByParent.get(branchId) ?? []));
+  }
+
+  return descendants;
 }
 
 function getActiveEdgeIds(snapshot: GraphSnapshot, selectedMessageId: string | null) {
@@ -2339,8 +2778,8 @@ function projectAssistantStateForRender(state: AssistantStreamState | null | und
     ...state,
     blocks: state.blocks.filter((block) =>
       block.kind === "thinking"
-        ? block.status === "complete" && block.text.trim().length > 0
-        : block.status === "complete" || block.status === "error",
+        ? block.text.trim().length > 0
+        : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
     ),
     responseText: state.status === "complete" ? state.responseText : "",
   };

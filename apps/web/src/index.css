@@ -71,8 +71,7 @@ textarea {
 .editorial-meta {
   font-size: 13px;
   font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .netchat-flow .react-flow__pane {

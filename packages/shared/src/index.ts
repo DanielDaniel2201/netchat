@@ -399,13 +399,27 @@ export function createPendingAssistantState(): AssistantStreamState {
   };
 }
 
+function finalizeAssistantBlocks(blocks: AssistantStreamBlock[] | null | undefined): AssistantStreamBlock[] {
+  return (blocks ?? []).map((block) =>
+    block.kind === "thinking"
+      ? {
+          ...block,
+          status: "complete",
+        }
+      : {
+          ...block,
+          status: block.status === "error" ? "error" : "complete",
+        },
+  );
+}
+
 export function finalizeAssistantState(
   current: AssistantStreamState | null | undefined,
   responseText: string,
 ): AssistantStreamState {
   return {
     status: current?.errorMessage ? "error" : "complete",
-    blocks: current?.blocks ?? [],
+    blocks: finalizeAssistantBlocks(current?.blocks),
     responseText: responseText || current?.responseText || "",
     errorMessage: current?.errorMessage ?? null,
   };
