@@ -11,6 +11,7 @@ import {
   ReactFlowProvider,
   useNodesInitialized,
   useOnViewportChange,
+  useUpdateNodeInternals,
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -79,7 +80,7 @@ type BubbleComposerMode =
 
 type MessageNodeData = {
   message: MessageNode;
-  liveAssistantState: AssistantStreamState | null;
+  persistedAssistantState: AssistantStreamState | null;
   isActiveMessage: boolean;
   hasSelectionDraft: boolean;
   selectionAnchors: MessageSelectionAnchor[];
@@ -131,6 +132,55 @@ const useComposerStore = create<{
 }>((set) => ({
   selectedMessageId: null,
   setSelectedMessageId: (selectedMessageId) => set({ selectedMessageId }),
+}));
+
+const useLiveAssistantStateStore = create<{
+  statesByMessageId: Record<string, AssistantStreamState>;
+  clearStates: () => void;
+  pruneStates: (messageIds: string[]) => void;
+  setState: (messageId: string, nextState: AssistantStreamState) => void;
+}>((set) => ({
+  statesByMessageId: {},
+  clearStates: () =>
+    set((current) =>
+      Object.keys(current.statesByMessageId).length === 0
+        ? current
+        : {
+            statesByMessageId: {},
+          },
+    ),
+  pruneStates: (messageIds) =>
+    set((current) => {
+      const liveMessageIds = new Set(messageIds);
+      let changed = false;
+      const nextStates: Record<string, AssistantStreamState> = {};
+
+      for (const [messageId, state] of Object.entries(current.statesByMessageId)) {
+        if (!liveMessageIds.has(messageId)) {
+          changed = true;
+          continue;
+        }
+
+        nextStates[messageId] = state;
+      }
+
+      return changed
+        ? {
+            statesByMessageId: nextStates,
+          }
+        : current;
+    }),
+  setState: (messageId, nextState) =>
+    set((current) =>
+      assistantStatesEqual(current.statesByMessageId[messageId] ?? null, nextState)
+        ? current
+        : {
+            statesByMessageId: {
+              ...current.statesByMessageId,
+              [messageId]: nextState,
+            },
+          },
+    ),
 }));
 
 const markdownComponents: Components = {
@@ -233,8 +283,11 @@ function NetchatApp() {
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
   const [showNetHistory, setShowNetHistory] = useState(false);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
-  const [liveAssistantStates, setLiveAssistantStates] = useState<Record<string, AssistantStreamState>>({});
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
+  const liveAssistantStates = useLiveAssistantStateStore((state) => state.statesByMessageId);
+  const clearLiveAssistantStates = useLiveAssistantStateStore((state) => state.clearStates);
+  const pruneLiveAssistantStates = useLiveAssistantStateStore((state) => state.pruneStates);
+  const setLiveAssistantState = useLiveAssistantStateStore((state) => state.setState);
 
   const workspaceQuery = useQuery({
     queryKey: ["workspace"],
@@ -276,6 +329,15 @@ function NetchatApp() {
     () => new Map((snapshot?.branches ?? []).map((branch) => [branch.id, branch])),
     [snapshot],
   );
+  const persistedAssistantStatesByMessageId = useMemo(() => {
+    const states: Record<string, AssistantStreamState | null> = {};
+
+    for (const [messageId, state] of Object.entries(snapshot?.assistantStates ?? {})) {
+      states[messageId] = projectAssistantStateForRender(state) ?? null;
+    }
+
+    return states;
+  }, [snapshot?.assistantStates]);
 
   const messagesByBranch = useMemo(() => {
     const buckets = new Map<string, MessageNode[]>();
@@ -349,10 +411,7 @@ function NetchatApp() {
             isPending: true,
           });
           const renderableState = projectAssistantStateForRender(event.assistantState);
-          setLiveAssistantStates((current) => ({
-            ...current,
-            [event.assistantMessageId]: renderableState ?? event.assistantState,
-          }));
+          setLiveAssistantState(event.assistantMessageId, renderableState ?? event.assistantState);
           setSelectedMessageId(event.assistantMessageId);
           setActivePathMessageId(event.assistantMessageId);
           return;
@@ -360,17 +419,7 @@ function NetchatApp() {
 
         if (event.type === "assistant.patch") {
           const renderableState = projectAssistantStateForRender(event.state);
-          setLiveAssistantStates((current) => {
-            const nextState = renderableState ?? event.state;
-            if (assistantStatesEqual(current[event.assistantMessageId] ?? null, nextState)) {
-              return current;
-            }
-
-            return {
-              ...current,
-              [event.assistantMessageId]: nextState,
-            };
-          });
+          setLiveAssistantState(event.assistantMessageId, renderableState ?? event.state);
           return;
         }
 
@@ -382,15 +431,16 @@ function NetchatApp() {
           const committedMessage =
             event.snapshot.messages.find((message) => message.id === event.assistantMessageId) ?? null;
           setActiveStreamedTurn(null);
-          setLiveAssistantStates((current) => ({
-            ...current,
-            [event.assistantMessageId]:
-              persistedAssistantState ??
+          const currentLiveAssistantState =
+            useLiveAssistantStateStore.getState().statesByMessageId[event.assistantMessageId] ?? null;
+          setLiveAssistantState(
+            event.assistantMessageId,
+            persistedAssistantState ??
               projectAssistantStateForRender(
-                finalizeAssistantState(current[event.assistantMessageId], committedMessage?.content ?? ""),
+                finalizeAssistantState(currentLiveAssistantState, committedMessage?.content ?? ""),
               ) ??
-              finalizeAssistantState(current[event.assistantMessageId], committedMessage?.content ?? ""),
-          }));
+              finalizeAssistantState(currentLiveAssistantState, committedMessage?.content ?? ""),
+          );
           setSelectedMessageId(event.assistantMessageId);
           setActivePathMessageId(event.assistantMessageId);
           await queryClient.invalidateQueries({ queryKey: ["workspace"] });
@@ -419,18 +469,21 @@ function NetchatApp() {
             }
           : current,
       );
-      setLiveAssistantStates((current) => ({
-        ...current,
-        [optimisticTurn.assistantMessageId]: projectAssistantStateForRender({
-          ...(current[optimisticTurn.assistantMessageId] ?? optimisticTurn.assistantState),
+      const currentLiveAssistantState =
+        useLiveAssistantStateStore.getState().statesByMessageId[optimisticTurn.assistantMessageId] ??
+        optimisticTurn.assistantState;
+      setLiveAssistantState(
+        optimisticTurn.assistantMessageId,
+        projectAssistantStateForRender({
+          ...currentLiveAssistantState,
           status: "error",
           errorMessage: message,
         }) ?? {
-          ...(current[optimisticTurn.assistantMessageId] ?? optimisticTurn.assistantState),
+          ...currentLiveAssistantState,
           status: "error",
           errorMessage: message,
         },
-      }));
+      );
       setStreamErrorMessage(message);
       logWeb("error", `${logLabel} failed: ${message}`);
     }
@@ -677,9 +730,9 @@ function NetchatApp() {
 
     return buildFlowGraph({
       expandedBranchIds: expandedBranchIdSet,
-      liveAssistantStates,
       snapshot,
       activePathMessageId,
+      persistedAssistantStatesByMessageId,
       onPickMessage: pickMessage,
       onToggleSelectionAnchor: toggleSelectionAnchor,
       selectionDraft,
@@ -691,8 +744,8 @@ function NetchatApp() {
   }, [
     activePathMessageId,
     expandedBranchIdSet,
-    liveAssistantStates,
     measuredNodeHeights,
+    persistedAssistantStatesByMessageId,
     reportMessageNodeHeight,
     selectionDraft,
     snapshot,
@@ -874,27 +927,12 @@ function NetchatApp() {
 
   useEffect(() => {
     if (!snapshot) {
-      setLiveAssistantStates({});
+      clearLiveAssistantStates();
       return;
     }
 
-    const liveMessageIds = new Set(snapshot.messages.map((message) => message.id));
-    setLiveAssistantStates((current) => {
-      let changed = false;
-      const next: Record<string, AssistantStreamState> = {};
-
-      for (const [messageId, state] of Object.entries(current)) {
-        if (liveMessageIds.has(messageId)) {
-          next[messageId] = state;
-          continue;
-        }
-
-        changed = true;
-      }
-
-      return changed ? next : current;
-    });
-  }, [snapshot]);
+    pruneLiveAssistantStates(snapshot.messages.map((message) => message.id));
+  }, [clearLiveAssistantStates, pruneLiveAssistantStates, snapshot]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -1024,10 +1062,7 @@ function NetchatApp() {
       optimisticSnapshot: optimisticTurn.optimisticSnapshot,
       isPending: true,
     });
-    setLiveAssistantStates((current) => ({
-      ...current,
-      [optimisticTurn.assistantMessageId]: optimisticTurn.assistantState,
-    }));
+    setLiveAssistantState(optimisticTurn.assistantMessageId, optimisticTurn.assistantState);
     setSelectedMessageId(optimisticTurn.assistantMessageId);
     setActivePathMessageId(optimisticTurn.assistantMessageId);
   }
@@ -1865,7 +1900,7 @@ function CanvasThumbnail({
                   width,
                   height: scaledHeight,
                   borderColor:
-                    data?.liveAssistantState?.status === "error"
+                    data?.persistedAssistantState?.status === "error"
                       ? "#BE185D"
                       : isAssistant
                         ? "#3E4E42"
@@ -1899,13 +1934,16 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const roleLabel = isUser ? "User" : "Claude";
   const bubbleRef = useRef<HTMLDivElement>(null);
   const sessionIdLabel = data.message.sessionId ?? "pending";
-  const liveAssistantState = !isUser ? data.liveAssistantState : null;
+  const liveAssistantState = useLiveAssistantStateStore((state) =>
+    !isUser ? (state.statesByMessageId[data.message.id] ?? data.persistedAssistantState ?? null) : null,
+  );
   const responseContent = !isUser
     ? liveAssistantState?.responseText || data.message.content
     : data.message.content;
   const canSelectAssistantResponse = !liveAssistantState || liveAssistantState.status === "complete";
   const showPendingAssistantState =
     !isUser && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
+  const shouldFreezeMeasuredHeight = showPendingAssistantState;
   const visibleAssistantBlocks =
     liveAssistantState?.blocks.filter((block) =>
       block.kind === "thinking"
@@ -1926,6 +1964,10 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
 
     reportHeight();
 
+    if (shouldFreezeMeasuredHeight) {
+      return;
+    }
+
     const observer = new ResizeObserver(() => {
       reportHeight();
     });
@@ -1935,7 +1977,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     return () => {
       observer.disconnect();
     };
-  }, [data.message.id, data.onMeasureHeight]);
+  }, [data.message.id, data.onMeasureHeight, shouldFreezeMeasuredHeight]);
 
   return (
     <div className="relative" style={{ width: messageNodeWidth }}>
@@ -2145,6 +2187,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                 <div className="mt-3">
                   {responseContent ? (
                     <SelectableMessage
+                      nodeId={data.message.id}
                       content={responseContent}
                       anchors={data.selectionAnchors}
                       disabled={!canSelectAssistantResponse}
@@ -2169,6 +2212,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
             </div>
           ) : (
             <SelectableMessage
+              nodeId={data.message.id}
               content={responseContent}
               anchors={data.selectionAnchors}
               disabled={isUser}
@@ -2184,6 +2228,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
 }
 
 function SelectableMessage({
+  nodeId,
   content,
   anchors,
   disabled,
@@ -2191,6 +2236,7 @@ function SelectableMessage({
   onToggleAnchor,
   onSelection,
 }: {
+  nodeId: string;
   content: string;
   anchors: MessageSelectionAnchor[];
   disabled: boolean;
@@ -2199,6 +2245,7 @@ function SelectableMessage({
   onSelection: (draft: Omit<SelectionDraft, "sourceMessageId">) => void;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const updateNodeInternals = useUpdateNodeInternals();
   const renderableAnchors = useMemo(() => getRenderableSelectionAnchors(content, anchors), [anchors, content]);
   const hasAnchors = renderableAnchors.length > 0;
   const [positionedAnchors, setPositionedAnchors] = useState<PositionedSelectionAnchor[]>([]);
@@ -2255,6 +2302,16 @@ function SelectableMessage({
   });
   const leftAnchors = anchorsForRender.filter((anchor) => anchor.side === "left");
   const rightAnchors = anchorsForRender.filter((anchor) => anchor.side === "right");
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      updateNodeInternals(nodeId);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [anchorsForRender, nodeId, updateNodeInternals]);
 
   return (
     <div
@@ -2763,7 +2820,7 @@ function makeSelectionAnchorHandleId(branchId: string) {
 
 function buildFlowGraph({
   expandedBranchIds,
-  liveAssistantStates,
+  persistedAssistantStatesByMessageId,
   snapshot,
   activePathMessageId,
   selectionDraft,
@@ -2775,7 +2832,7 @@ function buildFlowGraph({
   showSessionIds,
 }: {
   expandedBranchIds: Set<string>;
-  liveAssistantStates: Record<string, AssistantStreamState>;
+  persistedAssistantStatesByMessageId: Record<string, AssistantStreamState | null>;
   snapshot: GraphSnapshot;
   activePathMessageId: string | null;
   selectionDraft: SelectionDraft | null;
@@ -2916,10 +2973,7 @@ function buildFlowGraph({
         targetPosition: Position.Top,
         data: {
           message,
-          liveAssistantState:
-            liveAssistantStates[message.id] ??
-            projectAssistantStateForRender(snapshot.assistantStates[message.id] ?? null) ??
-            null,
+          persistedAssistantState: persistedAssistantStatesByMessageId[message.id] ?? null,
           isActiveMessage: message.id === activePathMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
           selectionAnchors: selectionAnchorsByMessageId.get(message.id) ?? [],
