@@ -47,7 +47,7 @@ import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/cn";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-const messageNodeWidth = 1260;
+const messageNodeWidth = 1340;
 const branchLaneWidth = 1860;
 const branchMessageGap = 96;
 const branchForkGap = 92;
@@ -223,6 +223,7 @@ function NetchatApp() {
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
+  const [pendingViewportFocusMessageId, setPendingViewportFocusMessageId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
@@ -658,11 +659,13 @@ function NetchatApp() {
         descendantBranchIds.add(anchor.id);
         setExpandedBranchIds((current) => current.filter((branchId) => !descendantBranchIds.has(branchId)));
         activateMessagePath(anchor.sourceMessageId);
+        setPendingViewportFocusMessageId(anchor.sourceMessageId);
         return;
       }
 
       setExpandedBranchIds((current) => (current.includes(anchor.id) ? current : [...current, anchor.id]));
       activateMessagePath(anchor.targetMessageId);
+      setPendingViewportFocusMessageId(anchor.targetMessageId);
     },
     [snapshot, setSelectedMessageId],
   );
@@ -976,6 +979,34 @@ function NetchatApp() {
       window.removeEventListener("resize", syncBubbleComposerAnchor);
     };
   }, [selectedMessage, syncBubbleComposerAnchor]);
+
+  useEffect(() => {
+    if (!pendingViewportFocusMessageId || !nodesInitialized || !snapshot) {
+      return;
+    }
+
+    const targetMessageId = pendingViewportFocusMessageId;
+    const frame = window.requestAnimationFrame(() => {
+      const node = reactFlow.getNode(targetMessageId);
+      if (!node) {
+        return;
+      }
+
+      void reactFlow.setCenter(
+        node.position.x + messageNodeWidth / 2,
+        node.position.y + (measuredNodeHeights[targetMessageId] ?? estimateMessageBubbleHeight((node.data as MessageNodeData).message)) / 2,
+        {
+          duration: 320,
+          zoom: Math.max(viewport.zoom, 0.42),
+        },
+      );
+      setPendingViewportFocusMessageId((current) => (current === targetMessageId ? null : current));
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [measuredNodeHeights, nodesInitialized, pendingViewportFocusMessageId, reactFlow, snapshot, viewport.zoom]);
 
   const isSwitchingNet =
     createNetMutation.isPending ||
@@ -1781,13 +1812,36 @@ function CanvasThumbnail({
     return null;
   }
 
+  const beginThumbnailDrag = (clientX: number, clientY: number, lockToViewport: boolean) => {
+    const flowPoint = flowPointFromClient(clientX, clientY);
+    if (!flowPoint) {
+      return;
+    }
+
+    const offsetX = lockToViewport ? flowPoint.x - viewportRect.flowLeft : viewportRect.flowWidth / 2;
+    const offsetY = lockToViewport ? flowPoint.y - viewportRect.flowTop : viewportRect.flowHeight / 2;
+
+    moveViewport(flowPoint.x - offsetX, flowPoint.y - offsetY);
+    setDragState({ offsetX, offsetY });
+  };
+
   return (
     <div className="pointer-events-none absolute bottom-6 right-6 z-20">
       <div className="pointer-events-auto border border-[var(--text-main)] bg-white p-2 shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
         <div
           ref={frameRef}
-          className="relative overflow-hidden bg-[rgba(244,241,234,0.78)]"
+          className={cn(
+            "relative overflow-hidden bg-[rgba(244,241,234,0.78)]",
+            dragState ? "cursor-grabbing" : "cursor-grab",
+          )}
           style={{ width: thumbnailWidth, height: thumbnailHeight }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const lockToViewport = Boolean((event.target as HTMLElement).closest("[data-thumbnail-viewport=\"true\"]"));
+            beginThumbnailDrag(event.clientX, event.clientY, lockToViewport);
+          }}
         >
           {nodes.map((node) => {
             const data = node.data as MessageNodeData | undefined;
@@ -1804,7 +1858,7 @@ function CanvasThumbnail({
             return (
               <div
                 key={node.id}
-                className="absolute border"
+                className="pointer-events-none absolute border"
                 style={{
                   left,
                   top,
@@ -1824,30 +1878,14 @@ function CanvasThumbnail({
             );
           })}
 
-          <button
-            type="button"
+          <div
             data-thumbnail-viewport="true"
-            aria-label="Drag visible canvas area"
-            className="absolute border-2 border-[rgba(26,26,26,0.8)] bg-[rgba(26,26,26,0.08)] transition-colors hover:bg-[rgba(26,26,26,0.12)]"
+            className="pointer-events-none absolute border-2 border-[rgba(26,26,26,0.8)] bg-[rgba(26,26,26,0.08)] transition-colors"
             style={{
               left: viewportRect.left,
               top: viewportRect.top,
               width: Math.max(24, viewportRect.width),
               height: Math.max(24, viewportRect.height),
-            }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-
-              const flowPoint = flowPointFromClient(event.clientX, event.clientY);
-              if (!flowPoint) {
-                return;
-              }
-
-              setDragState({
-                offsetX: flowPoint.x - viewportRect.flowLeft,
-                offsetY: flowPoint.y - viewportRect.flowTop,
-              });
             }}
           />
         </div>
@@ -1950,7 +1988,11 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         style={{ width: messageNodeWidth }}
         onClickCapture={(event) => {
           const target = event.target as HTMLElement;
-          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-stream-block=\"true\"]")) {
+          if (target.closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
+          if (target.closest("[data-stream-block=\"true\"]")) {
             event.stopPropagation();
             return;
           }
@@ -1963,7 +2005,11 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         }}
         onMouseDownCapture={(event) => {
           const target = event.target as HTMLElement;
-          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-stream-block=\"true\"]")) {
+          if (target.closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
+          if (target.closest("[data-stream-block=\"true\"]")) {
             event.stopPropagation();
             return;
           }
@@ -1972,7 +2018,11 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         }}
         onPointerDownCapture={(event) => {
           const target = event.target as HTMLElement;
-          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-stream-block=\"true\"]")) {
+          if (target.closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
+          if (target.closest("[data-stream-block=\"true\"]")) {
             event.stopPropagation();
             return;
           }
@@ -2008,7 +2058,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
             <div className="mb-5 border border-[var(--node-border)] bg-[rgba(244,241,234,0.56)] px-4 py-4">
               <div className="text-[14px] font-medium leading-6 text-[rgba(26,26,26,0.56)]">User</div>
               <div className="mt-2 whitespace-pre-wrap text-[16px] italic leading-8 text-[rgba(26,26,26,0.62)]">
-                {`“${selectedPassage}”`}
+                {`"${selectedPassage}"`}
               </div>
             </div>
           ) : null}
@@ -2148,8 +2198,63 @@ function SelectableMessage({
   onToggleAnchor: (anchor: MessageSelectionAnchor) => void;
   onSelection: (draft: Omit<SelectionDraft, "sourceMessageId">) => void;
 }) {
-  const renderableAnchors = getRenderableSelectionAnchors(content, anchors);
-  const hasInlineAnchors = renderableAnchors.length > 0;
+  const contentRef = useRef<HTMLDivElement>(null);
+  const renderableAnchors = useMemo(() => getRenderableSelectionAnchors(content, anchors), [anchors, content]);
+  const hasAnchors = renderableAnchors.length > 0;
+  const [positionedAnchors, setPositionedAnchors] = useState<PositionedSelectionAnchor[]>([]);
+
+  useEffect(() => {
+    if (!hasAnchors || !contentRef.current) {
+      setPositionedAnchors([]);
+      return;
+    }
+
+    const container = contentRef.current;
+    const updateLayout = () => {
+      setPositionedAnchors((current) => {
+        const previousLayoutById = new Map(
+          current.map((anchor) => [
+            anchor.id,
+            {
+              side: anchor.side,
+              top: anchor.top,
+            },
+          ]),
+        );
+        const next = buildSelectionAnchorGutterLayout(container, renderableAnchors, previousLayoutById);
+        return arePositionedSelectionAnchorsEqual(current, next) ? current : next;
+      });
+    };
+
+    updateLayout();
+
+    const frame = window.requestAnimationFrame(updateLayout);
+    const observer = new ResizeObserver(updateLayout);
+    observer.observe(container);
+    window.addEventListener("resize", updateLayout);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", updateLayout);
+    };
+  }, [hasAnchors, renderableAnchors]);
+
+  const positionedAnchorsById = useMemo(() => new Map(positionedAnchors.map((anchor) => [anchor.id, anchor])), [positionedAnchors]);
+  const anchorsForRender = renderableAnchors.map((anchor, index) => {
+    const positioned = positionedAnchorsById.get(anchor.id);
+    if (positioned) {
+      return positioned;
+    }
+
+    return {
+      ...anchor,
+      side: index % 2 === 0 ? ("left" as const) : ("right" as const),
+      top: 30 + index * 36,
+    };
+  });
+  const leftAnchors = anchorsForRender.filter((anchor) => anchor.side === "left");
+  const rightAnchors = anchorsForRender.filter((anchor) => anchor.side === "right");
 
   return (
     <div
@@ -2187,21 +2292,45 @@ function SelectableMessage({
           return;
         }
 
+        const selectionContainer = contentRef.current;
+        if (!selectionContainer) {
+          return;
+        }
+
         const range = selection.getRangeAt(0);
-        const container = event.currentTarget;
-        if (!container.contains(range.commonAncestorContainer)) {
+        if (!selectionContainer.contains(range.commonAncestorContainer)) {
           return;
         }
 
         const leadingWhitespace = rawText.match(/^\s*/)?.[0].length ?? 0;
         const trailingWhitespace = rawText.match(/\s*$/)?.[0].length ?? 0;
+        const textNodes = collectTextNodes(selectionContainer);
+        const rawStartOffsetFromTextNodes = resolveTextOffsetFromBoundaryTextNode(
+          textNodes,
+          range.startContainer,
+          range.startOffset,
+        );
+        const rawEndOffsetFromTextNodes = resolveTextOffsetFromBoundaryTextNode(textNodes, range.endContainer, range.endOffset);
 
-        const probe = range.cloneRange();
-        probe.selectNodeContents(container);
-        probe.setEnd(range.startContainer, range.startOffset);
-        const rawStartOffset = probe.toString().length;
+        let rawStartOffset: number;
+        let rawEndOffset: number;
+
+        if (typeof rawStartOffsetFromTextNodes === "number" && typeof rawEndOffsetFromTextNodes === "number") {
+          rawStartOffset = Math.min(rawStartOffsetFromTextNodes, rawEndOffsetFromTextNodes);
+          rawEndOffset = Math.max(rawStartOffsetFromTextNodes, rawEndOffsetFromTextNodes);
+        } else {
+          const probe = range.cloneRange();
+          probe.selectNodeContents(selectionContainer);
+          probe.setEnd(range.startContainer, range.startOffset);
+          rawStartOffset = probe.toString().length;
+          rawEndOffset = rawStartOffset + rawText.length;
+        }
+
         const startOffset = rawStartOffset + leadingWhitespace;
-        const endOffset = rawStartOffset + rawText.length - trailingWhitespace;
+        const endOffset = rawEndOffset - trailingWhitespace;
+        if (endOffset <= startOffset) {
+          return;
+        }
 
         onSelection({
           selectedText,
@@ -2210,106 +2339,422 @@ function SelectableMessage({
         });
       }}
     >
-      {hasInlineAnchors
-        ? renderableAnchors.map((anchor, index) => {
-            const previousEndOffset = renderableAnchors[index - 1]?.endOffset ?? 0;
-            const nextLeadingText = content.slice(previousEndOffset, anchor.startOffset);
+      <div className={cn(hasAnchors ? "grid grid-cols-[132px_minmax(0,1fr)_132px] gap-3" : "")}>
+        {hasAnchors ? (
+          <div className="relative">
+            {leftAnchors.map((anchor) => (
+              <button
+                key={anchor.id}
+                type="button"
+                data-selection-anchor="true"
+                title={anchor.label}
+                className={cn(
+                  "nodrag nopan absolute left-1/2 z-10 inline-flex w-[124px] -translate-x-1/2 -translate-y-1/2 items-center justify-center border px-2 py-1 text-center text-[11px] leading-4 transition-colors",
+                  anchor.isExpanded
+                    ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
+                    : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
+                )}
+                style={{ top: anchor.top, minHeight: 28 }}
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleAnchor(anchor);
+                }}
+              >
+                <Handle
+                  id={anchor.handleId}
+                  type="source"
+                  position={Position.Bottom}
+                  isConnectable={false}
+                  className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                />
+                <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
 
-            return (
-              <span key={anchor.id}>
-                {nextLeadingText}
-                <button
-                  type="button"
-                  data-selection-anchor="true"
-                  title={anchor.label}
-                  className={cn(
-                    "relative inline-flex max-w-full items-center border px-1.5 py-0.5 text-left align-baseline text-[0.95em] leading-[1.7] transition-colors",
-                    anchor.isExpanded
-                      ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
-                      : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
-                  )}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onToggleAnchor(anchor);
-                  }}
-                  onMouseDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                  }}
-                >
-                  <Handle
-                    id={anchor.handleId}
-                    type="source"
-                    position={Position.Bottom}
-                    isConnectable={false}
-                    className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
-                  />
-                  <span className="whitespace-pre-wrap break-words">{anchor.label}</span>
-                </button>
-              </span>
-            );
-          })
-        : renderMarkdown
-          ? (
-              <div className="message-markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                  {content}
-                </ReactMarkdown>
-              </div>
-            )
-          : <div className="whitespace-pre-wrap break-words">{content}</div>}
-      {hasInlineAnchors ? content.slice(renderableAnchors.at(-1)?.endOffset ?? 0) : null}
+        <div ref={contentRef} data-selection-content="true" className="min-w-0">
+          {renderMarkdown
+            ? (
+                <div className="message-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {content}
+                  </ReactMarkdown>
+                </div>
+              )
+            : <div className="whitespace-pre-wrap break-words">{content}</div>}
+        </div>
+
+        {hasAnchors ? (
+          <div className="relative">
+            {rightAnchors.map((anchor) => (
+              <button
+                key={anchor.id}
+                type="button"
+                data-selection-anchor="true"
+                title={anchor.label}
+                className={cn(
+                  "nodrag nopan absolute left-1/2 z-10 inline-flex w-[124px] -translate-x-1/2 -translate-y-1/2 items-center justify-center border px-2 py-1 text-center text-[11px] leading-4 transition-colors",
+                  anchor.isExpanded
+                    ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
+                    : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
+                )}
+                style={{ top: anchor.top, minHeight: 28 }}
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleAnchor(anchor);
+                }}
+              >
+                <Handle
+                  id={anchor.handleId}
+                  type="source"
+                  position={Position.Bottom}
+                  isConnectable={false}
+                  className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                />
+                <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {hasAnchors ? <div className="mt-3 border-t border-[rgba(26,26,26,0.08)]" /> : null}
     </div>
   );
 }
 
-function getRenderableSelectionAnchors(content: string, anchors: MessageSelectionAnchor[]) {
+type RenderableSelectionAnchor = MessageSelectionAnchor & {
+  startOffset: number | null;
+  endOffset: number | null;
+};
+
+type PositionedSelectionAnchor = RenderableSelectionAnchor & {
+  side: "left" | "right";
+  top: number;
+};
+
+function getRenderableSelectionAnchors(content: string, anchors: MessageSelectionAnchor[]): RenderableSelectionAnchor[] {
   if (anchors.length === 0) {
     return [];
   }
 
-  const sortedAnchors = [...anchors].sort((left, right) => {
-    const leftStartOffset = typeof left.startOffset === "number" ? left.startOffset : Number.MAX_SAFE_INTEGER;
-    const rightStartOffset = typeof right.startOffset === "number" ? right.startOffset : Number.MAX_SAFE_INTEGER;
-    if (leftStartOffset !== rightStartOffset) {
-      return leftStartOffset - rightStartOffset;
-    }
+  return [...anchors]
+    .sort((left, right) => {
+      const leftStartOffset = typeof left.startOffset === "number" ? left.startOffset : Number.MAX_SAFE_INTEGER;
+      const rightStartOffset = typeof right.startOffset === "number" ? right.startOffset : Number.MAX_SAFE_INTEGER;
+      if (leftStartOffset !== rightStartOffset) {
+        return leftStartOffset - rightStartOffset;
+      }
 
-    const leftEndOffset = typeof left.endOffset === "number" ? left.endOffset : Number.MAX_SAFE_INTEGER;
-    const rightEndOffset = typeof right.endOffset === "number" ? right.endOffset : Number.MAX_SAFE_INTEGER;
-    if (leftEndOffset !== rightEndOffset) {
-      return leftEndOffset - rightEndOffset;
+      const leftEndOffset = typeof left.endOffset === "number" ? left.endOffset : Number.MAX_SAFE_INTEGER;
+      const rightEndOffset = typeof right.endOffset === "number" ? right.endOffset : Number.MAX_SAFE_INTEGER;
+      if (leftEndOffset !== rightEndOffset) {
+        return leftEndOffset - rightEndOffset;
+      }
+
+      return left.id.localeCompare(right.id);
+    })
+    .map((anchor) => {
+      const fallbackLabel =
+        typeof anchor.startOffset === "number" &&
+        typeof anchor.endOffset === "number" &&
+        anchor.endOffset > anchor.startOffset
+          ? content.slice(clamp(anchor.startOffset, 0, content.length), clamp(anchor.endOffset, 0, content.length))
+          : "";
+
+      return {
+        ...anchor,
+        label: anchor.label || fallbackLabel || "Selected passage",
+        startOffset: typeof anchor.startOffset === "number" ? anchor.startOffset : null,
+        endOffset: typeof anchor.endOffset === "number" ? anchor.endOffset : null,
+      };
+    });
+}
+
+function buildSelectionAnchorGutterLayout(
+  container: HTMLElement,
+  anchors: RenderableSelectionAnchor[],
+  previousLayoutById?: Map<string, { side: "left" | "right"; top: number }>,
+): PositionedSelectionAnchor[] {
+  const textNodes = collectTextNodes(container);
+  const fullText = textNodes.map((node) => node.textContent ?? "").join("");
+  const totalLength = fullText.length;
+  const containerRect = container.getBoundingClientRect();
+  const containerHeight = container.offsetHeight || Math.round(containerRect.height);
+  const verticalScale = containerHeight > 0 && containerRect.height > 0 ? containerRect.height / containerHeight : 1;
+  const maxTop = Math.max(20, containerHeight - 20);
+
+  const positioned: PositionedSelectionAnchor[] = anchors.map((anchor, index) => {
+    const anchorRect = resolveSelectionAnchorRect(textNodes, fullText, totalLength, anchor);
+    const previousLayout = previousLayoutById?.get(anchor.id);
+    const centerX = anchorRect ? anchorRect.left + anchorRect.width / 2 : containerRect.left + containerRect.width / 2;
+    const side: "left" | "right" =
+      previousLayout?.side ?? (centerX <= containerRect.left + containerRect.width / 2 ? "left" : "right");
+    const baseTop = anchorRect
+      ? (anchorRect.top - containerRect.top + Math.max(anchorRect.height / 2, 10)) / verticalScale
+      : previousLayout?.top ?? 28 + index * 36;
+
+    return {
+      ...anchor,
+      side,
+      top: Math.round(clamp(baseTop, 20, maxTop)),
+    };
+  });
+
+  const left = normalizeGutterAnchorTops(positioned.filter((item) => item.side === "left"), containerHeight);
+  const right = normalizeGutterAnchorTops(positioned.filter((item) => item.side === "right"), containerHeight);
+  return [...left, ...right];
+}
+
+function normalizeGutterAnchorTops<T extends { id: string; top: number }>(items: T[], containerHeight: number): T[] {
+  if (items.length <= 1) {
+    return items;
+  }
+
+  const minTop = 20;
+  const maxTop = Math.max(minTop, containerHeight - 20);
+  const minGap = 30;
+  const sorted = [...items].sort((left, right) => {
+    if (left.top !== right.top) {
+      return left.top - right.top;
     }
 
     return left.id.localeCompare(right.id);
   });
-  const renderableAnchors: Array<MessageSelectionAnchor & { startOffset: number; endOffset: number }> = [];
-  let cursor = 0;
 
-  for (const anchor of sortedAnchors) {
-    if (typeof anchor.startOffset !== "number" || typeof anchor.endOffset !== "number") {
-      continue;
-    }
-
-    const startOffset = clamp(anchor.startOffset, 0, content.length);
-    const endOffset = clamp(anchor.endOffset, 0, content.length);
-
-    if (startOffset >= endOffset || startOffset < cursor) {
-      continue;
-    }
-
-    renderableAnchors.push({
-      ...anchor,
-      label: content.slice(startOffset, endOffset) || anchor.label,
-      startOffset,
-      endOffset,
-    });
-    cursor = endOffset;
+  let cursor = minTop;
+  for (const item of sorted) {
+    item.top = clamp(item.top, cursor, maxTop);
+    cursor = item.top + minGap;
   }
 
-  return renderableAnchors;
+  const overflow = cursor - minGap - maxTop;
+  if (overflow > 0) {
+    let carry = overflow;
+    for (let index = sorted.length - 1; index >= 0; index -= 1) {
+      const floor = index > 0 ? sorted[index - 1].top + minGap : minTop;
+      const nextTop = Math.max(floor, sorted[index].top - carry);
+      carry -= sorted[index].top - nextTop;
+      sorted[index].top = nextTop;
+      if (carry <= 0) {
+        break;
+      }
+    }
+  }
+
+  return sorted;
+}
+
+function arePositionedSelectionAnchorsEqual(
+  left: PositionedSelectionAnchor[],
+  right: PositionedSelectionAnchor[],
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftAnchor = left[index];
+    const rightAnchor = right[index];
+    if (!rightAnchor) {
+      return false;
+    }
+
+    if (
+      leftAnchor.id !== rightAnchor.id ||
+      leftAnchor.handleId !== rightAnchor.handleId ||
+      leftAnchor.sourceMessageId !== rightAnchor.sourceMessageId ||
+      leftAnchor.targetMessageId !== rightAnchor.targetMessageId ||
+      leftAnchor.label !== rightAnchor.label ||
+      leftAnchor.startOffset !== rightAnchor.startOffset ||
+      leftAnchor.endOffset !== rightAnchor.endOffset ||
+      leftAnchor.isExpanded !== rightAnchor.isExpanded ||
+      leftAnchor.side !== rightAnchor.side ||
+      leftAnchor.top !== rightAnchor.top
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function resolveSelectionAnchorRect(
+  textNodes: Text[],
+  fullText: string,
+  totalLength: number,
+  anchor: RenderableSelectionAnchor,
+) {
+  if (textNodes.length === 0 || totalLength === 0) {
+    return null;
+  }
+
+  const resolvedOffsets = resolveSelectionAnchorOffsets(fullText, totalLength, anchor);
+  if (!resolvedOffsets) {
+    return null;
+  }
+
+  const { startOffset: normalizedStart, endOffset: normalizedEnd } = resolvedOffsets;
+  const startPosition = locateTextOffset(textNodes, normalizedStart);
+  const endPosition = locateTextOffset(textNodes, normalizedEnd);
+  if (!startPosition || !endPosition) {
+    return null;
+  }
+
+  const range = document.createRange();
+  try {
+    range.setStart(startPosition.node, startPosition.offset);
+    range.setEnd(endPosition.node, endPosition.offset);
+  } catch {
+    return null;
+  }
+
+  const rangeRects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
+  const firstRect = rangeRects[0] ?? range.getBoundingClientRect();
+  if (!firstRect || (firstRect.width <= 0 && firstRect.height <= 0)) {
+    return null;
+  }
+
+  return firstRect;
+}
+
+function resolveSelectionAnchorOffsets(
+  fullText: string,
+  totalLength: number,
+  anchor: RenderableSelectionAnchor,
+) {
+  const normalizedLabel = anchor.label.trim();
+  const preferredMatch =
+    typeof anchor.startOffset === "number" && typeof anchor.endOffset === "number" && anchor.endOffset > anchor.startOffset
+      ? {
+          startOffset: clamp(anchor.startOffset, 0, totalLength),
+          endOffset: clamp(anchor.endOffset, clamp(anchor.startOffset, 0, totalLength) + 1, totalLength),
+        }
+      : null;
+
+  if (preferredMatch) {
+    const candidateText = fullText.slice(preferredMatch.startOffset, preferredMatch.endOffset);
+    if (!normalizedLabel || areAnchorTextsEquivalent(candidateText, normalizedLabel)) {
+      return preferredMatch;
+    }
+  }
+
+  if (!normalizedLabel) {
+    return preferredMatch;
+  }
+
+  const foundOffset = findClosestTextMatchOffset(fullText, normalizedLabel, preferredMatch?.startOffset ?? 0);
+  if (foundOffset < 0) {
+    return preferredMatch;
+  }
+
+  return {
+    startOffset: foundOffset,
+    endOffset: foundOffset + normalizedLabel.length,
+  };
+}
+
+function areAnchorTextsEquivalent(left: string, right: string) {
+  return normalizeAnchorText(left) === normalizeAnchorText(right);
+}
+
+function normalizeAnchorText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function findClosestTextMatchOffset(fullText: string, query: string, targetOffset: number) {
+  const matches: number[] = [];
+  let searchStart = 0;
+
+  while (searchStart <= fullText.length) {
+    const matchIndex = fullText.indexOf(query, searchStart);
+    if (matchIndex < 0) {
+      break;
+    }
+
+    matches.push(matchIndex);
+    searchStart = matchIndex + 1;
+  }
+
+  if (matches.length === 0) {
+    return -1;
+  }
+
+  return matches.reduce((bestMatch, currentMatch) =>
+    Math.abs(currentMatch - targetOffset) < Math.abs(bestMatch - targetOffset) ? currentMatch : bestMatch,
+  );
+}
+
+function collectTextNodes(container: HTMLElement) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    if (current instanceof Text && (current.textContent?.length ?? 0) > 0) {
+      textNodes.push(current);
+    }
+    current = walker.nextNode();
+  }
+
+  return textNodes;
+}
+
+function resolveTextOffsetFromBoundaryTextNode(
+  textNodes: Text[],
+  boundaryContainer: globalThis.Node,
+  boundaryOffset: number,
+) {
+  if (!(boundaryContainer instanceof Text)) {
+    return null;
+  }
+
+  let cursor = 0;
+  for (const node of textNodes) {
+    const length = node.textContent?.length ?? 0;
+    if (node === boundaryContainer) {
+      return cursor + clamp(boundaryOffset, 0, length);
+    }
+    cursor += length;
+  }
+
+  return null;
+}
+
+function locateTextOffset(textNodes: Text[], targetOffset: number) {
+  let cursor = 0;
+  for (const node of textNodes) {
+    const length = node.textContent?.length ?? 0;
+    const nextCursor = cursor + length;
+    if (targetOffset <= nextCursor) {
+      return {
+        node,
+        offset: clamp(targetOffset - cursor, 0, length),
+      };
+    }
+    cursor = nextCursor;
+  }
+
+  const lastNode = textNodes.at(-1);
+  if (!lastNode) {
+    return null;
+  }
+
+  return {
+    node: lastNode,
+    offset: lastNode.textContent?.length ?? 0,
+  };
 }
 
 function makeSelectionAnchorHandleId(branchId: string) {
