@@ -14,6 +14,8 @@ After each commit, update the Changelog under the current date. Each entry must 
 
 ## 2026-03-30
 
+- Prevented repeated empty-net creation when `New net` is clicked while the active canvas is already the blank new-net state, so the history list no longer accumulates duplicate empty nets.
+- Merged user-bubble selected-passage quotes into the primary `User` header strip and removed the duplicate inner `User` bar, tightening the layout and reducing redundant chrome.
 - Restored Claude bubble markdown rendering by moving selection-branch anchors out of the markdown text flow into a dedicated anchor button strip, and fixed anchor toggles so expand/collapse is driven only by clicking those buttons.
 - Fixed selected-passage quote bars in user bubbles so continuation and branch messages immediately show the persisted quoted passage with readable styling instead of broken quote characters.
 - Let the canvas thumbnail pan from anywhere inside the minimap instead of only dragging the viewport rectangle, so preview nodes no longer block free minimap dragging.

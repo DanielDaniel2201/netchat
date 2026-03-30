@@ -1052,6 +1052,7 @@ function NetchatApp() {
     renameNetMutation.isPending ||
     deleteNetMutation.isPending;
   const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
+  const isOnNewNetScreen = !graphQuery.isLoading && !hasMessages;
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
 
@@ -1065,6 +1066,15 @@ function NetchatApp() {
     setLiveAssistantState(optimisticTurn.assistantMessageId, optimisticTurn.assistantState);
     setSelectedMessageId(optimisticTurn.assistantMessageId);
     setActivePathMessageId(optimisticTurn.assistantMessageId);
+  }
+
+  function handleCreateNet() {
+    setOpenNetMenuId(null);
+    if (isOnNewNetScreen) {
+      return;
+    }
+
+    createNetMutation.mutate({ title: "" });
   }
 
   function submitCurrentPrompt() {
@@ -1332,10 +1342,7 @@ function NetchatApp() {
                 type="button"
                 className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
                 disabled={isSwitchingNet || workspaceQuery.isLoading}
-                onClick={() => {
-                  setOpenNetMenuId(null);
-                  createNetMutation.mutate({ title: "" });
-                }}
+                onClick={handleCreateNet}
               >
                 {createNetMutation.isPending ? "Creating..." : "New net"}
               </button>
@@ -2072,38 +2079,37 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
           event.stopPropagation();
         }}
       >
-        <div className="relative flex items-center justify-between gap-4 border-b border-[var(--node-border)] px-5 py-4">
-          <div className="flex items-center gap-2">
-            <div
-              className={cn(
-                "editorial-meta",
-                isUser
-                  ? "text-[rgba(58,64,66,0.72)]"
-                  : showPendingAssistantState || data.hasSelectionDraft
-                    ? "text-[var(--block-ochre)]"
-                    : liveAssistantState?.status === "error"
-                      ? "text-rose-700"
-                      : "text-[var(--block-green)]",
-              )}
-            >
-              {roleLabel}
+        <div className="relative flex items-start justify-between gap-4 border-b border-[var(--node-border)] px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "editorial-meta",
+                  isUser
+                    ? "text-[rgba(58,64,66,0.72)]"
+                    : showPendingAssistantState || data.hasSelectionDraft
+                      ? "text-[var(--block-ochre)]"
+                      : liveAssistantState?.status === "error"
+                        ? "text-rose-700"
+                        : "text-[var(--block-green)]",
+                )}
+              >
+                {roleLabel}
+              </div>
+              {showPendingAssistantState ? <LoaderCircle className="size-3.5 animate-spin text-[var(--block-ochre)]" /> : null}
             </div>
-            {showPendingAssistantState ? <LoaderCircle className="size-3.5 animate-spin text-[var(--block-ochre)]" /> : null}
+            {isUser && selectedPassage ? (
+              <div className="mt-2 break-words whitespace-pre-wrap text-[14px] italic leading-6 text-[rgba(26,26,26,0.56)]">
+                {`"${selectedPassage}"`}
+              </div>
+            ) : null}
           </div>
-          <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
+          <div className="shrink-0 editorial-meta text-[rgba(26,26,26,0.42)]">
             {formatMessageTime(data.message.createdAt)}
           </div>
         </div>
 
         <div className="relative px-5 py-5">
-          {isUser && selectedPassage ? (
-            <div className="mb-5 border border-[var(--node-border)] bg-[rgba(244,241,234,0.56)] px-4 py-4">
-              <div className="text-[14px] font-medium leading-6 text-[rgba(26,26,26,0.56)]">User</div>
-              <div className="mt-2 whitespace-pre-wrap text-[16px] italic leading-8 text-[rgba(26,26,26,0.62)]">
-                {`"${selectedPassage}"`}
-              </div>
-            </div>
-          ) : null}
           {!isUser && liveAssistantState ? (
             <div className="space-y-4">
               {visibleAssistantBlocks.map((block) => (
@@ -3038,7 +3044,7 @@ function estimateMessageBubbleHeight(message: MessageNode) {
     return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
   }, 0);
   const codeBlockBonus = (normalized.match(/```/g)?.length ?? 0) * 48;
-  const selectionBonus = selectedPassage ? 96 + selectionLines * 24 : 0;
+  const selectionBonus = selectedPassage ? 24 + selectionLines * 24 : 0;
 
   return Math.max(230, 150 + wrappedLines * messageEstimateLineHeight + codeBlockBonus + selectionBonus);
 }
