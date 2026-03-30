@@ -29,3 +29,5 @@ After each commit, update the Changelog under the current date. Each entry must 
 
 - Added branch-reveal camera framing for gutter selection buttons, so expanding a collapsed branch now pans and zooms to place its first user bubble at the top of the viewport, centered at roughly five-sixths of the screen width.
 - Fixed the branch-reveal viewport trigger to resolve targets from the rendered flow graph instead of React Flow's lagging internal node registry, so the camera move no longer gets dropped during the same render that expands the branch.
+- Added a second-level `Thinking & Tools` accordion around Claude trace blocks, so users can collapse the whole trace stack without losing the existing per-block fold controls.
+- Simplified the `Thinking & Tools` accordion header by defaulting it closed and removing block-count and expand/collapse status text, leaving a cleaner single-line toggle.

@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, LoaderCircle, MoreHorizontal } from "lucide-react";
+import { ArrowUp, ChevronDown, LoaderCircle, MoreHorizontal } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
   AssistantStreamState,
@@ -1981,6 +1981,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const roleLabel = isUser ? "User" : "Claude";
   const bubbleRef = useRef<HTMLDivElement>(null);
   const sessionIdLabel = data.message.sessionId ?? "pending";
+  const [assistantTraceExpanded, setAssistantTraceExpanded] = useState(false);
   const liveAssistantState = useLiveAssistantStateStore((state) =>
     !isUser ? (state.statesByMessageId[data.message.id] ?? data.persistedAssistantState ?? null) : null,
   );
@@ -2024,7 +2025,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     return () => {
       observer.disconnect();
     };
-  }, [data.message.id, data.onMeasureHeight, shouldFreezeMeasuredHeight]);
+  }, [assistantTraceExpanded, data.message.id, data.onMeasureHeight, shouldFreezeMeasuredHeight]);
 
   return (
     <div className="relative" style={{ width: messageNodeWidth }}>
@@ -2152,72 +2153,97 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         <div className="relative px-5 py-5">
           {!isUser && liveAssistantState ? (
             <div className="space-y-4">
-              {visibleAssistantBlocks.map((block) => (
+              {visibleAssistantBlocks.length > 0 ? (
                 <details
-                  key={block.id}
                   data-stream-block="true"
-                  className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
+                  open={assistantTraceExpanded}
+                  onToggle={(event) => {
+                    setAssistantTraceExpanded(event.currentTarget.open);
+                  }}
+                  className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.34)]"
                 >
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-4 py-3">
-                    <span className="editorial-meta text-[rgba(26,26,26,0.66)]">
-                      {block.kind === "thinking" ? "Thinking" : `Tool · ${block.toolName}`}
-                    </span>
-                    <span
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <ChevronDown
                       className={cn(
-                        "editorial-meta",
-                        block.kind === "thinking"
-                          ? block.status === "complete"
-                            ? "text-[rgba(26,26,26,0.44)]"
-                            : "text-[var(--block-ochre)]"
-                          : block.status === "error"
-                            ? "text-rose-700"
-                            : block.status === "complete"
-                              ? "text-[rgba(26,26,26,0.44)]"
-                              : "text-[var(--block-ochre)]",
+                        "size-4 shrink-0 text-[rgba(26,26,26,0.46)] transition-transform",
+                        assistantTraceExpanded ? "rotate-0" : "-rotate-90",
                       )}
-                    >
-                      {block.status === "error"
-                        ? "Error"
-                        : block.status === "complete"
-                          ? "Complete"
-                          : "Streaming"}
-                    </span>
+                      />
+                      <span className="editorial-meta text-[rgba(26,26,26,0.72)]">Thinking & Tools</span>
+                    </div>
                   </summary>
-                  <div className="space-y-3 px-4 py-4">
-                    {block.kind === "thinking" ? (
-                      <div className="message-copy whitespace-pre-wrap text-[17px] leading-8 text-[rgba(26,26,26,0.78)]">
-                        {block.text || "Claude is thinking..."}
-                      </div>
-                    ) : (
-                      <>
-                        <div>
-                          <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
-                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[14px] leading-7 text-[rgba(26,26,26,0.78)]">
-                            {block.inputText || "Waiting for tool arguments..."}
-                          </pre>
-                        </div>
-                        {block.outputText ? (
-                          <div>
-                            <div className="editorial-meta text-[rgba(26,26,26,0.44)]">
-                              {block.isError ? "Tool error" : "Tool result"}
+
+                  <div className="space-y-3 border-t border-[var(--node-border)] px-4 py-4">
+                    {visibleAssistantBlocks.map((block) => (
+                      <details
+                        key={block.id}
+                        data-stream-block="true"
+                        className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
+                      >
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-4 py-3">
+                          <span className="editorial-meta text-[rgba(26,26,26,0.66)]">
+                            {block.kind === "thinking" ? "Thinking" : `Tool · ${block.toolName}`}
+                          </span>
+                          <span
+                            className={cn(
+                              "editorial-meta",
+                              block.kind === "thinking"
+                                ? block.status === "complete"
+                                  ? "text-[rgba(26,26,26,0.44)]"
+                                  : "text-[var(--block-ochre)]"
+                                : block.status === "error"
+                                  ? "text-rose-700"
+                                  : block.status === "complete"
+                                    ? "text-[rgba(26,26,26,0.44)]"
+                                    : "text-[var(--block-ochre)]",
+                            )}
+                          >
+                            {block.status === "error"
+                              ? "Error"
+                              : block.status === "complete"
+                                ? "Complete"
+                                : "Streaming"}
+                          </span>
+                        </summary>
+                        <div className="space-y-3 px-4 py-4">
+                          {block.kind === "thinking" ? (
+                            <div className="message-copy whitespace-pre-wrap text-[17px] leading-8 text-[rgba(26,26,26,0.78)]">
+                              {block.text || "Claude is thinking..."}
                             </div>
-                            <pre
-                              className={cn(
-                                "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[14px] leading-7",
-                                block.isError
-                                  ? "border-rose-200 bg-rose-50 text-rose-700"
-                                  : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
-                              )}
-                            >
-                              {block.outputText}
-                            </pre>
-                          </div>
-                        ) : null}
-                      </>
-                    )}
+                          ) : (
+                            <>
+                              <div>
+                                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
+                                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[14px] leading-7 text-[rgba(26,26,26,0.78)]">
+                                  {block.inputText || "Waiting for tool arguments..."}
+                                </pre>
+                              </div>
+                              {block.outputText ? (
+                                <div>
+                                  <div className="editorial-meta text-[rgba(26,26,26,0.44)]">
+                                    {block.isError ? "Tool error" : "Tool result"}
+                                  </div>
+                                  <pre
+                                    className={cn(
+                                      "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[14px] leading-7",
+                                      block.isError
+                                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                                        : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
+                                    )}
+                                  >
+                                    {block.outputText}
+                                  </pre>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                      </details>
+                    ))}
                   </div>
                 </details>
-              ))}
+              ) : null}
 
               <div
                 className={cn(
