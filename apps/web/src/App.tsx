@@ -56,6 +56,9 @@ const bubbleComposerGap = 20;
 const bubbleComposerWidth = 840;
 const messageEstimateCharsPerLine = 90;
 const messageEstimateLineHeight = 38;
+const canvasMinZoom = 0.35;
+const canvasMaxZoom = 1.45;
+const branchRevealBubbleWidthRatio = 5 / 6;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -125,6 +128,16 @@ type CanvasViewport = {
   y: number;
   zoom: number;
 };
+
+type PendingViewportAction =
+  | {
+      kind: "center-message";
+      messageId: string;
+    }
+  | {
+      kind: "frame-message-at-top";
+      messageId: string;
+    };
 
 const useComposerStore = create<{
   selectedMessageId: string | null;
@@ -273,7 +286,7 @@ function NetchatApp() {
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
-  const [pendingViewportFocusMessageId, setPendingViewportFocusMessageId] = useState<string | null>(null);
+  const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
   const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
@@ -712,13 +725,19 @@ function NetchatApp() {
         descendantBranchIds.add(anchor.id);
         setExpandedBranchIds((current) => current.filter((branchId) => !descendantBranchIds.has(branchId)));
         activateMessagePath(anchor.sourceMessageId);
-        setPendingViewportFocusMessageId(anchor.sourceMessageId);
+        setPendingViewportAction({
+          kind: "center-message",
+          messageId: anchor.sourceMessageId,
+        });
         return;
       }
 
       setExpandedBranchIds((current) => (current.includes(anchor.id) ? current : [...current, anchor.id]));
       activateMessagePath(anchor.targetMessageId);
-      setPendingViewportFocusMessageId(anchor.targetMessageId);
+      setPendingViewportAction({
+        kind: "frame-message-at-top",
+        messageId: anchor.targetMessageId,
+      });
     },
     [snapshot, setSelectedMessageId],
   );
@@ -1019,32 +1038,53 @@ function NetchatApp() {
   }, [selectedMessage, syncBubbleComposerAnchor]);
 
   useEffect(() => {
-    if (!pendingViewportFocusMessageId || !nodesInitialized || !snapshot) {
+    if (!pendingViewportAction || !snapshot) {
       return;
     }
 
-    const targetMessageId = pendingViewportFocusMessageId;
+    const targetAction = pendingViewportAction;
+    const targetNode = graph.nodes.find((candidate) => candidate.id === targetAction.messageId) as Node<MessageNodeData> | undefined;
+    if (!targetNode) {
+      return;
+    }
+
     const frame = window.requestAnimationFrame(() => {
-      const node = reactFlow.getNode(targetMessageId);
-      if (!node) {
-        return;
+      if (targetAction.kind === "frame-message-at-top") {
+        if (canvasSize.width <= 0 || canvasSize.height <= 0) {
+          return;
+        }
+
+        const zoom = clamp((canvasSize.width * branchRevealBubbleWidthRatio) / messageNodeWidth, canvasMinZoom, canvasMaxZoom);
+        const nextViewport = {
+          x: canvasSize.width / 2 - (targetNode.position.x + messageNodeWidth / 2) * zoom,
+          y: -targetNode.position.y * zoom,
+          zoom,
+        } satisfies CanvasViewport;
+
+        void reactFlow.setViewport(nextViewport, {
+          duration: 360,
+        });
+      } else {
+        void reactFlow.setCenter(
+          targetNode.position.x + messageNodeWidth / 2,
+          targetNode.position.y +
+            (measuredNodeHeights[targetAction.messageId] ?? estimateMessageBubbleHeight(targetNode.data.message)) / 2,
+          {
+            duration: 320,
+            zoom: Math.max(viewport.zoom, 0.42),
+          },
+        );
       }
 
-      void reactFlow.setCenter(
-        node.position.x + messageNodeWidth / 2,
-        node.position.y + (measuredNodeHeights[targetMessageId] ?? estimateMessageBubbleHeight((node.data as MessageNodeData).message)) / 2,
-        {
-          duration: 320,
-          zoom: Math.max(viewport.zoom, 0.42),
-        },
+      setPendingViewportAction((current) =>
+        current?.kind === targetAction.kind && current.messageId === targetAction.messageId ? null : current,
       );
-      setPendingViewportFocusMessageId((current) => (current === targetMessageId ? null : current));
     });
 
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [measuredNodeHeights, nodesInitialized, pendingViewportFocusMessageId, reactFlow, snapshot, viewport.zoom]);
+  }, [canvasSize.height, canvasSize.width, graph.nodes, measuredNodeHeights, pendingViewportAction, reactFlow, snapshot, viewport.zoom]);
 
   const isSwitchingNet =
     createNetMutation.isPending ||
@@ -1516,8 +1556,8 @@ function NetchatApp() {
             }
           }}
           nodeTypes={nodeTypes}
-          minZoom={0.35}
-          maxZoom={1.45}
+          minZoom={canvasMinZoom}
+          maxZoom={canvasMaxZoom}
           nodesDraggable={false}
           nodesConnectable={false}
           elementsSelectable={false}

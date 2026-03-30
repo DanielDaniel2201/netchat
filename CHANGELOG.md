@@ -24,3 +24,8 @@ After each commit, update the Changelog under the current date. Each entry must 
 - Fixed gutter anchor line placement after canvas zoom by converting selection rect measurements back into the markdown container's local coordinate system before positioning buttons.
 - Corrected legacy anchor line drift by validating stored selection offsets against rendered text and falling back to the nearest selected-text match when older branch metadata points at the wrong line.
 - Stopped Claude streaming patches from rebuilding the full React Flow graph on every token/block update, froze streaming bubble height relayout until completion, and refreshed dynamic anchor handles so branch canvases no longer blink blank or lose edges until a manual refresh.
+
+## 2026-03-31
+
+- Added branch-reveal camera framing for gutter selection buttons, so expanding a collapsed branch now pans and zooms to place its first user bubble at the top of the viewport, centered at roughly five-sixths of the screen width.
+- Fixed the branch-reveal viewport trigger to resolve targets from the rendered flow graph instead of React Flow's lagging internal node registry, so the camera move no longer gets dropped during the same render that expands the branch.
