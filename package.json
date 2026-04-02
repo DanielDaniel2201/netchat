@@ -1,8 +1,23 @@
 {
-  "name": "netchat-app",
+  "name": "@danielwyq/netchat",
   "private": false,
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Local-first graph chat interface for Claude Code",
+  "homepage": "https://github.com/DanielDaniel2201/netchat#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DanielDaniel2201/netchat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DanielDaniel2201/netchat/issues"
+  },
+  "keywords": [
+    "claude",
+    "chat",
+    "local-first",
+    "graph",
+    "cli"
+  ],
   "type": "module",
   "publishConfig": {
     "access": "public",

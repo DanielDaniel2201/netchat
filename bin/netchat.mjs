@@ -39,7 +39,7 @@ const entryFile = isDaemonCommand
     : distLocalEntry;
 
 if (!existsSync(entryFile)) {
-  console.error(`netchat-app could not find its runtime entry at ${entryFile}.`);
+  console.error(`@danielwyq/netchat could not find its runtime entry at ${entryFile}.`);
   process.exit(1);
 }
 
@@ -88,17 +88,17 @@ function printHelp() {
       "Run the local-first app with sensible defaults.",
       "",
       "Usage:",
-      "  npx netchat-app@latest                  Start the controller, daemon, and local web UI",
-      "  npx netchat-app@latest daemon [...]     Start only the daemon",
-      "  npx netchat-app@latest local [...]      Explicitly start the full local app",
+      "  npx @danielwyq/netchat@latest                  Start the controller, daemon, and local web UI",
+      "  npx @danielwyq/netchat@latest daemon [...]     Start only the daemon",
+      "  npx @danielwyq/netchat@latest local [...]      Explicitly start the full local app",
       "",
       "Examples:",
-      "  npx netchat-app@latest",
-      "  npx netchat-app@latest --no-browser",
-      "  npx netchat-app@latest --show-session-ids",
-      "  npx netchat-app@latest daemon --server http://127.0.0.1:3001 --pair ABC123",
+      "  npx @danielwyq/netchat@latest",
+      "  npx @danielwyq/netchat@latest --no-browser",
+      "  npx @danielwyq/netchat@latest --show-session-ids",
+      "  npx @danielwyq/netchat@latest daemon --server http://127.0.0.1:3001 --pair ABC123",
       "",
-      "Run `npx netchat-app@latest local --help` or `npx netchat-app@latest daemon --help` for command-specific options.",
+      "Run `npx @danielwyq/netchat@latest local --help` or `npx @danielwyq/netchat@latest daemon --help` for command-specific options.",
     ].join("\n"),
   );
 }

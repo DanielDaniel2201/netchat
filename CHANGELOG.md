@@ -31,3 +31,9 @@ After each commit, update the Changelog under the current date. Each entry must 
 - Fixed the branch-reveal viewport trigger to resolve targets from the rendered flow graph instead of React Flow's lagging internal node registry, so the camera move no longer gets dropped during the same render that expands the branch.
 - Added a second-level `Thinking & Tools` accordion around Claude trace blocks, so users can collapse the whole trace stack without losing the existing per-block fold controls.
 - Simplified the `Thinking & Tools` accordion header by defaulting it closed and removing block-count and expand/collapse status text, leaving a cleaner single-line toggle.
+
+## 2026-04-02
+
+- Prepared npm first-release metadata by renaming the root package to `@danielwyq/netchat`, setting version `0.0.1`, and adding repository/homepage/bugs/keywords fields for publish discoverability.
+- Updated CLI help text and command examples across entrypoints to use `npx @danielwyq/netchat@latest`, matching the intended public usage.
+- Added a top-level README focused on npm users with quick-start commands, help entrypoints, cache freshness guidance, environment variables, and Node.js runtime requirements.
