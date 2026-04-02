@@ -2,6 +2,8 @@
 
 Local-first graph chat interface for Claude Code.
 
+The packaged app now assumes a single local controller + daemon flow on `localhost`; no pairing step or machine-state file is required.
+
 ## Quick start
 
 Use the latest stable release:
@@ -13,7 +15,7 @@ npx @danielwyq/netchat@latest
 Run daemon-only mode:
 
 ```bash
-npx @danielwyq/netchat@latest daemon --server http://127.0.0.1:3001 --pair ABC123
+npx @danielwyq/netchat@latest daemon --server http://127.0.0.1:3001
 ```
 
 Show local help:
@@ -46,7 +48,6 @@ npx @danielwyq/netchat@latest
 - `NETCHAT_NO_BROWSER=true`: do not auto-open browser
 - `NETCHAT_SKIP_WEB_BUILD=true`: skip rebuilding web assets during local runs
 - `NETCHAT_APP_DB_PATH`: custom SQLite path
-- `NETCHAT_MACHINE_STATE_PATH`: custom machine state path
 
 ## Requirements
 

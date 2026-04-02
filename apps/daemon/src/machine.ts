@@ -1,6 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
-import path from "node:path";
 
 import {
   CompleteMachineJobInput,
@@ -25,13 +23,8 @@ type MachineState = {
 
 export class MachineClient {
   private readonly serverUrl = process.env.NETCHAT_SERVER_URL?.trim() || "";
-  private readonly pairingCode = process.env.NETCHAT_PAIRING_CODE?.trim() || "";
-  private readonly localMode = (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true";
   private readonly machineName =
     process.env.NETCHAT_MACHINE_NAME?.trim() || `${os.hostname()} (${process.platform})`;
-  private readonly statePath =
-    process.env.NETCHAT_MACHINE_STATE_PATH?.trim() ||
-    path.join(os.homedir(), ".netchat", "machine.json");
   private state: MachineState | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private claimTimer: NodeJS.Timeout | null = null;
@@ -61,23 +54,17 @@ export class MachineClient {
       recordMachineConfig: (config: {
         machineId?: string | null;
         machineName?: string | null;
-        machineStatePath?: string | null;
-        pairingCodeConfigured?: boolean;
         serverUrl?: string | null;
       }) => void;
       recordServerContact: (message?: string) => void;
       recordHeartbeat: (message?: string) => void;
-      setStatus: (status: "starting" | "local_only" | "waiting_for_pairing" | "registering" | "registered" | "online" | "error", message?: string, level?: "info" | "warn" | "error") => void;
+      setStatus: (status: "starting" | "local_only" | "registering" | "registered" | "online" | "error", message?: string, level?: "info" | "warn" | "error") => void;
       recordError: (message: string) => void;
       clearError: () => void;
     },
   ) {
-    this.state = this.readState();
     this.diagnostics?.recordMachineConfig({
-      machineId: this.state?.machineId ?? null,
       machineName: this.machineName,
-      machineStatePath: this.statePath,
-      pairingCodeConfigured: Boolean(this.pairingCode),
       serverUrl: this.serverUrl || null,
     });
   }
@@ -104,10 +91,6 @@ export class MachineClient {
 
   private async ensureRegistration() {
     if (this.state) {
-      this.diagnostics?.setStatus(
-        "registered",
-        `Using cached machine registration ${this.state.machineId}.`,
-      );
       this.diagnostics?.recordMachineConfig({
         machineId: this.state.machineId,
       });
@@ -126,22 +109,11 @@ export class MachineClient {
   }
 
   private async registerMachine() {
-    if (!this.localMode && !this.pairingCode) {
-      this.diagnostics?.setStatus(
-        "waiting_for_pairing",
-        "NETCHAT_PAIRING_CODE is required for the first daemon registration.",
-        "warn",
-      );
-      throw new Error("NETCHAT_PAIRING_CODE is required for the first daemon registration.");
-    }
-
     this.diagnostics?.setStatus("registering", `Registering machine "${this.machineName}" with server.`);
     const environment = await this.detectEnvironment();
-    const pairingCode = this.localMode ? this.pairingCode || "local" : this.pairingCode;
     const registration = await this.request<MachineRegistration>("/api/daemon/register", {
       method: "POST",
       body: JSON.stringify({
-        pairingCode,
         machineName: this.machineName,
         environment,
       } satisfies CreateMachineRegisterInput),
@@ -152,7 +124,6 @@ export class MachineClient {
       machineSecret: registration.machineSecret,
       pollingIntervalMs: registration.pollingIntervalMs,
     };
-    this.writeState(this.state);
     this.diagnostics?.recordMachineConfig({
       machineId: registration.machineId,
     });
@@ -345,23 +316,6 @@ export class MachineClient {
     return response.json() as Promise<T>;
   }
 
-  private readState(): MachineState | null {
-    if (!existsSync(this.statePath)) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(readFileSync(this.statePath, "utf8")) as MachineState;
-    } catch {
-      return null;
-    }
-  }
-
-  private writeState(state: MachineState) {
-    mkdirSync(path.dirname(this.statePath), { recursive: true });
-    writeFileSync(this.statePath, JSON.stringify(state, null, 2), "utf8");
-  }
-
   private clearState() {
     if (this.heartbeatTimer) {
       clearTimeout(this.heartbeatTimer);
@@ -371,10 +325,6 @@ export class MachineClient {
     if (this.claimTimer) {
       clearTimeout(this.claimTimer);
       this.claimTimer = null;
-    }
-
-    if (existsSync(this.statePath)) {
-      rmSync(this.statePath, { force: true });
     }
 
     this.state = null;
@@ -427,7 +377,7 @@ export class MachineClient {
 
       this.diagnostics?.log(
         "warn",
-        "Server rejected the cached machine registration. Clearing local machine state.",
+        "Server rejected the current machine registration. Re-registering the local daemon.",
       );
       this.clearState();
 

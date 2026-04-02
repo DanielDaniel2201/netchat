@@ -6,7 +6,6 @@ import {
   MachineJob,
   MachineRecord,
   MachineRegistration,
-  PairingSession,
   RuntimeResponse,
   RuntimeStreamEvent,
   makeId,
@@ -61,14 +60,7 @@ export type StreamingJobHandle = {
   dispose: () => void;
 };
 
-type PairingEntry = {
-  code: string;
-  expiresAt: string;
-  label: string;
-};
-
 export class MachineStore {
-  private readonly pairingSessions = new Map<string, PairingEntry>();
   private readonly machines = new Map<string, RegisteredMachine>();
   private readonly pendingJobs = new Map<string, PendingJob[]>();
   private readonly inFlightJobs = new Map<string, InFlightJob>();
@@ -97,36 +89,7 @@ export class MachineStore {
     return this.pollingIntervalMs;
   }
 
-  createPairingSession(label: string): PairingSession {
-    const pairingCode = generatePairingCode();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    this.pairingSessions.set(pairingCode, {
-      code: pairingCode,
-      expiresAt,
-      label,
-    });
-
-    return {
-      pairingCode,
-      expiresAt,
-    };
-  }
-
   registerMachine(input: CreateMachineRegisterInput): MachineRegistration {
-    if (!this.localMode) {
-      const pairing = this.pairingSessions.get(input.pairingCode);
-      if (!pairing) {
-        throw new Error("Invalid pairing code.");
-      }
-
-      if (Date.parse(pairing.expiresAt) < Date.now()) {
-        this.pairingSessions.delete(input.pairingCode);
-        throw new Error("Pairing code expired.");
-      }
-
-      this.pairingSessions.delete(input.pairingCode);
-    }
-
     const machineId = makeId("machine");
     const machineSecret = crypto.randomUUID();
     const registeredAt = nowIso();
@@ -438,10 +401,6 @@ export class MachineStore {
     );
     return fallback;
   }
-}
-
-function generatePairingCode() {
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
 function formatDuration(durationMs: number) {

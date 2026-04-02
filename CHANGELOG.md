@@ -39,3 +39,6 @@ After each commit, update the Changelog under the current date. Each entry must 
 - Added a top-level README focused on npm users with quick-start commands, help entrypoints, cache freshness guidance, environment variables, and Node.js runtime requirements.
 - Changed launch behavior to land on a blank new net when the last active net already has messages, while keeping history nets accessible from the drawer instead of reopening an old conversation by default.
 - Stopped auto-selecting the latest assistant reply when a net loads, so historical nets now open on the main trunk only and selection branches stay collapsed until the user explicitly toggles their anchor.
+- Removed pairing-code and machine-state setup from the localhost controller/daemon flow, so the local app now boots a single local runtime without a pairing step or `machine.json`.
+- Removed the public multi-machine surface from the web app and switched local-app readiness checks to daemon diagnostics, simplifying connection status around one active local runtime.
+- Updated `AGENTS.md` and `README.md` to match the current single-runtime local-first model and removed stale pairing and machine-state references.

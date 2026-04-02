@@ -26,7 +26,6 @@ import {
   CreateNetInput,
   CreateRootTurnInput,
   GraphSnapshot,
-  MachineRecord,
   MessageNode,
   TurnStreamEvent,
   UiConfig,
@@ -313,11 +312,6 @@ function NetchatApp() {
     queryKey: ["ui-config"],
     queryFn: () => request<UiConfig>("/api/ui-config"),
   });
-  const machinesQuery = useQuery({
-    queryKey: ["machines"],
-    queryFn: () => request<MachineRecord[]>("/api/machines"),
-    refetchInterval: 15000,
-  });
   const daemonDiagnosticsQuery = useQuery({
     queryKey: ["daemon-diagnostics"],
     queryFn: () => request<DaemonDiagnostics>("/api/runtime/diagnostics"),
@@ -329,14 +323,10 @@ function NetchatApp() {
   const persistedSnapshot = graphQuery.data;
   const snapshot = activeStreamedTurn?.optimisticSnapshot ?? persistedSnapshot;
   const uiConfig = uiConfigQuery.data;
-  const machines = machinesQuery.data ?? [];
-  const onlineMachines = machines.filter((machine) => machine.status === "online");
   const daemonDiagnostics = daemonDiagnosticsQuery.data;
   const workspaceNets = workspace?.nets ?? [];
   const activeNetId = workspace?.activeNetId ?? null;
   const activeNet = workspaceNets.find((net) => net.id === activeNetId) ?? null;
-  const machinesById = useMemo(() => new Map(machines.map((machine) => [machine.id, machine])), [machines]);
-  const rootMachine = onlineMachines[0];
   const branchesById = useMemo(
     () => new Map((snapshot?.branches ?? []).map((branch) => [branch.id, branch])),
     [snapshot],
@@ -376,10 +366,6 @@ function NetchatApp() {
   const selectedMessageIsTail = selectedMessage
     ? selectedBranchMessages.at(-1)?.id === selectedMessage.id
     : true;
-  const selectedBranchMachine =
-    selectedBranch?.machineId ? (machinesById.get(selectedBranch.machineId) ?? undefined) : undefined;
-  const selectedMessageMachine =
-    selectedMessage?.machineId ? (machinesById.get(selectedMessage.machineId) ?? undefined) : undefined;
   const sendMode: BubbleComposerMode =
     !selectedMessage
       ? "root"
@@ -390,20 +376,7 @@ function NetchatApp() {
         : selectedBranch?.id === rootBranchId
           ? "continue-root"
           : "continue-branch";
-  const runtimeMachine =
-    sendMode === "branch-from-message" || sendMode === "branch-from-selection"
-      ? selectedMessageMachine
-      : sendMode === "continue-branch"
-        ? selectedBranchMachine ?? selectedMessageMachine
-        : rootMachine;
-  const canSendOnActiveLane =
-    sendMode === "branch-from-message" ||
-    sendMode === "branch-from-selection" ||
-    sendMode === "continue-branch"
-      ? runtimeMachine
-        ? runtimeMachine.status === "online"
-        : true
-      : Boolean(rootMachine);
+  const canSendOnActiveLane = daemonDiagnostics?.status === "online";
 
   async function runStreamedTurn(
     path: string,
@@ -1114,14 +1087,13 @@ function NetchatApp() {
     clearBrowserSelection();
 
     if (sendMode === "root" || sendMode === "continue-root") {
-      const optimisticTurn =
-        snapshot && rootMachine
-          ? buildOptimisticRootStreamTurn(snapshot, {
-              machineId: rootMachine.id,
-              prompt,
-              selectedText: selectionForSelectedMessage?.selectedText ?? null,
-            })
-          : null;
+      const optimisticTurn = snapshot
+        ? buildOptimisticRootStreamTurn(snapshot, {
+            machineId: null,
+            prompt,
+            selectedText: selectionForSelectedMessage?.selectedText ?? null,
+          })
+        : null;
       if (optimisticTurn) {
         beginOptimisticTurn(optimisticTurn);
       }
@@ -1131,7 +1103,6 @@ function NetchatApp() {
           method: "POST",
           body: JSON.stringify({
             prompt,
-            machineId: rootMachine?.id,
             selectedText: selectionForSelectedMessage?.selectedText,
             clientTurnId: optimisticTurn?.turnId,
             clientUserMessageId: optimisticTurn?.userMessageId,
@@ -1143,7 +1114,7 @@ function NetchatApp() {
         optimisticTurn ??
           buildFallbackOptimisticTurn({
             prompt,
-            machineId: rootMachine?.id ?? "machine_pending",
+            machineId: null,
             selectedText: selectionForSelectedMessage?.selectedText ?? null,
             snapshot,
           }),
@@ -1152,15 +1123,14 @@ function NetchatApp() {
     }
 
     if (sendMode === "continue-branch" && selectedBranch) {
-      const optimisticTurn =
-        snapshot && runtimeMachine
-          ? buildOptimisticBranchTurnStreamTurn(snapshot, {
-              branchId: selectedBranch.id,
-              machineId: runtimeMachine.id,
-              prompt,
-              selectedText: selectionForSelectedMessage?.selectedText ?? null,
-            })
-          : null;
+      const optimisticTurn = snapshot
+        ? buildOptimisticBranchTurnStreamTurn(snapshot, {
+            branchId: selectedBranch.id,
+            machineId: selectedBranch.machineId,
+            prompt,
+            selectedText: selectionForSelectedMessage?.selectedText ?? null,
+          })
+        : null;
       if (optimisticTurn) {
         beginOptimisticTurn(optimisticTurn);
       }
@@ -1181,7 +1151,7 @@ function NetchatApp() {
         optimisticTurn ??
           buildFallbackOptimisticTurn({
             prompt,
-            machineId: runtimeMachine?.id ?? "machine_pending",
+            machineId: selectedBranch.machineId ?? null,
             selectedText: selectionForSelectedMessage?.selectedText ?? null,
             snapshot,
           }),
@@ -1190,19 +1160,18 @@ function NetchatApp() {
     }
 
     if (sendMode === "branch-from-selection" && selectedMessage && selectionForSelectedMessage) {
-      const optimisticTurn =
-        snapshot && selectedMessage.machineId
-          ? buildOptimisticBranchCreationStreamTurn(snapshot, {
-              input: {
-                sourceMessageId: selectedMessage.id,
-                mode: "selection",
-                selectedText: selectionForSelectedMessage.selectedText,
-                startOffset: selectionForSelectedMessage.startOffset,
-                endOffset: selectionForSelectedMessage.endOffset,
-                prompt,
-              } satisfies CreateBranchInput,
-            })
-          : null;
+      const optimisticTurn = snapshot
+        ? buildOptimisticBranchCreationStreamTurn(snapshot, {
+            input: {
+              sourceMessageId: selectedMessage.id,
+              mode: "selection",
+              selectedText: selectionForSelectedMessage.selectedText,
+              startOffset: selectionForSelectedMessage.startOffset,
+              endOffset: selectionForSelectedMessage.endOffset,
+              prompt,
+            } satisfies CreateBranchInput,
+          })
+        : null;
       if (optimisticTurn) {
         if (optimisticTurn.branchId) {
           setExpandedBranchIds((current) =>
@@ -1233,7 +1202,7 @@ function NetchatApp() {
         optimisticTurn ??
           buildFallbackOptimisticTurn({
             prompt,
-            machineId: selectedMessage.machineId ?? "machine_pending",
+            machineId: selectedMessage.machineId ?? null,
             selectedText: selectionForSelectedMessage.selectedText,
             snapshot,
           }),
@@ -1242,16 +1211,15 @@ function NetchatApp() {
     }
 
     if (sendMode === "branch-from-message" && selectedMessage) {
-      const optimisticTurn =
-        snapshot && selectedMessage.machineId
-          ? buildOptimisticBranchCreationStreamTurn(snapshot, {
-              input: {
-                sourceMessageId: selectedMessage.id,
-                mode: "message",
-                prompt,
-              } satisfies CreateBranchInput,
-            })
-          : null;
+      const optimisticTurn = snapshot
+        ? buildOptimisticBranchCreationStreamTurn(snapshot, {
+            input: {
+              sourceMessageId: selectedMessage.id,
+              mode: "message",
+              prompt,
+            } satisfies CreateBranchInput,
+          })
+        : null;
       if (optimisticTurn) {
         beginOptimisticTurn(optimisticTurn);
       }
@@ -1274,7 +1242,7 @@ function NetchatApp() {
         optimisticTurn ??
           buildFallbackOptimisticTurn({
             prompt,
-            machineId: selectedMessage.machineId ?? "machine_pending",
+            machineId: selectedMessage.machineId ?? null,
             selectedText: null,
             snapshot,
           }),
@@ -1287,10 +1255,9 @@ function NetchatApp() {
     submitCurrentPrompt();
   }
 
-  const connectionStatus = buildConnectionStatus(runtimeMachine, daemonDiagnostics, daemonDiagnosticsQuery.error);
+  const connectionStatus = buildConnectionStatus(daemonDiagnostics, daemonDiagnosticsQuery.error);
   const workingDirectoryValue =
     workspace?.workingDirectory ??
-    runtimeMachine?.environment.workingDirectory ??
     daemonDiagnostics?.environment.workingDirectory ??
     null;
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
@@ -3188,24 +3155,9 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function buildConnectionStatus(
-  machine: MachineRecord | undefined,
   diagnostics: DaemonDiagnostics | undefined,
   error: unknown,
 ) {
-  if (machine?.status === "online") {
-    return {
-      label: "Connected",
-      tone: "connected" as const,
-    };
-  }
-
-  if (machine?.status === "offline") {
-    return {
-      label: "Disconnected",
-      tone: "offline" as const,
-    };
-  }
-
   if (!diagnostics) {
     const disconnected = error instanceof Error && error.message.trim().length > 0;
     return {
@@ -3233,11 +3185,8 @@ function buildConnectionStatus(
   }
 
   return {
-    label: diagnostics.status === "waiting_for_pairing" || diagnostics.status === "error" ? "Disconnected" : "Connecting",
-    tone:
-      diagnostics.status === "waiting_for_pairing" || diagnostics.status === "error"
-        ? ("offline" as const)
-        : ("connecting" as const),
+    label: diagnostics.status === "error" || diagnostics.status === "local_only" ? "Disconnected" : "Connecting",
+    tone: diagnostics.status === "error" || diagnostics.status === "local_only" ? ("offline" as const) : ("connecting" as const),
   };
 }
 
@@ -3261,7 +3210,7 @@ function buildOptimisticRootStreamTurn(
   snapshot: GraphSnapshot,
   input: {
     prompt: string;
-    machineId: string;
+    machineId: string | null;
     selectedText: string | null;
   },
 ): PendingTurnMetadata {
@@ -3468,7 +3417,7 @@ function buildOptimisticBranchTurnStreamTurn(
   input: {
     branchId: string;
     prompt: string;
-    machineId: string;
+    machineId: string | null;
     selectedText: string | null;
   },
 ): PendingTurnMetadata {
@@ -3524,7 +3473,7 @@ function buildOptimisticBranchTurnStreamTurn(
 
 function buildFallbackOptimisticTurn(input: {
   prompt: string;
-  machineId: string;
+  machineId: string | null;
   selectedText: string | null;
   snapshot: GraphSnapshot | undefined;
 }): PendingTurnMetadata {
@@ -3594,11 +3543,8 @@ function resolveWorkspaceName(value: string) {
   return parts.at(-1) || value;
 }
 
-function resolveRuntimeLabel(
-  machine: MachineRecord | undefined,
-  diagnostics: DaemonDiagnostics | undefined,
-) {
-  const runtimeMode = machine?.environment.runtimeMode ?? diagnostics?.environment.runtimeMode;
+function resolveRuntimeLabel(diagnostics: DaemonDiagnostics | undefined) {
+  const runtimeMode = diagnostics?.environment.runtimeMode;
   return runtimeMode === "mock" ? "Mock runtime" : "Claude Code";
 }
 

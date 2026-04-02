@@ -84,7 +84,6 @@ export type DaemonLogEntry = {
 export type DaemonStatus =
   | "starting"
   | "local_only"
-  | "waiting_for_pairing"
   | "registering"
   | "registered"
   | "online"
@@ -96,10 +95,8 @@ export type DaemonDiagnostics = {
   localMode: boolean;
   environment: RuntimeEnvironment;
   serverUrl: string | null;
-  pairingCodeConfigured: boolean;
   machineName: string | null;
   machineId: string | null;
-  machineStatePath: string | null;
   lastServerContactAt: string | null;
   lastHeartbeatAt: string | null;
   lastError: string | null;
@@ -130,19 +127,7 @@ export type MachineRecord = {
   environment: RuntimeEnvironment;
 };
 
-export const createPairingSessionInputSchema = z.object({
-  label: z.string().trim().max(120).default(""),
-});
-
-export type CreatePairingSessionInput = z.infer<typeof createPairingSessionInputSchema>;
-
-export type PairingSession = {
-  pairingCode: string;
-  expiresAt: string;
-};
-
 export const createMachineRegisterInputSchema = z.object({
-  pairingCode: z.string().trim().min(1).max(32),
   machineName: z.string().trim().min(1).max(120),
   environment: z.custom<RuntimeEnvironment>(),
 });

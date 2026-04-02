@@ -19,10 +19,8 @@ export class DaemonDiagnosticsStore {
       localMode: (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true",
       environment: initialEnvironment,
       serverUrl: process.env.NETCHAT_SERVER_URL?.trim() || null,
-      pairingCodeConfigured: Boolean(process.env.NETCHAT_PAIRING_CODE?.trim()),
       machineName: process.env.NETCHAT_MACHINE_NAME?.trim() || null,
       machineId: null,
-      machineStatePath: process.env.NETCHAT_MACHINE_STATE_PATH?.trim() || null,
       lastServerContactAt: null,
       lastHeartbeatAt: null,
       lastError: null,
@@ -38,8 +36,6 @@ export class DaemonDiagnosticsStore {
   recordMachineConfig(config: {
     machineId?: string | null;
     machineName?: string | null;
-    machineStatePath?: string | null;
-    pairingCodeConfigured?: boolean;
     serverUrl?: string | null;
   }) {
     if ("machineId" in config) {
@@ -48,14 +44,6 @@ export class DaemonDiagnosticsStore {
 
     if ("machineName" in config) {
       this.snapshot.machineName = config.machineName ?? null;
-    }
-
-    if ("machineStatePath" in config) {
-      this.snapshot.machineStatePath = config.machineStatePath ?? null;
-    }
-
-    if ("pairingCodeConfigured" in config && typeof config.pairingCodeConfigured === "boolean") {
-      this.snapshot.pairingCodeConfigured = config.pairingCodeConfigured;
     }
 
     if ("serverUrl" in config) {

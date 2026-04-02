@@ -38,7 +38,8 @@ This project has been publishd to npm, and to use latest stable release, users r
   - persists the local conversation graph
 - `apps/daemon`
   - connects to the local Claude Code runtime
-  - handles machine registration, job claiming, and Claude turn execution
+  - accepts jobs from the local controller
+  - executes Claude turns and streams runtime events back locally
 - `packages/shared`
   - shared schemas, types, graph model, and runtime contracts
 
@@ -47,18 +48,20 @@ This project has been publishd to npm, and to use latest stable release, users r
 Default directory:
 
 ```text
-~/.netchat/
+~/.netchat/workspaces/<workspace-id>/
 ```
 
 Key files:
 
-- `app.db`
+- `workspace.json`
+  - workspace metadata
+  - active net selection
+  - per-net storage locations
+- `nets/*.db`
   - conversation history
   - branches
   - message graph
-  - branch-to-local-Claude session / machine mapping
-- `machine.json`
-  - daemon machine registration state
+  - branch-to-local-Claude session mapping
 
 ## How to Start the Project
 
@@ -79,7 +82,6 @@ This command will:
 - build the web UI
 - start the local controller
 - start the local daemon
-- prepare local pairing automatically
 - serve the full UI on `localhost`
 
 Default ports:
@@ -99,8 +101,6 @@ Default ports:
   - skip the web build step during repeated local runs
 - `NETCHAT_APP_DB_PATH`
   - custom path for the local SQLite database
-- `NETCHAT_MACHINE_STATE_PATH`
-  - custom path for local machine state
 
 Example:
 

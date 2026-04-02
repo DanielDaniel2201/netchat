@@ -13,7 +13,6 @@ import {
   CreateMachineJobEventInput,
   CreateMachineRegisterInput,
   CreateNetInput,
-  CreatePairingSessionInput,
   CreateRootTurnInput,
   GraphSnapshot,
   MessageNode,
@@ -34,7 +33,6 @@ import {
   createMachineJobEventInputSchema,
   createNetInputSchema,
   createMachineRegisterInputSchema,
-  createPairingSessionInputSchema,
   createBranchInputSchema,
   createBranchTurnInputSchema,
   createRootTurnInputSchema,
@@ -168,25 +166,7 @@ app.delete("/api/nets/:netId", async (request, reply) => {
   }
 });
 
-app.get("/api/machines", async () => {
-  return machines.listMachines();
-});
-
 app.get("/api/diagnostics", async (): Promise<ServerDiagnostics> => diagnostics.getSnapshot());
-
-app.post("/api/machines/pairing-sessions", async (request, reply) => {
-  const input = createPairingSessionInputSchema.safeParse(request.body);
-  if (!input.success) {
-    return reply.status(400).send({ error: input.error.flatten() });
-  }
-
-  const session = machines.createPairingSession(input.data.label);
-  diagnostics.log(
-    "info",
-    `Created pairing code ${session.pairingCode} for ${input.data.label || "unnamed daemon"}.`,
-  );
-  return session;
-});
 
 app.post("/api/daemon/register", async (request, reply) => {
   const input = createMachineRegisterInputSchema.safeParse(request.body);

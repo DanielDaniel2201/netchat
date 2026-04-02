@@ -101,7 +101,6 @@ async function main() {
       NETCHAT_APP_DATA_DIR: config.appDataDirectory,
       NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
       NETCHAT_LOCAL_MODE: "true",
-      NETCHAT_MACHINE_STATE_PATH: config.machineStatePath,
       NETCHAT_SERVER_URL: config.serverUrl,
       NETCHAT_WORKSPACE_DIR: config.workingDirectory,
     },
@@ -110,7 +109,7 @@ async function main() {
   void daemonProcess.exitPromise.catch(() => undefined);
 
   await waitForHealth(`${config.daemonUrl}/health`);
-  await waitForOnlineMachine(`${config.serverUrl}/api/machines`);
+  await waitForRuntimeOnline(`${config.serverUrl}/api/runtime/diagnostics`);
 
   log(`Local controller ready at ${config.serverUrl}.`);
   log(`Workspace-scoped net history will persist under ${config.appDataDirectory}.`);
@@ -202,7 +201,6 @@ type WebBuildMode = "auto" | "skip" | "force";
 type ParsedLocalAppArgs = {
   appDataDirectory: string | null;
   databasePath: string | null;
-  machineStatePath: string | null;
   serverPort: number | null;
   daemonPort: number | null;
   openBrowser: boolean | null;
@@ -213,7 +211,6 @@ type ParsedLocalAppArgs = {
 type LocalAppConfig = {
   appDataDirectory: string;
   databasePath: string | null;
-  machineStatePath: string;
   workingDirectory: string;
   serverPort: number;
   daemonPort: number;
@@ -235,13 +232,7 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
     parsedArgs.appDataDirectory ??
     readStringEnv("NETCHAT_APP_DATA_DIR") ??
     path.join(os.homedir(), ".netchat", "workspaces", createWorkspaceStorageKey(workingDirectory));
-  const databasePath =
-    parsedArgs.databasePath ??
-    readStringEnv("NETCHAT_APP_DB_PATH");
-  const machineStatePath =
-    parsedArgs.machineStatePath ??
-    readStringEnv("NETCHAT_MACHINE_STATE_PATH") ??
-    path.join(appDataDirectory, "machine.json");
+  const databasePath = parsedArgs.databasePath ?? readStringEnv("NETCHAT_APP_DB_PATH");
   const configuredServerPort = parsedArgs.serverPort ?? readPortEnv("PORT");
   const serverPort = await resolvePort("controller", configuredServerPort ?? 3001, {
     explicit: configuredServerPort !== null,
@@ -267,7 +258,6 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
   return {
     appDataDirectory,
     databasePath,
-    machineStatePath,
     workingDirectory,
     serverPort,
     daemonPort,
@@ -283,7 +273,6 @@ function parseLocalAppArgs(argv: string[]): ParsedLocalAppArgs {
   const parsed: ParsedLocalAppArgs = {
     appDataDirectory: null,
     databasePath: null,
-    machineStatePath: null,
     serverPort: null,
     daemonPort: null,
     openBrowser: null,
@@ -323,12 +312,6 @@ function parseLocalAppArgs(argv: string[]): ParsedLocalAppArgs {
       case "--app-db-path": {
         const option = readOptionValue(flag, inlineValue, argv, index);
         parsed.databasePath = option.value;
-        index = option.nextIndex;
-        break;
-      }
-      case "--machine-state-path": {
-        const option = readOptionValue(flag, inlineValue, argv, index);
-        parsed.machineStatePath = option.value;
         index = option.nextIndex;
         break;
       }
@@ -398,7 +381,6 @@ function printLocalAppHelp() {
       "  --daemon-port <number>        Daemon port (default: 4318)",
       "  --data-dir <path>             Override the local app data directory",
       "  --db-path <path>              Override the SQLite database path",
-      "  --machine-state-path <path>   Override the daemon machine-state path",
       "  --no-browser                  Do not open the browser automatically",
       "  --browser                     Force opening the browser even if env overrides disable it",
       "  --skip-web-build              Reuse the existing web build without rebuilding",
@@ -638,22 +620,22 @@ async function waitForHealth(url: string, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to become healthy.`);
 }
 
-async function waitForOnlineMachine(url: string, timeoutMs = 30000) {
+async function waitForRuntimeOnline(url: string, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const machines = await requestJson<Array<{ status: string }>>(url);
-      if (machines.some((machine) => machine.status === "online")) {
+      const diagnostics = await requestJson<{ status?: string }>(url);
+      if (diagnostics.status === "online") {
         return;
       }
     } catch {
-      // Ignore while the local daemon is still registering.
+      // Ignore while the local daemon is still starting.
     }
 
     await delay(500);
   }
 
-  throw new Error("Timed out waiting for the local daemon to register an online machine.");
+  throw new Error("Timed out waiting for the local daemon runtime to come online.");
 }
 
 async function requestJson<T>(url: string, init?: RequestInit) {

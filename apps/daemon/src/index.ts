@@ -73,16 +73,12 @@ if (machineClient.hasServerUrl()) {
   void machineClient.start().catch((error) => {
     app.log.error(error, "Machine client failed to start");
     const message = error instanceof Error ? error.message : "Machine client failed to start.";
-    if (/NETCHAT_PAIRING_CODE is required/i.test(message)) {
-      return;
-    }
-
     diagnostics.recordError(message);
   });
 } else {
   diagnostics.setStatus(
     "local_only",
-    "NETCHAT_SERVER_URL is not configured, so this daemon is not registering a machine with the server.",
+    "NETCHAT_SERVER_URL is not configured, so this daemon will not connect to the local server.",
     "warn",
   );
 }
