@@ -37,3 +37,5 @@ After each commit, update the Changelog under the current date. Each entry must 
 - Prepared npm first-release metadata by renaming the root package to `@danielwyq/netchat`, setting version `0.0.1`, and adding repository/homepage/bugs/keywords fields for publish discoverability.
 - Updated CLI help text and command examples across entrypoints to use `npx @danielwyq/netchat@latest`, matching the intended public usage.
 - Added a top-level README focused on npm users with quick-start commands, help entrypoints, cache freshness guidance, environment variables, and Node.js runtime requirements.
+- Changed launch behavior to land on a blank new net when the last active net already has messages, while keeping history nets accessible from the drawer instead of reopening an old conversation by default.
+- Stopped auto-selecting the latest assistant reply when a net loads, so historical nets now open on the main trunk only and selection branches stay collapsed until the user explicitly toggles their anchor.

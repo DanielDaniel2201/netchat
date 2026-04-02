@@ -12,6 +12,9 @@ The project is being developed as a `local-first localhost web app`:
 - important data is stored locally by default
 - a local controller / daemon serves APIs and the UI over `localhost`
 
+This project has been publishd to npm, and to use latest stable release, users run
+`npx @danielwyq/netchat@latest` under their desired path.
+
 ## Technical Direction
 
 ### Product Shape
@@ -124,4 +127,4 @@ npm run app:local
 ## Other references
 
 Refer to /DESIGN.md for frontend UI design principles.
-Refer to /CHANGELOG.md for the development changelog of this project and to update the changelog after each major code change
+Update the changelog after each major code change

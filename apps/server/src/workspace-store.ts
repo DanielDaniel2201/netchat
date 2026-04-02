@@ -52,6 +52,7 @@ export class WorkspaceStore {
     mkdirSync(this.netsDirectory, { recursive: true });
 
     this.manifest = this.loadManifest();
+    this.manifest = this.ensureLaunchNet(this.manifest);
     this.activeStore = new GraphStore(this.getActiveNetRecord().databasePath);
   }
 
@@ -323,6 +324,58 @@ export class WorkspaceStore {
       lastOpenedAt: createdAt,
       databasePath: this.resolveInitialNetDatabasePath(netId),
     };
+  }
+
+  private ensureLaunchNet(manifest: WorkspaceManifest) {
+    const activeNet = manifest.nets.find((net) => net.id === manifest.activeNetId) ?? null;
+    if (activeNet && !this.netHasMessages(activeNet)) {
+      return manifest;
+    }
+
+    const reusableEmptyNet = [...manifest.nets]
+      .filter((net) => net.id !== manifest.activeNetId && !this.netHasMessages(net))
+      .sort((left, right) => compareIsoTimestamps(right.createdAt, left.createdAt))[0];
+
+    if (reusableEmptyNet) {
+      const selectedAt = nowIso();
+      const nextManifest: WorkspaceManifest = {
+        ...manifest,
+        activeNetId: reusableEmptyNet.id,
+        nets: manifest.nets.map((net) =>
+          net.id === reusableEmptyNet.id
+            ? {
+                ...net,
+                lastOpenedAt: selectedAt,
+              }
+            : net,
+        ),
+      };
+      this.writeManifest(nextManifest);
+      return nextManifest;
+    }
+
+    const createdAt = nowIso();
+    const netId = makeNetId();
+    const nextManifest: WorkspaceManifest = {
+      ...manifest,
+      activeNetId: netId,
+      nets: [
+        ...manifest.nets,
+        {
+          id: netId,
+          title: createDefaultNetTitle(createdAt),
+          createdAt,
+          lastOpenedAt: createdAt,
+          databasePath: path.join(this.netsDirectory, `${netId}.db`),
+        },
+      ],
+    };
+    this.writeManifest(nextManifest);
+    return nextManifest;
+  }
+
+  private netHasMessages(net: WorkspaceNetRecord) {
+    return readLatestMessageTimestamp(net.databasePath) !== null;
   }
 
   private resolveInitialNetDatabasePath(netId: string) {

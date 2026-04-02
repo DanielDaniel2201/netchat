@@ -277,7 +277,6 @@ function NetchatApp() {
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const openNetMenuRef = useRef<HTMLDivElement>(null);
-  const lastAutoSelectedMessageIdRef = useRef<string | null>(null);
   const lastAutoFitNetIdRef = useRef<string | null>(null);
   const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
@@ -862,20 +861,10 @@ function NetchatApp() {
 
   useEffect(() => {
     if (!snapshot) {
-      return;
-    }
-
-    const latestAssistantMessageId = getLatestAssistantMessageId(snapshot);
-
-    if (
-      !selectedMessageId &&
-      !activePathMessageId &&
-      latestAssistantMessageId &&
-      latestAssistantMessageId !== lastAutoSelectedMessageIdRef.current
-    ) {
-      lastAutoSelectedMessageIdRef.current = latestAssistantMessageId;
-      setSelectedMessageId(latestAssistantMessageId);
-      setActivePathMessageId(latestAssistantMessageId);
+      if (selectedMessageId !== null) {
+        setSelectedMessageId(null);
+      }
+      setSelectionDraft(null);
       return;
     }
 
@@ -886,15 +875,11 @@ function NetchatApp() {
       return;
     }
 
-    if (!latestAssistantMessageId) {
-      lastAutoSelectedMessageIdRef.current = null;
-    }
-
     if (selectedMessageId !== null) {
       setSelectedMessageId(null);
     }
     setSelectionDraft(null);
-  }, [activePathMessageId, selectedMessageId, setSelectedMessageId, snapshot]);
+  }, [selectedMessageId, setSelectedMessageId, snapshot]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -3270,16 +3255,6 @@ function formatErrorMessage(error: unknown) {
   }
 
   return "The request failed. Check the daemon/server logs for more detail.";
-}
-
-function getLatestAssistantMessageId(snapshot: GraphSnapshot) {
-  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
-    if (snapshot.messages[index]?.role === "assistant") {
-      return snapshot.messages[index]!.id;
-    }
-  }
-
-  return null;
 }
 
 function buildOptimisticRootStreamTurn(
