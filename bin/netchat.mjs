@@ -49,7 +49,8 @@ const child = spawn(process.execPath, childArgs, {
   env: {
     ...process.env,
     NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? launchCwd,
-    CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? launchCwd,
+    NETCHAT_RUNTIME_CWD: process.env.NETCHAT_RUNTIME_CWD ?? process.env.CLAUDE_PROJECT_CWD ?? launchCwd,
+    CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? process.env.NETCHAT_RUNTIME_CWD ?? launchCwd,
   },
   stdio: "inherit",
 });

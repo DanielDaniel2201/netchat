@@ -1,18 +1,16 @@
 import os from "node:os";
 
 import {
+  AgentRuntimeEnvironment,
+  AgentTurnEvent,
+  AgentTurnInput,
+  AgentTurnResult,
   CompleteMachineJobInput,
-  CreateBranchRuntimeRequest,
-  ContinueBranchRuntimeRequest,
   CreateMachineHeartbeatInput,
   CreateMachineJobEventInput,
   CreateMachineRegisterInput,
   MachineJob,
   MachineRegistration,
-  RootTurnRuntimeRequest,
-  RuntimeEnvironment,
-  RuntimeResponse,
-  RuntimeStreamEvent,
 } from "@netchat/shared";
 
 type MachineState = {
@@ -33,22 +31,17 @@ export class MachineClient {
 
   constructor(
     private readonly runtime: {
-      getMode(): "mock" | "claude";
+      getDescriptor(): {
+        runtimeKind: string;
+        runtimeLabel: string;
+      };
       getWorkingDirectory(): string;
-      runRootTurn(
-        input: RootTurnRuntimeRequest,
-        options?: { onEvent?: (event: RuntimeStreamEvent) => void },
-      ): Promise<RuntimeResponse>;
-      createBranch(
-        input: CreateBranchRuntimeRequest,
-        options?: { onEvent?: (event: RuntimeStreamEvent) => void },
-      ): Promise<RuntimeResponse>;
-      continueBranch(
-        input: ContinueBranchRuntimeRequest,
-        options?: { onEvent?: (event: RuntimeStreamEvent) => void },
-      ): Promise<RuntimeResponse>;
+      executeTurn(
+        input: AgentTurnInput,
+        options?: { onEvent?: (event: AgentTurnEvent) => void },
+      ): Promise<AgentTurnResult>;
     },
-    private readonly detectEnvironment: () => Promise<RuntimeEnvironment>,
+    private readonly detectEnvironment: () => Promise<AgentRuntimeEnvironment>,
     private readonly diagnostics?: {
       log: (level: "info" | "warn" | "error", message: string) => void;
       recordMachineConfig: (config: {
@@ -77,7 +70,7 @@ export class MachineClient {
     if (!this.hasServerUrl()) {
       this.diagnostics?.setStatus(
         "local_only",
-        "NETCHAT_SERVER_URL is not set. The daemon can detect Claude locally but will not register a machine.",
+        `NETCHAT_SERVER_URL is not set. The daemon can detect ${this.runtime.getDescriptor().runtimeLabel} locally but will not register a machine.`,
         "warn",
       );
       return;
@@ -208,28 +201,14 @@ export class MachineClient {
     let eventPublishChain = Promise.resolve();
 
     try {
-      let response: RuntimeResponse;
-      const emitEvent = (event: RuntimeStreamEvent) => {
+      let response: AgentTurnResult;
+      const emitEvent = (event: AgentTurnEvent) => {
         eventPublishChain = eventPublishChain.then(() => this.publishJobEvent(job.id, event));
       };
 
-      switch (job.kind) {
-        case "root-turn":
-          response = await this.runtime.runRootTurn(job.payload, {
-            onEvent: emitEvent,
-          });
-          break;
-        case "branch-create":
-          response = await this.runtime.createBranch(job.payload, {
-            onEvent: emitEvent,
-          });
-          break;
-        case "branch-turn":
-          response = await this.runtime.continueBranch(job.payload, {
-            onEvent: emitEvent,
-          });
-          break;
-      }
+      response = await this.runtime.executeTurn(job.payload, {
+        onEvent: emitEvent,
+      });
 
       await eventPublishChain;
 
@@ -280,7 +259,7 @@ export class MachineClient {
     }
   }
 
-  private async publishJobEvent(jobId: string, event: RuntimeStreamEvent) {
+  private async publishJobEvent(jobId: string, event: AgentTurnEvent) {
     if (!this.state) {
       return;
     }

@@ -1,4 +1,12 @@
-import { DaemonDiagnostics, DaemonLogEntry, DaemonLogLevel, DaemonStatus, RuntimeEnvironment, makeId, nowIso } from "@netchat/shared";
+import {
+  AgentRuntimeEnvironment,
+  DaemonDiagnostics,
+  DaemonLogEntry,
+  DaemonLogLevel,
+  DaemonStatus,
+  makeId,
+  nowIso,
+} from "@netchat/shared";
 
 const maxLogEntries = 120;
 const daemonLogPrefix = "[netchat-daemon]";
@@ -12,7 +20,7 @@ const ansiReset = "\x1b[0m";
 export class DaemonDiagnosticsStore {
   private snapshot: DaemonDiagnostics;
 
-  constructor(initialEnvironment: RuntimeEnvironment) {
+  constructor(initialEnvironment: AgentRuntimeEnvironment) {
     this.snapshot = {
       startedAt: nowIso(),
       status: "starting",
@@ -28,7 +36,7 @@ export class DaemonDiagnosticsStore {
     };
   }
 
-  recordEnvironment(environment: RuntimeEnvironment) {
+  recordEnvironment(environment: AgentRuntimeEnvironment) {
     this.snapshot.environment = environment;
     return this.getSnapshot();
   }

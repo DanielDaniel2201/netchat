@@ -4,12 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  AgentTurnResult,
   AssistantStreamState,
   Branch,
   CreateBranchInput,
   GraphSnapshot,
   MessageNode,
-  RuntimeResponse,
   buildGraphEdges,
   describeBranchCreation,
   makeId,
@@ -181,7 +181,7 @@ export class GraphStore {
 
   applyRootTurn(
     prompt: string,
-    runtime: RuntimeResponse,
+    runtime: AgentTurnResult,
     options?: {
       userMessageId?: string;
       assistantMessageId?: string;
@@ -199,7 +199,7 @@ export class GraphStore {
            SET session_id = ?, machine_id = ?, title = ?
            WHERE id = ?`,
         )
-        .run(runtime.sessionId, runtime.machineId, "Root session", branch.id);
+        .run(runtime.handle, runtime.machineId, "Root session", branch.id);
 
       const nextOrdinal = this.getNextMessageOrdinal(branch.id);
       this.insertMessage({
@@ -208,7 +208,7 @@ export class GraphStore {
         role: "user",
         content: prompt,
         selectedText: options?.selectedText ?? null,
-        sessionId: runtime.sessionId,
+        sessionId: runtime.handle,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal,
       });
@@ -216,9 +216,9 @@ export class GraphStore {
         id: assistantMessageId,
         branchId: branch.id,
         role: "assistant",
-        content: runtime.assistantMessage,
+        content: runtime.outputText,
         selectedText: null,
-        sessionId: runtime.sessionId,
+        sessionId: runtime.handle,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal + 1,
       });
@@ -230,7 +230,7 @@ export class GraphStore {
 
   applyBranchCreation(
     input: CreateBranchInput,
-    runtime: RuntimeResponse,
+    runtime: AgentTurnResult,
     options?: {
       branchId?: string;
       userMessageId?: string;
@@ -269,7 +269,7 @@ export class GraphStore {
           branchId,
           sourceMessage.branchId,
           sourceMessage.id,
-          runtime.sessionId,
+          runtime.handle,
           runtime.machineId,
           branchTitle,
           isSelectionBranch ? input.selectedText! : null,
@@ -284,7 +284,7 @@ export class GraphStore {
         role: "user",
         content: userMessageContent,
         selectedText: isSelectionBranch ? input.selectedText! : null,
-        sessionId: runtime.sessionId,
+        sessionId: runtime.handle,
         machineId: runtime.machineId,
         ordinalInBranch: 0,
       });
@@ -292,9 +292,9 @@ export class GraphStore {
         id: assistantMessageId,
         branchId,
         role: "assistant",
-        content: runtime.assistantMessage,
+        content: runtime.outputText,
         selectedText: null,
-        sessionId: runtime.sessionId,
+        sessionId: runtime.handle,
         machineId: runtime.machineId,
         ordinalInBranch: 1,
       });
@@ -307,7 +307,7 @@ export class GraphStore {
   applyBranchTurn(
     branchId: string,
     prompt: string,
-    runtime: RuntimeResponse,
+    runtime: AgentTurnResult,
     options?: {
       userMessageId?: string;
       assistantMessageId?: string;
@@ -329,7 +329,7 @@ export class GraphStore {
            SET session_id = ?, machine_id = ?
            WHERE id = ?`,
         )
-        .run(runtime.sessionId, runtime.machineId, branchId);
+        .run(runtime.handle, runtime.machineId, branchId);
 
       const nextOrdinal = this.getNextMessageOrdinal(branchId);
       this.insertMessage({
@@ -338,7 +338,7 @@ export class GraphStore {
         role: "user",
         content: prompt,
         selectedText: options?.selectedText ?? null,
-        sessionId: runtime.sessionId,
+        sessionId: runtime.handle,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal,
       });
@@ -346,9 +346,9 @@ export class GraphStore {
         id: assistantMessageId,
         branchId,
         role: "assistant",
-        content: runtime.assistantMessage,
+        content: runtime.outputText,
         selectedText: null,
-        sessionId: runtime.sessionId,
+        sessionId: runtime.handle,
         machineId: runtime.machineId,
         ordinalInBranch: nextOrdinal + 1,
       });

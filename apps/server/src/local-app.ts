@@ -96,7 +96,8 @@ async function main() {
     env: {
       ...process.env,
       NODE_NO_WARNINGS: "1",
-      CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? config.workingDirectory,
+      NETCHAT_RUNTIME_CWD: process.env.NETCHAT_RUNTIME_CWD ?? process.env.CLAUDE_PROJECT_CWD ?? config.workingDirectory,
+      CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? process.env.NETCHAT_RUNTIME_CWD ?? config.workingDirectory,
       DAEMON_PORT: String(config.daemonPort),
       NETCHAT_APP_DATA_DIR: config.appDataDirectory,
       NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
@@ -415,6 +416,7 @@ function readPortEnv(name: string) {
 
 function resolveLaunchWorkingDirectory() {
   const configuredPath =
+    readStringEnv("NETCHAT_RUNTIME_CWD") ??
     readStringEnv("NETCHAT_WORKSPACE_DIR") ??
     readStringEnv("NETCHAT_LAUNCH_CWD") ??
     readStringEnv("CLAUDE_PROJECT_CWD") ??

@@ -4,15 +4,20 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  CreateBranchRuntimeRequest,
-  ContinueBranchRuntimeRequest,
-  RootTurnRuntimeRequest,
-  RuntimeResponse,
-  RuntimeStreamEvent,
+  AgentRuntimeDescriptor,
+  AgentRuntimeKind,
+  AgentTurnEvent,
+  AgentTurnInput,
+  AgentTurnResult,
   makeId,
 } from "@netchat/shared";
 
-import { resolveClaudeBinaryPath, resolveClaudeWorkingDirectory } from "./claude-config.js";
+import {
+  resolveRuntimeBinaryPath,
+  resolveRuntimeKind,
+  resolveRuntimeLabel,
+  resolveRuntimeWorkingDirectory,
+} from "./runtime-config.js";
 
 type SessionState = {
   id: string;
@@ -64,9 +69,8 @@ type ClaudeTranscriptEntry = {
   type?: string;
 };
 
-type RuntimeExecutionOptions = {
-  onEvent?: (event: RuntimeStreamEvent) => void;
-  resume?: string;
+type AgentRuntimeExecutionOptions = {
+  onEvent?: (event: AgentTurnEvent) => void;
 };
 
 type ClaudeSdkMessagePayload = {
@@ -157,25 +161,68 @@ type StreamState = {
   streamMessageOrdinal: number;
 };
 
-export interface RuntimeAdapter {
-  runRootTurn(input: RootTurnRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse>;
-  createBranch(input: CreateBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse>;
-  continueBranch(input: ContinueBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse>;
-  getMode(): "mock" | "claude";
+type CodexJsonEvent = {
+  item?: CodexItemPayload;
+  thread_id?: unknown;
+  type?: unknown;
+};
+
+type CodexItemPayload =
+  | {
+      id?: string;
+      type?: "agent_message";
+      text?: string;
+    }
+  | {
+      aggregated_output?: string;
+      command?: string;
+      exit_code?: number | null;
+      id?: string;
+      status?: "in_progress" | "completed" | "failed";
+      type?: "command_execution";
+    }
+  | {
+      id?: string;
+      summary?: string;
+      text?: string;
+      type?: string;
+    };
+
+type CodexStreamState = {
+  blockOrder: number;
+  commandBlocksById: Map<string, ToolBlockState>;
+  responseText: string;
+  responseWasCompleted: boolean;
+  threadId: string | null;
+  thinkingBlocksById: Map<string, ThinkingBlockState>;
+};
+
+export interface AgentRuntimeAdapter {
+  getDescriptor(): AgentRuntimeDescriptor;
   getWorkingDirectory(): string;
+  executeTurn(input: AgentTurnInput, options?: AgentRuntimeExecutionOptions): Promise<AgentTurnResult>;
 }
 
-export function createRuntimeAdapter(): RuntimeAdapter {
-  if (resolveRuntimeMode() === "claude") {
-    return new ClaudeCliRuntime();
+export function createRuntimeAdapter(): AgentRuntimeAdapter {
+  const runtimeKind = resolveRuntimeKind();
+  switch (runtimeKind) {
+    case "claude":
+      return new ClaudeCliRuntime();
+    case "codex":
+      return new CodexCliRuntime();
+    case "mock":
+      return new MockRuntimeAdapter();
+    default:
+      throw new Error(
+        `NETCHAT_RUNTIME=${runtimeKind} is not implemented yet. Supported runtimes: claude, codex, mock.`,
+      );
   }
-
-  return new MockRuntimeAdapter();
 }
 
-class ClaudeCliRuntime implements RuntimeAdapter {
-  private readonly binaryResolution = resolveClaudeBinaryPath();
-  private readonly cwdResolution = resolveClaudeWorkingDirectory();
+class ClaudeCliRuntime implements AgentRuntimeAdapter {
+  private readonly descriptor = createRuntimeDescriptor("claude");
+  private readonly binaryResolution = resolveRuntimeBinaryPath("claude");
+  private readonly cwdResolution = resolveRuntimeWorkingDirectory();
   private readonly cwd = this.cwdResolution.workingDirectory;
   private readonly binaryPath = this.binaryResolution.binaryPath;
   private readonly permissionMode = readStringEnv("NETCHAT_PERMISSION_MODE") ?? "bypassPermissions";
@@ -184,42 +231,22 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
   private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
 
-  getMode(): "claude" {
-    return "claude";
+  getDescriptor(): AgentRuntimeDescriptor {
+    return this.descriptor;
   }
 
   getWorkingDirectory(): string {
     return this.cwd;
   }
 
-  async runRootTurn(input: RootTurnRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
-    return this.executePrompt("root-turn", input.prompt, {
-      onEvent: options?.onEvent,
-      resume: input.sessionId ?? undefined,
-    });
+  async executeTurn(
+    input: AgentTurnInput,
+    options?: AgentRuntimeExecutionOptions,
+  ): Promise<AgentTurnResult> {
+    return this.executePrompt(input, options);
   }
 
-  async createBranch(input: CreateBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
-    return this.executePrompt("branch-create", input.prompt, {
-      onEvent: options?.onEvent,
-    });
-  }
-
-  async continueBranch(
-    input: ContinueBranchRuntimeRequest,
-    options?: RuntimeExecutionOptions,
-  ): Promise<RuntimeResponse> {
-    return this.executePrompt("branch-turn", input.prompt, {
-      onEvent: options?.onEvent,
-      resume: input.sessionId,
-    });
-  }
-
-  private async executePrompt(
-    kind: "root-turn" | "branch-create" | "branch-turn",
-    prompt: string,
-    options: RuntimeExecutionOptions,
-  ): Promise<RuntimeResponse> {
+  private async executePrompt(input: AgentTurnInput, options?: AgentRuntimeExecutionOptions): Promise<AgentTurnResult> {
     if (!this.binaryPath) {
       throw new Error(
         [
@@ -230,12 +257,14 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       );
     }
 
-    const args = this.buildCliArgs(prompt, options);
+    const args = this.buildCliArgs(input);
     const startedAtMs = Date.now();
+    const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
+    const resumeHandle = input.session.mode === "resume" ? input.session.handle : undefined;
 
     logRuntime(
       "info",
-      `Starting ${kind} via Claude CLI (cwd=${this.cwd}, resume=${options.resume ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+      `Starting ${kind} via Claude CLI (cwd=${this.cwd}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
     );
 
     let stdout = "";
@@ -243,7 +272,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     try {
       const liveState = createStreamState();
       const result = await this.executeCli(args, (line) => {
-        this.handleStreamLine(line, liveState, options.onEvent);
+        this.handleStreamLine(line, liveState, options?.onEvent);
       });
       stdout = result.stdout;
       stderr = result.stderr;
@@ -251,7 +280,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       throw this.formatExecutionError(error, {
         kind,
         startedAtMs,
-        options,
+        resumeHandle,
       });
     }
 
@@ -269,9 +298,9 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       throw new Error("Claude CLI completed without returning a session id.");
     }
 
-    const assistantMessage =
+    const outputText =
       parsed.result?.trim() || this.readAssistantMessageFromTranscript(sessionId) || stdout.trim();
-    if (!assistantMessage) {
+    if (!outputText) {
       throw new Error("Claude CLI completed, but no assistant message was available in stdout or transcript.");
     }
 
@@ -281,18 +310,15 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     );
 
     return {
-      assistantMessage,
+      handle: sessionId,
       machineId: this.machineId,
-      sessionId,
+      outputText,
+      runtimeId: this.descriptor.runtimeId,
+      runtimeKind: this.descriptor.runtimeKind,
     };
   }
 
-  private buildCliArgs(
-    prompt: string,
-    options: {
-      resume?: string;
-    },
-  ) {
+  private buildCliArgs(input: AgentTurnInput) {
     const args = ["-p", "--verbose", "--output-format", "stream-json", "--include-partial-messages"];
 
     if (this.settingSources) {
@@ -307,11 +333,11 @@ class ClaudeCliRuntime implements RuntimeAdapter {
       args.push("--dangerously-skip-permissions");
     }
 
-    if (options.resume) {
-      args.push("--resume", options.resume);
+    if (input.session.mode === "resume") {
+      args.push("--resume", input.session.handle);
     }
 
-    args.push(prompt);
+    args.push(input.prompt);
     return args;
   }
 
@@ -476,7 +502,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private handleStreamLine(
     line: string,
     state: StreamState,
-    onEvent?: (event: RuntimeStreamEvent) => void,
+    onEvent?: (event: AgentTurnEvent) => void,
   ) {
     let message: ClaudeStreamEvent;
     try {
@@ -512,7 +538,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private handleRawStreamEvent(
     event: ClaudeRawMessageStreamEvent,
     state: StreamState,
-    onEvent?: (event: RuntimeStreamEvent) => void,
+    onEvent?: (event: AgentTurnEvent) => void,
   ) {
     if (event.type === "message_start") {
       state.streamMessageOrdinal += 1;
@@ -636,7 +662,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private handleAssistantMessage(
     message: ClaudeSdkMessagePayload,
     state: StreamState,
-    onEvent?: (event: RuntimeStreamEvent) => void,
+    onEvent?: (event: AgentTurnEvent) => void,
   ) {
     for (const block of message.content ?? []) {
       if (block.type === "thinking") {
@@ -701,7 +727,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   private handleUserMessage(
     message: ClaudeSdkMessagePayload,
     state: StreamState,
-    onEvent?: (event: RuntimeStreamEvent) => void,
+    onEvent?: (event: AgentTurnEvent) => void,
   ) {
     for (const block of message.content ?? []) {
       if (block.type !== "tool_result") {
@@ -776,9 +802,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
     context: {
       kind: "root-turn" | "branch-create" | "branch-turn";
       startedAtMs: number;
-      options: {
-        resume?: string;
-      };
+      resumeHandle?: string;
     },
   ) {
     const duration = formatDuration(Date.now() - context.startedAtMs);
@@ -809,7 +833,7 @@ class ClaudeCliRuntime implements RuntimeAdapter {
 
     logRuntime(
       didTimeout ? "error" : "warn",
-      `${message} (resume=${context.options.resume ?? "new"}).`,
+      `${message} (resume=${context.resumeHandle ?? "new"}).`,
     );
 
     return new Error(message);
@@ -881,101 +905,560 @@ class ClaudeCliRuntime implements RuntimeAdapter {
   }
 }
 
-class MockRuntimeAdapter implements RuntimeAdapter {
-  private sessions = new Map<string, SessionState>();
-  private readonly cwd = process.env.CLAUDE_PROJECT_CWD ?? process.cwd();
-  private readonly machineId = process.env.NETCHAT_MACHINE_ID?.trim() || "machine_local";
+class CodexCliRuntime implements AgentRuntimeAdapter {
+  private readonly descriptor = createRuntimeDescriptor("codex");
+  private readonly binaryResolution = resolveRuntimeBinaryPath("codex");
+  private readonly cwdResolution = resolveRuntimeWorkingDirectory();
+  private readonly cwd = this.cwdResolution.workingDirectory;
+  private readonly binaryPath = this.binaryResolution.binaryPath;
+  private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
+  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
+  private readonly model = readStringEnv("NETCHAT_CODEX_MODEL");
+  private readonly profile = readStringEnv("NETCHAT_CODEX_PROFILE");
+  private readonly addDirs = readListEnv("NETCHAT_CODEX_ADD_DIRS");
+  private readonly fullAuto = readBooleanEnv("NETCHAT_CODEX_FULL_AUTO", true);
+  private readonly bypassApprovalsAndSandbox = readBooleanEnv("NETCHAT_CODEX_BYPASS", false);
+  private readonly skipGitRepoCheck = readBooleanEnv("NETCHAT_CODEX_SKIP_GIT_REPO_CHECK", false);
 
-  getMode(): "mock" {
-    return "mock";
+  getDescriptor(): AgentRuntimeDescriptor {
+    return this.descriptor;
   }
 
   getWorkingDirectory(): string {
     return this.cwd;
   }
 
-  async runRootTurn(input: RootTurnRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
-    const session = this.ensureSession(input.sessionId);
-    session.turns.push(input.prompt);
-    await emitMockRuntimeEvents(options?.onEvent, {
-      responseText: [
-        "Mock Claude runtime",
-        `Session: ${session.id}`,
-        "",
-        `You asked: ${input.prompt}`,
-        "",
-        "This is the place where the real local Claude CLI root turn will run.",
-      ].join("\n"),
-    });
+  async executeTurn(
+    input: AgentTurnInput,
+    options?: AgentRuntimeExecutionOptions,
+  ): Promise<AgentTurnResult> {
+    if (!this.binaryPath) {
+      throw new Error(
+        [
+          "Codex binary could not be resolved.",
+          ...this.binaryResolution.issues,
+          "Install Codex CLI or set CODEX_BINARY_PATH to a valid executable.",
+        ].join(" "),
+      );
+    }
+
+    const args = this.buildCliArgs(input);
+    const startedAtMs = Date.now();
+    const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
+    const resumeHandle = input.session.mode === "resume" ? input.session.handle : undefined;
+
+    logRuntime(
+      "info",
+      `Starting ${kind} via Codex CLI (cwd=${this.cwd}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+    );
+
+    let stdout = "";
+    let stderr = "";
+    try {
+      const liveState = createCodexStreamState();
+      const result = await this.executeCli(args, (line) => {
+        this.handleStreamLine(line, liveState, options?.onEvent);
+      });
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (error) {
+      throw this.formatExecutionError(error, {
+        kind,
+        startedAtMs,
+        resumeHandle,
+      });
+    }
+
+    const parsed = this.parseResult(stdout, stderr, input);
+    logRuntime(
+      "info",
+      `Codex CLI finished ${kind} in ${formatDuration(Date.now() - startedAtMs)} with thread ${parsed.handle}.`,
+    );
 
     return {
+      handle: parsed.handle,
       machineId: this.machineId,
-      sessionId: session.id,
-      assistantMessage: [
-        "Mock Claude runtime",
-        `Session: ${session.id}`,
-        "",
-        `You asked: ${input.prompt}`,
-        "",
-        "This is the place where the real local Claude CLI root turn will run.",
-      ].join("\n"),
+      outputText: parsed.outputText,
+      runtimeId: this.descriptor.runtimeId,
+      runtimeKind: this.descriptor.runtimeKind,
     };
   }
 
-  async createBranch(input: CreateBranchRuntimeRequest, options?: RuntimeExecutionOptions): Promise<RuntimeResponse> {
-    const session = this.ensureSession(null);
-    session.turns.push(input.prompt);
-    await emitMockRuntimeEvents(options?.onEvent, {
-      responseText: [
-        "Mock replay-backed branch",
-        `Session: ${session.id}`,
-        "",
-        "The branch started in a fresh session with a replay prompt built from the visible path only.",
-        "",
-        `Prompt:\n${input.prompt}`,
-      ].join("\n"),
+  private buildCliArgs(input: AgentTurnInput) {
+    const args = ["exec"];
+
+    if (input.session.mode === "resume") {
+      args.push("resume");
+    }
+
+    args.push("--json");
+
+    if (this.bypassApprovalsAndSandbox) {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    } else if (this.fullAuto) {
+      args.push("--full-auto");
+    }
+
+    if (this.skipGitRepoCheck) {
+      args.push("--skip-git-repo-check");
+    }
+
+    if (this.model) {
+      args.push("--model", this.model);
+    }
+
+    if (this.profile) {
+      args.push("--profile", this.profile);
+    }
+
+    for (const addDir of this.addDirs) {
+      args.push("--add-dir", addDir);
+    }
+
+    if (input.session.mode === "resume") {
+      args.push(input.session.handle, input.prompt);
+      return args;
+    }
+
+    args.push("--cd", this.cwd, input.prompt);
+    return args;
+  }
+
+  private executeCli(
+    args: string[],
+    onStdoutLine?: (line: string) => void,
+  ): Promise<{ stdout: string; stderr: string }> {
+    if (!this.binaryPath) {
+      throw new Error("Codex binary path is required.");
+    }
+
+    const binaryPath = this.binaryPath;
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(binaryPath, args, {
+        cwd: this.cwd,
+        env: process.env,
+        windowsHide: true,
+      });
+      child.stdin.end();
+      let stdout = "";
+      let stderr = "";
+      let stdoutLineBuffer = "";
+      let settled = false;
+      let timedOut = false;
+      let hadActivity = false;
+      let activityCount = 0;
+      let lastActivityAtMs = Date.now();
+      const maxBufferBytes = 8 * 1024 * 1024;
+      let timeout: NodeJS.Timeout | null = null;
+
+      const armTimeout = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        timeout = setTimeout(() => {
+          timedOut = true;
+          child.kill();
+        }, this.activityTimeoutMs);
+      };
+
+      const noteActivity = () => {
+        hadActivity = true;
+        activityCount += 1;
+        lastActivityAtMs = Date.now();
+        armTimeout();
+      };
+
+      armTimeout();
+
+      const fail = (error: ClaudeCliExecutionError) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.hadActivity = hadActivity;
+        error.activityCount = activityCount;
+        error.lastActivityAtMs = lastActivityAtMs;
+        reject(error);
+      };
+
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        stdoutLineBuffer += chunk;
+        noteActivity();
+        flushStdoutLines();
+        if (Buffer.byteLength(stdout, "utf8") > maxBufferBytes) {
+          const error = new Error("Codex CLI stdout exceeded the maximum buffer size.") as ClaudeCliExecutionError;
+          child.kill();
+          fail(error);
+        }
+      });
+
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+        noteActivity();
+        if (Buffer.byteLength(stderr, "utf8") > maxBufferBytes) {
+          const error = new Error("Codex CLI stderr exceeded the maximum buffer size.") as ClaudeCliExecutionError;
+          child.kill();
+          fail(error);
+        }
+      });
+
+      child.on("error", (error) => {
+        fail(error as ClaudeCliExecutionError);
+      });
+
+      child.on("close", (code, signal) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        if (timedOut) {
+          const error = new Error("Codex CLI execution timed out.") as ClaudeCliExecutionError;
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.killed = true;
+          error.signal = signal;
+          error.timedOut = true;
+          error.hadActivity = hadActivity;
+          error.activityCount = activityCount;
+          error.lastActivityAtMs = lastActivityAtMs;
+          reject(error);
+          return;
+        }
+
+        flushStdoutLines(true);
+
+        if (code === 0) {
+          resolve({ stdout, stderr });
+          return;
+        }
+
+        const error = new Error(
+          `Codex CLI exited with code ${code ?? "unknown"}${signal ? ` (signal: ${signal})` : ""}.`,
+        ) as ClaudeCliExecutionError;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.signal = signal;
+        reject(error);
+      });
+
+      function flushStdoutLines(flushTail = false) {
+        let newlineIndex = stdoutLineBuffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = stdoutLineBuffer.slice(0, newlineIndex).trim();
+          stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
+          if (line) {
+            onStdoutLine?.(line);
+          }
+
+          newlineIndex = stdoutLineBuffer.indexOf("\n");
+        }
+
+        if (flushTail) {
+          const tail = stdoutLineBuffer.trim();
+          stdoutLineBuffer = "";
+          if (tail) {
+            onStdoutLine?.(tail);
+          }
+        }
+      }
     });
+  }
+
+  private handleStreamLine(
+    line: string,
+    state: CodexStreamState,
+    onEvent?: (event: AgentTurnEvent) => void,
+  ) {
+    let event: CodexJsonEvent;
+    try {
+      event = JSON.parse(line) as CodexJsonEvent;
+    } catch {
+      return;
+    }
+
+    if (event.type === "thread.started" && typeof event.thread_id === "string" && event.thread_id.trim().length > 0) {
+      state.threadId = event.thread_id.trim();
+      return;
+    }
+
+    if (
+      (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") &&
+      event.item
+    ) {
+      this.handleItemEvent(event.type, event.item, state, onEvent);
+      return;
+    }
+
+    if (event.type === "turn.completed" && state.responseText.trim().length > 0 && !state.responseWasCompleted) {
+      state.responseWasCompleted = true;
+      onEvent?.({
+        type: "response.update",
+        text: state.responseText,
+        isComplete: true,
+      });
+    }
+  }
+
+  private handleItemEvent(
+    eventType: "item.started" | "item.updated" | "item.completed",
+    item: CodexItemPayload,
+    state: CodexStreamState,
+    onEvent?: (event: AgentTurnEvent) => void,
+  ) {
+    if (item.type === "agent_message") {
+      const text = item.text?.trimEnd() ?? "";
+      if (!text) {
+        return;
+      }
+
+      state.responseText = text;
+      state.responseWasCompleted = eventType === "item.completed";
+      onEvent?.({
+        type: "response.update",
+        text,
+        isComplete: eventType === "item.completed",
+      });
+      return;
+    }
+
+    if (isCodexCommandExecutionItem(item)) {
+      const blockId = item.id?.trim() || makeId("codex-tool");
+      const existing = state.commandBlocksById.get(blockId);
+      const block =
+        existing ??
+        {
+          kind: "tool" as const,
+          inputText: item.command?.trim() || "",
+          order: nextCodexBlockOrder(state),
+          outputText: "",
+          toolCallId: blockId,
+          toolName: "Shell command",
+        };
+
+      block.inputText = item.command?.trim() || block.inputText;
+      block.outputText = item.aggregated_output ?? block.outputText;
+      state.commandBlocksById.set(blockId, block);
+      emitCodexToolUpdate({
+        block,
+        isComplete: eventType === "item.completed",
+        isError: item.status === "failed" || (typeof item.exit_code === "number" && item.exit_code !== 0),
+        onEvent,
+      });
+      return;
+    }
+
+    if (!isCodexThinkingItem(item)) {
+      return;
+    }
+
+    const text = readCodexThinkingText(item);
+    if (!text) {
+      return;
+    }
+
+    const blockId = item.id?.trim() || makeId("codex-thinking");
+    const existing = state.thinkingBlocksById.get(blockId);
+    const block =
+      existing ??
+      {
+        kind: "thinking" as const,
+        order: nextCodexBlockOrder(state),
+        text,
+      };
+
+    block.text = text;
+    state.thinkingBlocksById.set(blockId, block);
+    emitCodexThinkingUpdate({
+      block,
+      isComplete: eventType === "item.completed",
+      onEvent,
+    });
+  }
+
+  private parseResult(stdout: string, stderr: string, input: AgentTurnInput) {
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    let handle = "";
+    let outputText = "";
+
+    for (const line of lines) {
+      let event: CodexJsonEvent;
+      try {
+        event = JSON.parse(line) as CodexJsonEvent;
+      } catch {
+        continue;
+      }
+
+      if (event.type === "thread.started" && typeof event.thread_id === "string" && event.thread_id.trim().length > 0) {
+        handle = event.thread_id.trim();
+      }
+
+      if (event.item?.type === "agent_message" && typeof event.item.text === "string" && event.item.text.trim().length > 0) {
+        outputText = event.item.text.trim();
+      }
+    }
+
+    if (!handle && input.session.mode === "resume") {
+      handle = input.session.handle;
+    }
+
+    if (!handle) {
+      throw new Error(`Codex CLI output did not include a thread id: ${stdout.trim() || stderr.trim() || "empty output"}`);
+    }
+
+    if (!outputText) {
+      throw new Error(`Codex CLI completed without a final agent message: ${stdout.trim() || stderr.trim() || "empty output"}`);
+    }
 
     return {
-      machineId: this.machineId,
-      sessionId: session.id,
-      assistantMessage: [
-        "Mock replay-backed branch",
-        `Session: ${session.id}`,
-        "",
-        "The branch started in a fresh session with a replay prompt built from the visible path only.",
-        "",
-        `Prompt:\n${input.prompt}`,
-      ].join("\n"),
+      handle,
+      outputText,
     };
   }
 
-  async continueBranch(
-    input: ContinueBranchRuntimeRequest,
-    options?: RuntimeExecutionOptions,
-  ): Promise<RuntimeResponse> {
-    const session = this.ensureSession(input.sessionId);
+  private formatExecutionError(
+    error: unknown,
+    context: {
+      kind: "root-turn" | "branch-create" | "branch-turn";
+      startedAtMs: number;
+      resumeHandle?: string;
+    },
+  ) {
+    const duration = formatDuration(Date.now() - context.startedAtMs);
+    const execError = error as NodeJS.ErrnoException & ClaudeCliExecutionError;
+    const stderr = execError.stderr?.trim();
+    const stdout = execError.stdout?.trim();
+    const didTimeout =
+      Boolean(execError.timedOut) ||
+      Boolean(execError.killed && execError.signal) ||
+      /timed out/i.test(execError.message ?? "");
+
+    const message = didTimeout
+      ? [
+          `Codex CLI stopped making progress for ${formatDuration(this.activityTimeoutMs)} while running ${context.kind}.`,
+          execError.hadActivity
+            ? `Codex CLI emitted ${execError.activityCount ?? 0} stdout/stderr chunk(s) before going idle.`
+            : "Codex CLI did not emit any stdout/stderr activity before the inactivity timeout expired.",
+          `Try running \`${this.binaryPath} exec --json --cd "${this.cwd}" "Reply with exactly: ping"\` manually to verify the local Codex runtime.`,
+        ].join(" ")
+      : [
+          `Codex CLI failed during ${context.kind} after ${duration}.`,
+          execError.message?.trim() || "Unknown Codex CLI error.",
+          stderr || stdout || "",
+        ]
+          .join(" ")
+          .trim();
+
+    logRuntime(
+      didTimeout ? "error" : "warn",
+      `${message} (resume=${context.resumeHandle ?? "new"}).`,
+    );
+
+    return new Error(message);
+  }
+
+  private describeCliConfig() {
+    const parts = [
+      this.model ? `model=${this.model}` : "model=codex-default",
+      this.profile ? `profile=${this.profile}` : "profile=codex-default",
+      this.fullAuto ? "full-auto=true" : "full-auto=false",
+    ];
+
+    if (this.bypassApprovalsAndSandbox) {
+      parts.push("dangerously-bypass-approvals-and-sandbox=true");
+    }
+
+    if (this.skipGitRepoCheck) {
+      parts.push("skip-git-repo-check=true");
+    }
+
+    if (this.addDirs.length > 0) {
+      parts.push(`add-dirs=${this.addDirs.join(",")}`);
+    }
+
+    return parts.join(", ");
+  }
+}
+
+class MockRuntimeAdapter implements AgentRuntimeAdapter {
+  private readonly descriptor = createRuntimeDescriptor("mock");
+  private sessions = new Map<string, SessionState>();
+  private readonly cwd = resolveRuntimeWorkingDirectory().workingDirectory;
+  private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
+
+  getDescriptor(): AgentRuntimeDescriptor {
+    return this.descriptor;
+  }
+
+  getWorkingDirectory(): string {
+    return this.cwd;
+  }
+
+  async executeTurn(
+    input: AgentTurnInput,
+    options?: AgentRuntimeExecutionOptions,
+  ): Promise<AgentTurnResult> {
+    const session = this.ensureSession(input.session.mode === "resume" ? input.session.handle : null);
     session.turns.push(input.prompt);
+
+    const operation = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
+    const outputText =
+      operation === "branch-create"
+        ? [
+            "Mock replay-backed branch",
+            `Handle: ${session.id}`,
+            "",
+            "The branch started in a fresh session with a replay prompt built from the visible path only.",
+            "",
+            `Prompt:\n${input.prompt}`,
+          ].join("\n")
+        : operation === "branch-turn"
+          ? [
+              "Mock branch continuation",
+              `Handle: ${session.id}`,
+              `Turn count: ${session.turns.length}`,
+              "",
+              `Follow-up:\n${input.prompt}`,
+            ].join("\n")
+          : [
+              "Mock runtime",
+              `Handle: ${session.id}`,
+              "",
+              `You asked: ${input.prompt}`,
+              "",
+              "This is the place where the selected local runtime will execute the root turn.",
+            ].join("\n");
+
     await emitMockRuntimeEvents(options?.onEvent, {
-      responseText: [
-        "Mock branch continuation",
-        `Session: ${session.id}`,
-        `Turn count: ${session.turns.length}`,
-        "",
-        `Follow-up:\n${input.prompt}`,
-      ].join("\n"),
+      responseText: outputText,
     });
 
     return {
+      handle: session.id,
       machineId: this.machineId,
-      sessionId: session.id,
-      assistantMessage: [
-        "Mock branch continuation",
-        `Session: ${session.id}`,
-        `Turn count: ${session.turns.length}`,
-        "",
-        `Follow-up:\n${input.prompt}`,
-      ].join("\n"),
+      outputText,
+      runtimeId: this.descriptor.runtimeId,
+      runtimeKind: this.descriptor.runtimeKind,
     };
   }
 
@@ -1000,18 +1483,21 @@ function sanitizeProjectPath(value: string) {
   return value.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-function resolveRuntimeMode(): "mock" | "claude" {
-  const value = readStringEnv("NETCHAT_RUNTIME");
-  if (value === "mock") {
-    return "mock";
-  }
-
-  return "claude";
-}
-
 function readStringEnv(name: string) {
   const value = process.env[name]?.trim();
   return value ? value : null;
+}
+
+function readListEnv(name: string) {
+  const value = readStringEnv(name);
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 function readBooleanEnv(name: string, defaultValue = false) {
@@ -1062,6 +1548,14 @@ function formatDuration(durationMs: number) {
   return `${(seconds / 60).toFixed(1)}m`;
 }
 
+function createRuntimeDescriptor(runtimeKind: AgentRuntimeKind): AgentRuntimeDescriptor {
+  return {
+    runtimeKind,
+    runtimeLabel: resolveRuntimeLabel(runtimeKind),
+    runtimeId: readStringEnv("NETCHAT_RUNTIME_ID") ?? `${runtimeKind}_local`,
+  };
+}
+
 function createStreamState(): StreamState {
   return {
     blockOrder: 0,
@@ -1069,6 +1563,17 @@ function createStreamState(): StreamState {
     blockIdByIndex: new Map(),
     responseText: "",
     streamMessageOrdinal: -1,
+  };
+}
+
+function createCodexStreamState(): CodexStreamState {
+  return {
+    blockOrder: 0,
+    commandBlocksById: new Map(),
+    responseText: "",
+    responseWasCompleted: false,
+    threadId: null,
+    thinkingBlocksById: new Map(),
   };
 }
 
@@ -1081,11 +1586,16 @@ function nextBlockOrder(state: StreamState) {
   return state.blockOrder;
 }
 
+function nextCodexBlockOrder(state: CodexStreamState) {
+  state.blockOrder += 1;
+  return state.blockOrder;
+}
+
 function emitThinkingUpdate(
   state: StreamState,
   blockId: string,
   isComplete: boolean,
-  onEvent?: (event: RuntimeStreamEvent) => void,
+  onEvent?: (event: AgentTurnEvent) => void,
 ) {
   const block = state.blocksById.get(blockId);
   if (!block || block.kind !== "thinking") {
@@ -1106,7 +1616,7 @@ function emitToolUpdate(
   blockId: string,
   isComplete: boolean,
   isError: boolean,
-  onEvent?: (event: RuntimeStreamEvent) => void,
+  onEvent?: (event: AgentTurnEvent) => void,
 ) {
   const block = state.blocksById.get(blockId);
   if (!block || block.kind !== "tool") {
@@ -1124,6 +1634,61 @@ function emitToolUpdate(
     isComplete,
     isError,
   });
+}
+
+function emitCodexThinkingUpdate(input: {
+  block: ThinkingBlockState;
+  isComplete: boolean;
+  onEvent?: (event: AgentTurnEvent) => void;
+}) {
+  input.onEvent?.({
+    type: "thinking.update",
+    blockId: `codex-thinking-${input.block.order}`,
+    order: input.block.order,
+    text: input.block.text,
+    isComplete: input.isComplete,
+  });
+}
+
+function emitCodexToolUpdate(input: {
+  block: ToolBlockState;
+  isComplete: boolean;
+  isError: boolean;
+  onEvent?: (event: AgentTurnEvent) => void;
+}) {
+  input.onEvent?.({
+    type: "tool.update",
+    blockId: input.block.toolCallId,
+    order: input.block.order,
+    toolCallId: input.block.toolCallId,
+    toolName: input.block.toolName,
+    inputText: input.block.inputText,
+    outputText: input.block.outputText,
+    isComplete: input.isComplete,
+    isError: input.isError,
+  });
+}
+
+function isCodexThinkingItem(item: CodexItemPayload) {
+  return typeof item.type === "string" && /thinking|reason/i.test(item.type);
+}
+
+function isCodexCommandExecutionItem(
+  item: CodexItemPayload,
+): item is Extract<CodexItemPayload, { type?: "command_execution" }> {
+  return item.type === "command_execution";
+}
+
+function readCodexThinkingText(item: CodexItemPayload) {
+  if ("text" in item && typeof item.text === "string" && item.text.trim().length > 0) {
+    return item.text.trim();
+  }
+
+  if ("summary" in item && typeof item.summary === "string" && item.summary.trim().length > 0) {
+    return item.summary.trim();
+  }
+
+  return "";
 }
 
 function formatStructuredBlock(value: unknown): string {
@@ -1167,7 +1732,7 @@ function formatToolResultContent(content: unknown): string {
 }
 
 async function emitMockRuntimeEvents(
-  onEvent: ((event: RuntimeStreamEvent) => void) | undefined,
+  onEvent: ((event: AgentTurnEvent) => void) | undefined,
   input: { responseText: string },
 ) {
   if (!onEvent) {

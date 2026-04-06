@@ -83,6 +83,7 @@ type BubbleComposerMode =
 type MessageNodeData = {
   message: MessageNode;
   persistedAssistantState: AssistantStreamState | null;
+  assistantLabel: string;
   isActiveMessage: boolean;
   hasSelectionDraft: boolean;
   selectionAnchors: MessageSelectionAnchor[];
@@ -377,6 +378,7 @@ function NetchatApp() {
           ? "continue-root"
           : "continue-branch";
   const canSendOnActiveLane = daemonDiagnostics?.status === "online";
+  const runtimeLabel = resolveRuntimeLabel(daemonDiagnostics);
 
   async function runStreamedTurn(
     path: string,
@@ -720,6 +722,7 @@ function NetchatApp() {
     }
 
     return buildFlowGraph({
+      assistantLabel: runtimeLabel,
       expandedBranchIds: expandedBranchIdSet,
       snapshot,
       activePathMessageId,
@@ -734,6 +737,7 @@ function NetchatApp() {
     });
   }, [
     activePathMessageId,
+    runtimeLabel,
     expandedBranchIdSet,
     measuredNodeHeights,
     persistedAssistantStatesByMessageId,
@@ -1292,7 +1296,7 @@ function NetchatApp() {
             <div className="border-b border-[var(--node-border)] px-5 py-4">
               <div className="flex items-start justify-between gap-4 text-[15px] font-medium leading-6">
                 <div className="flex min-w-0 items-center gap-2 text-[var(--text-main)]">
-                  <span>Claude Code</span>
+                  <span>{runtimeLabel}</span>
                   <span
                     className={cn(
                       "inline-flex h-2.5 w-2.5 rounded-full border border-[rgba(26,26,26,0.16)]",
@@ -1930,7 +1934,7 @@ function CanvasThumbnail({
 
 function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const isUser = data.message.role === "user";
-  const roleLabel = isUser ? "User" : "Claude";
+  const roleLabel = isUser ? "User" : data.assistantLabel;
   const bubbleRef = useRef<HTMLDivElement>(null);
   const sessionIdLabel = data.message.sessionId ?? "pending";
   const [assistantTraceExpanded, setAssistantTraceExpanded] = useState(false);
@@ -2161,7 +2165,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                         <div className="space-y-3 px-4 py-4">
                           {block.kind === "thinking" ? (
                             <div className="message-copy whitespace-pre-wrap text-[17px] leading-8 text-[rgba(26,26,26,0.78)]">
-                              {block.text || "Claude is thinking..."}
+                              {block.text || `${data.assistantLabel} is thinking...`}
                             </div>
                           ) : (
                             <>
@@ -2222,7 +2226,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                   ) : (
                     <div className="flex min-h-[72px] items-center gap-3 text-[17px] leading-8 text-[rgba(26,26,26,0.58)]">
                       <LoaderCircle className="size-4 animate-spin text-[var(--block-ochre)]" />
-                      <span>Waiting for Claude to respond…</span>
+                      <span>{`Waiting for ${data.assistantLabel} to respond...`}</span>
                     </div>
                   )}
                 </div>
@@ -2843,6 +2847,7 @@ function makeSelectionAnchorHandleId(branchId: string) {
 }
 
 function buildFlowGraph({
+  assistantLabel,
   expandedBranchIds,
   persistedAssistantStatesByMessageId,
   snapshot,
@@ -2855,6 +2860,7 @@ function buildFlowGraph({
   onSelectionDraft,
   showSessionIds,
 }: {
+  assistantLabel: string;
   expandedBranchIds: Set<string>;
   persistedAssistantStatesByMessageId: Record<string, AssistantStreamState | null>;
   snapshot: GraphSnapshot;
@@ -2998,6 +3004,7 @@ function buildFlowGraph({
         data: {
           message,
           persistedAssistantState: persistedAssistantStatesByMessageId[message.id] ?? null,
+          assistantLabel,
           isActiveMessage: message.id === activePathMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
           selectionAnchors: selectionAnchorsByMessageId.get(message.id) ?? [],
@@ -3544,8 +3551,7 @@ function resolveWorkspaceName(value: string) {
 }
 
 function resolveRuntimeLabel(diagnostics: DaemonDiagnostics | undefined) {
-  const runtimeMode = diagnostics?.environment.runtimeMode;
-  return runtimeMode === "mock" ? "Mock runtime" : "Claude Code";
+  return diagnostics?.environment.runtimeLabel?.trim() || "Assistant";
 }
 
 /*

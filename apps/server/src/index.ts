@@ -1,12 +1,14 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
+  AgentTurnEvent,
+  AgentTurnInput,
+  AgentTurnResult,
   AssistantStreamBlock,
   AssistantStreamState,
   Branch,
   CompleteMachineJobInput,
   CreateBranchInput,
-  CreateBranchRuntimeRequest,
   CreateBranchTurnInput,
   CreateMachineClaimJobInput,
   CreateMachineHeartbeatInput,
@@ -16,8 +18,6 @@ import {
   CreateRootTurnInput,
   GraphSnapshot,
   MessageNode,
-  RuntimeResponse,
-  RuntimeStreamEvent,
   UpdateNetInput,
   ServerDiagnostics,
   TurnStreamEvent,
@@ -267,7 +267,18 @@ app.post("/api/root-turn/stream", async (request, reply) => {
       kind: "root-turn",
       payload: {
         prompt: runtimePrompt,
-        sessionId: rootBranch?.sessionId ?? null,
+        session: rootBranch?.sessionId
+          ? {
+              mode: "resume",
+              handle: rootBranch.sessionId,
+            }
+          : {
+              mode: "new",
+            },
+        metadata: {
+          netchatOperation: "root-turn",
+          selectedText: input.data.selectedText ?? null,
+        },
       },
     });
     const optimisticSnapshot = buildOptimisticRootTurnSnapshot(baseSnapshot, {
@@ -349,7 +360,14 @@ app.post("/api/branches/stream", async (request, reply) => {
       kind: "branch-create",
       payload: {
         prompt: branchPrompt,
-      } satisfies CreateBranchRuntimeRequest,
+        session: {
+          mode: "new",
+        },
+        metadata: {
+          netchatOperation: "branch-create",
+          selectedText: input.data.mode === "selection" ? input.data.selectedText ?? null : null,
+        },
+      } satisfies AgentTurnInput,
     });
 
     diagnostics.log(
@@ -371,7 +389,7 @@ app.post("/api/branches/stream", async (request, reply) => {
         });
         diagnostics.log(
           "info",
-          `Branch creation completed as session ${runtime.sessionId} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
+          `Branch creation completed as handle ${runtime.handle} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
         );
         return nextSnapshot;
       },
@@ -421,8 +439,15 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
     const streamingJob = machines.enqueueStreamingJob(branch.machineId, {
       kind: "branch-turn",
       payload: {
-        sessionId: branch.sessionId,
         prompt: runtimePrompt,
+        session: {
+          mode: "resume",
+          handle: branch.sessionId,
+        },
+        metadata: {
+          netchatOperation: "branch-turn",
+          selectedText: input.data.selectedText ?? null,
+        },
       },
     });
 
@@ -486,7 +511,18 @@ app.post("/api/root-turn", async (request, reply) => {
       kind: "root-turn",
       payload: {
         prompt: runtimePrompt,
-        sessionId: rootBranch?.sessionId ?? null,
+        session: rootBranch?.sessionId
+          ? {
+              mode: "resume",
+              handle: rootBranch.sessionId,
+            }
+          : {
+              mode: "new",
+            },
+        metadata: {
+          netchatOperation: "root-turn",
+          selectedText: input.data.selectedText ?? null,
+        },
       },
     });
 
@@ -533,13 +569,20 @@ app.post("/api/branches", async (request, reply) => {
       kind: "branch-create",
       payload: {
         prompt: branchPrompt,
-      } satisfies CreateBranchRuntimeRequest,
+        session: {
+          mode: "new",
+        },
+        metadata: {
+          netchatOperation: "branch-create",
+          selectedText: input.data.mode === "selection" ? input.data.selectedText ?? null : null,
+        },
+      } satisfies AgentTurnInput,
     });
 
     const nextSnapshot = store.applyBranchCreation(input.data as CreateBranchInput, runtime);
     diagnostics.log(
       "info",
-      `Branch creation completed as session ${runtime.sessionId} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
+      `Branch creation completed as handle ${runtime.handle} on machine ${runtime.machineId}. Total branches: ${nextSnapshot.branches.length}.`,
     );
     return nextSnapshot;
   } catch (error) {
@@ -574,8 +617,15 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
     const runtime = await machines.enqueueJob(branch.machineId, {
       kind: "branch-turn",
       payload: {
-        sessionId: branch.sessionId,
         prompt: runtimePrompt,
+        session: {
+          mode: "resume",
+          handle: branch.sessionId,
+        },
+        metadata: {
+          netchatOperation: "branch-turn",
+          selectedText: input.data.selectedText ?? null,
+        },
       },
     });
 
@@ -600,7 +650,7 @@ diagnostics.log("info", `Server listening on port ${port}.`);
 
 function applyRuntimeEventToAssistantState(
   current: AssistantStreamState,
-  event: RuntimeStreamEvent,
+  event: AgentTurnEvent,
 ): AssistantStreamState {
   if (event.type === "response.update") {
     return {
@@ -620,7 +670,7 @@ function applyRuntimeEventToAssistantState(
 
 function upsertAssistantBlock(
   blocks: AssistantStreamBlock[],
-  event: Exclude<RuntimeStreamEvent, { type: "response.update" }>,
+  event: Exclude<AgentTurnEvent, { type: "response.update" }>,
 ): AssistantStreamBlock[] {
   const nextBlocks = [...blocks];
   const index = nextBlocks.findIndex((block) => block.id === event.blockId);
@@ -690,10 +740,10 @@ async function streamTurnResponse(input: {
       writeHead: (statusCode: number, headers: Record<string, string>) => void;
     };
   };
-  subscribe: (listener: (event: RuntimeStreamEvent) => void) => () => void;
+  subscribe: (listener: (event: AgentTurnEvent) => void) => () => void;
   dispose: () => void;
-  result: Promise<RuntimeResponse>;
-  commit: (runtime: RuntimeResponse, assistantState: AssistantStreamState) => GraphSnapshot;
+  result: Promise<AgentTurnResult>;
+  commit: (runtime: AgentTurnResult, assistantState: AssistantStreamState) => GraphSnapshot;
 }) {
   let assistantState = createPendingAssistantState();
   const bootstrapEvent: TurnStreamEvent = {
@@ -734,7 +784,7 @@ async function streamTurnResponse(input: {
 
   try {
     const runtime = await input.result;
-    assistantState = finalizeAssistantState(assistantState, runtime.assistantMessage);
+    assistantState = finalizeAssistantState(assistantState, runtime.outputText);
     store.saveAssistantState(input.assistantMessageId, assistantState);
     const snapshot = input.commit(runtime, assistantState);
     writeEvent({

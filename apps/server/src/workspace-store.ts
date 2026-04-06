@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  AgentTurnResult,
   AssistantStreamState,
   Branch,
   CreateBranchInput,
   CreateNetInput,
   GraphSnapshot,
   MessageNode,
-  RuntimeResponse,
   WorkspaceNetSummary,
   WorkspaceState,
   nowIso,
@@ -166,7 +166,7 @@ export class WorkspaceStore {
 
   applyRootTurn(
     prompt: string,
-    runtime: RuntimeResponse,
+    runtime: AgentTurnResult,
     options?: {
       userMessageId?: string;
       assistantMessageId?: string;
@@ -182,7 +182,7 @@ export class WorkspaceStore {
 
   applyBranchCreation(
     input: CreateBranchInput,
-    runtime: RuntimeResponse,
+    runtime: AgentTurnResult,
     options?: {
       branchId?: string;
       userMessageId?: string;
@@ -198,7 +198,7 @@ export class WorkspaceStore {
   applyBranchTurn(
     branchId: string,
     prompt: string,
-    runtime: RuntimeResponse,
+    runtime: AgentTurnResult,
     options?: {
       userMessageId?: string;
       assistantMessageId?: string;
@@ -486,6 +486,7 @@ export class WorkspaceStore {
 
 function resolveWorkspaceWorkingDirectory() {
   const configuredPath =
+    process.env.NETCHAT_RUNTIME_CWD?.trim() ||
     process.env.NETCHAT_WORKSPACE_DIR?.trim() ||
     process.env.NETCHAT_LAUNCH_CWD?.trim() ||
     process.env.CLAUDE_PROJECT_CWD?.trim();

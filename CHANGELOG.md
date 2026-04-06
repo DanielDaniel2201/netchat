@@ -4,6 +4,11 @@
 
 After each commit, update the Changelog under the current date. Each entry must be short, specific, and describe the actual change and its impact; do not copy vague commit messages. Prioritize new features, behavior changes, bug fixes, and API/config/schema updates. Use a consistent date + bullet list format, with one change per bullet, so others can understand it immediately.
 
+## 2026-04-06
+
+- Added a unified agent runtime contract across shared/server/daemon layers, so netchat now executes generic `executeTurn` requests with runtime-neutral events, results, and diagnostics instead of Claude-shaped adapter methods.
+- Added a Codex CLI adapter beside Claude and Mock, generalized runtime working-directory/binary configuration, and switched the web runtime chrome to use daemon-provided runtime labels instead of hard-coded Claude copy.
+
 ## 2026-03-28
 
 - Switched non-tail branching to start a fresh Claude session from a replayed visible-path prefix, so later sibling messages no longer leak into branch context.

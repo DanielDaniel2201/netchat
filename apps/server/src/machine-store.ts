@@ -1,4 +1,7 @@
 import {
+  AgentTurnEvent,
+  AgentTurnInput,
+  AgentTurnResult,
   CompleteMachineJobInput,
   CreateMachineJobEventInput,
   CreateMachineHeartbeatInput,
@@ -6,8 +9,6 @@ import {
   MachineJob,
   MachineRecord,
   MachineRegistration,
-  RuntimeResponse,
-  RuntimeStreamEvent,
   makeId,
   nowIso,
 } from "@netchat/shared";
@@ -27,35 +28,26 @@ type PendingJob = MachineJob & {
   machineId: string;
 };
 
-type EnqueuedJob =
-  | {
-      kind: "root-turn";
-      payload: Extract<MachineJob, { kind: "root-turn" }>["payload"];
-    }
-  | {
-      kind: "branch-create";
-      payload: Extract<MachineJob, { kind: "branch-create" }>["payload"];
-    }
-  | {
-      kind: "branch-turn";
-      payload: Extract<MachineJob, { kind: "branch-turn" }>["payload"];
-    };
+type EnqueuedJob = {
+  kind: MachineJob["kind"];
+  payload: AgentTurnInput;
+};
 
 type InFlightJob = {
   machineId: string;
   kind: MachineJob["kind"];
   enqueuedAtMs: number;
   claimedAtMs: number | null;
-  resolve: (value: RuntimeResponse) => void;
+  resolve: (value: AgentTurnResult) => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
 };
 
-type JobEventListener = (event: RuntimeStreamEvent) => void;
+type JobEventListener = (event: AgentTurnEvent) => void;
 
 export type StreamingJobHandle = {
   jobId: string;
-  result: Promise<RuntimeResponse>;
+  result: Promise<AgentTurnResult>;
   subscribe: (listener: JobEventListener) => () => void;
   dispose: () => void;
 };
@@ -64,7 +56,7 @@ export class MachineStore {
   private readonly machines = new Map<string, RegisteredMachine>();
   private readonly pendingJobs = new Map<string, PendingJob[]>();
   private readonly inFlightJobs = new Map<string, InFlightJob>();
-  private readonly jobEventHistory = new Map<string, RuntimeStreamEvent[]>();
+  private readonly jobEventHistory = new Map<string, AgentTurnEvent[]>();
   private readonly jobEventListeners = new Map<string, Set<JobEventListener>>();
   private readonly localMode = (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true";
   private readonly onlineThresholdMs = Number(process.env.NETCHAT_MACHINE_ONLINE_THRESHOLD_MS ?? 30000);
@@ -162,7 +154,7 @@ export class MachineStore {
     return online[0];
   }
 
-  enqueueJob(machineId: string, job: EnqueuedJob): Promise<RuntimeResponse> {
+  enqueueJob(machineId: string, job: EnqueuedJob): Promise<AgentTurnResult> {
     const handle = this.enqueueStreamingJob(machineId, job);
     handle.result.finally(handle.dispose);
     return handle.result;
@@ -177,24 +169,11 @@ export class MachineStore {
       machineId: machine.id,
     };
 
-    const queuedJob: PendingJob =
-      job.kind === "root-turn"
-        ? {
-            ...base,
-            kind: "root-turn",
-            payload: job.payload,
-          }
-        : job.kind === "branch-create"
-          ? {
-              ...base,
-              kind: "branch-create",
-              payload: job.payload,
-            }
-          : {
-              ...base,
-              kind: "branch-turn",
-              payload: job.payload,
-            };
+    const queuedJob: PendingJob = {
+      ...base,
+      kind: job.kind,
+      payload: job.payload,
+    };
 
     pending.push(queuedJob);
     this.pendingJobs.set(machine.id, pending);
@@ -206,7 +185,7 @@ export class MachineStore {
     );
     this.syncDiagnostics();
 
-    const result = new Promise<RuntimeResponse>((resolve, reject) => {
+    const result = new Promise<AgentTurnResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.inFlightJobs.delete(queuedJob.id);
         this.pendingJobs.set(

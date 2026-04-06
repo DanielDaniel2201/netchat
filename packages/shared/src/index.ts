@@ -61,16 +61,27 @@ export type UiConfig = {
 
 export type HostPlatform = "windows" | "macos" | "linux" | "unknown";
 
-export type RuntimeEnvironment = {
+export type AgentRuntimeKind = "claude" | "codex" | "droid" | "opencode" | "mock";
+
+export type AgentRuntimeDescriptor = {
+  runtimeKind: AgentRuntimeKind;
+  runtimeLabel: string;
+  runtimeId: string;
+};
+
+export type AgentRuntimeEnvironment = {
   platform: HostPlatform;
   arch: string;
-  claudeInstalled: boolean;
-  claudeVersion: string | null;
-  claudePath: string | null;
+  runtimeKind: AgentRuntimeKind;
+  runtimeLabel: string;
+  installed: boolean;
+  version: string | null;
+  executablePath: string | null;
   workingDirectory: string;
-  runtimeMode: "mock" | "claude";
   detectionError: string | null;
 };
+
+export type RuntimeEnvironment = AgentRuntimeEnvironment;
 
 export type DaemonLogLevel = "info" | "warn" | "error";
 
@@ -93,7 +104,7 @@ export type DaemonDiagnostics = {
   startedAt: string;
   status: DaemonStatus;
   localMode: boolean;
-  environment: RuntimeEnvironment;
+  environment: AgentRuntimeEnvironment;
   serverUrl: string | null;
   machineName: string | null;
   machineId: string | null;
@@ -124,12 +135,12 @@ export type MachineRecord = {
   status: MachineStatus;
   registeredAt: string;
   lastSeenAt: string;
-  environment: RuntimeEnvironment;
+  environment: AgentRuntimeEnvironment;
 };
 
 export const createMachineRegisterInputSchema = z.object({
   machineName: z.string().trim().min(1).max(120),
-  environment: z.custom<RuntimeEnvironment>(),
+  environment: z.custom<AgentRuntimeEnvironment>(),
 });
 
 export type CreateMachineRegisterInput = z.infer<typeof createMachineRegisterInputSchema>;
@@ -143,7 +154,7 @@ export type MachineRegistration = {
 export const createMachineHeartbeatInputSchema = z.object({
   machineId: z.string().min(1),
   machineSecret: z.string().min(1),
-  environment: z.custom<RuntimeEnvironment>(),
+  environment: z.custom<AgentRuntimeEnvironment>(),
 });
 
 export type CreateMachineHeartbeatInput = z.infer<typeof createMachineHeartbeatInputSchema>;
@@ -159,13 +170,35 @@ export const completeMachineJobInputSchema = z.object({
   machineId: z.string().min(1),
   machineSecret: z.string().min(1),
   success: z.boolean(),
-  response: z.custom<RuntimeResponse>().optional(),
+  response: z.custom<AgentTurnResult>().optional(),
   error: z.string().trim().optional(),
 });
 
 export type CompleteMachineJobInput = z.infer<typeof completeMachineJobInputSchema>;
 
-export type RuntimeStreamEvent =
+export type MachineJobKind = "root-turn" | "branch-create" | "branch-turn";
+
+export type AgentTurnSession =
+  | {
+      mode: "new";
+    }
+  | {
+      mode: "resume";
+      handle: string;
+    };
+
+export type AgentTurnMetadata = {
+  netchatOperation?: MachineJobKind;
+  selectedText?: string | null;
+};
+
+export type AgentTurnInput = {
+  prompt: string;
+  session: AgentTurnSession;
+  metadata?: AgentTurnMetadata;
+};
+
+export type AgentTurnEvent =
   | {
       type: "thinking.update";
       blockId: string;
@@ -190,33 +223,22 @@ export type RuntimeStreamEvent =
       isComplete: boolean;
     };
 
+export type RuntimeStreamEvent = AgentTurnEvent;
+
 export const createMachineJobEventInputSchema = z.object({
   machineId: z.string().min(1),
   machineSecret: z.string().min(1),
-  event: z.custom<RuntimeStreamEvent>(),
+  event: z.custom<AgentTurnEvent>(),
 });
 
 export type CreateMachineJobEventInput = z.infer<typeof createMachineJobEventInputSchema>;
 
-export type MachineJob =
-  | {
-      id: string;
-      kind: "root-turn";
-      payload: RootTurnRuntimeRequest;
-      createdAt: string;
-    }
-  | {
-      id: string;
-      kind: "branch-create";
-      payload: CreateBranchRuntimeRequest;
-      createdAt: string;
-    }
-  | {
-      id: string;
-      kind: "branch-turn";
-      payload: ContinueBranchRuntimeRequest;
-      createdAt: string;
-    };
+export type MachineJob = {
+  id: string;
+  kind: MachineJobKind;
+  payload: AgentTurnInput;
+  createdAt: string;
+};
 
 export const rootBranchId = "branch_root";
 
@@ -328,25 +350,15 @@ export const updateNetInputSchema = z.object({
 
 export type UpdateNetInput = z.infer<typeof updateNetInputSchema>;
 
-export type RootTurnRuntimeRequest = {
-  prompt: string;
-  sessionId: string | null;
-};
-
-export type CreateBranchRuntimeRequest = {
-  prompt: string;
-};
-
-export type ContinueBranchRuntimeRequest = {
-  sessionId: string;
-  prompt: string;
-};
-
-export type RuntimeResponse = {
-  sessionId: string;
-  assistantMessage: string;
+export type AgentTurnResult = {
+  handle: string;
+  outputText: string;
+  runtimeId: string;
+  runtimeKind: AgentRuntimeKind;
   machineId: string;
 };
+
+export type RuntimeResponse = AgentTurnResult;
 
 export type AssistantStreamBlock =
   | {

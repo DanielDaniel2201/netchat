@@ -2,10 +2,14 @@ const optionToEnv = new Map<string, string>([
   ["server", "NETCHAT_SERVER_URL"],
   ["server-url", "NETCHAT_SERVER_URL"],
   ["machine-name", "NETCHAT_MACHINE_NAME"],
-  ["project-cwd", "CLAUDE_PROJECT_CWD"],
-  ["cwd", "CLAUDE_PROJECT_CWD"],
+  ["runtime", "NETCHAT_RUNTIME"],
+  ["project-cwd", "NETCHAT_RUNTIME_CWD"],
+  ["cwd", "NETCHAT_RUNTIME_CWD"],
+  ["runtime-cwd", "NETCHAT_RUNTIME_CWD"],
   ["claude-binary", "CLAUDE_BINARY_PATH"],
   ["claude-binary-path", "CLAUDE_BINARY_PATH"],
+  ["codex-binary", "CODEX_BINARY_PATH"],
+  ["codex-binary-path", "CODEX_BINARY_PATH"],
 ]);
 
 export function applyCliEnvOverrides(argv = process.argv.slice(2)) {
@@ -33,6 +37,10 @@ export function applyCliEnvOverrides(argv = process.argv.slice(2)) {
     }
 
     process.env[envKey] = nextValue;
+    if (envKey === "NETCHAT_RUNTIME_CWD") {
+      process.env.CLAUDE_PROJECT_CWD = nextValue;
+    }
+
     if (!inlineValue) {
       index += 1;
     }
@@ -53,8 +61,10 @@ function printDaemonHelp() {
       "Options:",
       "  --server, --server-url <url>       NETCHAT_SERVER_URL",
       "  --machine-name <name>              NETCHAT_MACHINE_NAME",
-      "  --project-cwd, --cwd <path>        CLAUDE_PROJECT_CWD",
+      "  --runtime <kind>                   NETCHAT_RUNTIME (claude|codex|mock)",
+      "  --project-cwd, --cwd <path>        NETCHAT_RUNTIME_CWD",
       "  --claude-binary <path>             CLAUDE_BINARY_PATH",
+      "  --codex-binary <path>              CODEX_BINARY_PATH",
     ].join("\n"),
   );
 }

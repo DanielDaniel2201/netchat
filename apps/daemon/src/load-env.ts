@@ -41,17 +41,29 @@ export function loadLocalEnv() {
     }
   }
 
-  const claudeBinaryPath = process.env.CLAUDE_BINARY_PATH?.trim();
-  if (!claudeBinaryPath || !existsSync(claudeBinaryPath)) {
-    return;
-  }
-
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   const currentPath = process.env[pathKey] ?? "";
-  const claudeDir = path.dirname(claudeBinaryPath);
   const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
 
-  if (!pathEntries.includes(claudeDir)) {
-    process.env[pathKey] = [claudeDir, ...pathEntries].join(path.delimiter);
+  const configuredBinaryPaths = [
+    process.env.CLAUDE_BINARY_PATH?.trim(),
+    process.env.CODEX_BINARY_PATH?.trim(),
+    process.env.NETCHAT_CODEX_BINARY_PATH?.trim(),
+    process.env.DROID_BINARY_PATH?.trim(),
+    process.env.NETCHAT_DROID_BINARY_PATH?.trim(),
+    process.env.OPENCODE_BINARY_PATH?.trim(),
+    process.env.NETCHAT_OPENCODE_BINARY_PATH?.trim(),
+  ].filter((value): value is string => Boolean(value && existsSync(value)));
+
+  const nextPathEntries = [...pathEntries];
+  for (const binaryPath of configuredBinaryPaths) {
+    const binaryDir = path.dirname(binaryPath);
+    if (!nextPathEntries.includes(binaryDir)) {
+      nextPathEntries.unshift(binaryDir);
+    }
+  }
+
+  if (nextPathEntries.length !== pathEntries.length) {
+    process.env[pathKey] = nextPathEntries.join(path.delimiter);
   }
 }

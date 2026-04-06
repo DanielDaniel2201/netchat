@@ -1,10 +1,9 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
+  AgentRuntimeDescriptor,
+  AgentTurnInput,
   DaemonDiagnostics,
-  CreateBranchRuntimeRequest,
-  ContinueBranchRuntimeRequest,
-  RootTurnRuntimeRequest,
 } from "@netchat/shared";
 
 import { applyCliEnvOverrides } from "./cli.js";
@@ -19,12 +18,13 @@ loadLocalEnv();
 
 const app = Fastify({ logger: false });
 const runtime = createRuntimeAdapter();
-const initialEnvironment = await detectRuntimeEnvironment(runtime.getMode(), runtime.getWorkingDirectory());
+const runtimeDescriptor = runtime.getDescriptor();
+const initialEnvironment = await detectRuntimeEnvironment(runtimeDescriptor.runtimeKind, runtime.getWorkingDirectory());
 const diagnostics = new DaemonDiagnosticsStore(initialEnvironment);
 const machineClient = new MachineClient(
   runtime,
   async () => {
-    const environment = await detectRuntimeEnvironment(runtime.getMode(), runtime.getWorkingDirectory());
+    const environment = await detectRuntimeEnvironment(runtimeDescriptor.runtimeKind, runtime.getWorkingDirectory());
     diagnostics.recordEnvironment(environment);
     return environment;
   },
@@ -32,12 +32,12 @@ const machineClient = new MachineClient(
 );
 const port = Number(process.env.DAEMON_PORT ?? 4318);
 
-diagnostics.log("info", `Daemon booting in ${runtime.getMode()} mode.`);
+diagnostics.log("info", `Daemon booting in ${runtimeDescriptor.runtimeKind} mode.`);
 diagnostics.log(
-  initialEnvironment.claudeInstalled ? "info" : "warn",
-  initialEnvironment.claudeInstalled
-    ? `Claude detected at ${initialEnvironment.claudePath}.`
-    : initialEnvironment.detectionError ?? "Claude binary not detected.",
+  initialEnvironment.installed ? "info" : "warn",
+  initialEnvironment.installed
+    ? `${initialEnvironment.runtimeLabel} detected at ${initialEnvironment.executablePath ?? "built-in runtime"}.`
+    : initialEnvironment.detectionError ?? `${initialEnvironment.runtimeLabel} binary not detected.`,
 );
 
 await app.register(cors, { origin: true });
@@ -45,25 +45,55 @@ await app.register(cors, { origin: true });
 app.get("/health", async () => ({ ok: true }));
 
 app.get("/runtime/environment", async () => {
-  const environment = await detectRuntimeEnvironment(runtime.getMode(), runtime.getWorkingDirectory());
+  const environment = await detectRuntimeEnvironment(runtimeDescriptor.runtimeKind, runtime.getWorkingDirectory());
   diagnostics.recordEnvironment(environment);
   return environment;
 });
+
+app.get("/runtime/descriptor", async (): Promise<AgentRuntimeDescriptor> => runtimeDescriptor);
 
 app.get("/runtime/diagnostics", async (): Promise<DaemonDiagnostics> => {
   return diagnostics.getSnapshot();
 });
 
+app.post("/runtime/turn", async (request) => {
+  return runtime.executeTurn(request.body as AgentTurnInput);
+});
+
 app.post("/runtime/root-turn", async (request) => {
-  return runtime.runRootTurn(request.body as RootTurnRuntimeRequest);
+  const input = request.body as { prompt: string; sessionId: string | null };
+  return runtime.executeTurn({
+    prompt: input.prompt,
+    session: input.sessionId ? { mode: "resume", handle: input.sessionId } : { mode: "new" },
+    metadata: {
+      netchatOperation: "root-turn",
+    },
+  });
 });
 
 app.post("/runtime/branch-create", async (request) => {
-  return runtime.createBranch(request.body as CreateBranchRuntimeRequest);
+  const input = request.body as { prompt: string };
+  return runtime.executeTurn({
+    prompt: input.prompt,
+    session: { mode: "new" },
+    metadata: {
+      netchatOperation: "branch-create",
+    },
+  });
 });
 
 app.post("/runtime/branch-turn", async (request) => {
-  return runtime.continueBranch(request.body as ContinueBranchRuntimeRequest);
+  const input = request.body as { prompt: string; sessionId: string };
+  return runtime.executeTurn({
+    prompt: input.prompt,
+    session: {
+      mode: "resume",
+      handle: input.sessionId,
+    },
+    metadata: {
+      netchatOperation: "branch-turn",
+    },
+  });
 });
 
 await app.listen({ host: "0.0.0.0", port });
