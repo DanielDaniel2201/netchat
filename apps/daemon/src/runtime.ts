@@ -573,7 +573,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
       return;
     }
 
-    if (message.type === "result" && typeof message.result === "string") {
+    if (message.type === "result" && typeof message.result === "string" && message.result.length > 0) {
       onEvent?.({
         type: "response.update",
         text: message.result,
