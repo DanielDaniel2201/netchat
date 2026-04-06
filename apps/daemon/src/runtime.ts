@@ -13,6 +13,7 @@ import {
 } from "@netchat/shared";
 
 import {
+  resolveBinaryInvocation,
   resolveRuntimeBinaryPath,
   resolveRuntimeKind,
   resolveRuntimeLabel,
@@ -350,11 +351,12 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
     }
 
     const binaryPath = this.binaryPath;
+    const invocation = resolveBinaryInvocation(binaryPath, args);
 
     return new Promise((resolve, reject) => {
-      const child = spawn(binaryPath, args, {
+      const child = spawn(invocation.command, invocation.args, {
         cwd: this.cwd,
-        env: process.env,
+        env: createRuntimeProcessEnv(this.cwd),
         windowsHide: true,
       });
       child.stdin.end();
@@ -1033,11 +1035,12 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
     }
 
     const binaryPath = this.binaryPath;
+    const invocation = resolveBinaryInvocation(binaryPath, args);
 
     return new Promise((resolve, reject) => {
-      const child = spawn(binaryPath, args, {
+      const child = spawn(invocation.command, invocation.args, {
         cwd: this.cwd,
-        env: process.env,
+        env: createRuntimeProcessEnv(this.cwd),
         windowsHide: true,
       });
       child.stdin.end();
@@ -1554,6 +1557,19 @@ function createRuntimeDescriptor(runtimeKind: AgentRuntimeKind): AgentRuntimeDes
     runtimeLabel: resolveRuntimeLabel(runtimeKind),
     runtimeId: readStringEnv("NETCHAT_RUNTIME_ID") ?? `${runtimeKind}_local`,
   };
+}
+
+function createRuntimeProcessEnv(workingDirectory: string): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  const safeDirectory = workingDirectory.replace(/\\/g, "/");
+  const existingCount = Number(env.GIT_CONFIG_COUNT ?? "0");
+  const nextIndex = Number.isInteger(existingCount) && existingCount >= 0 ? existingCount : 0;
+
+  env.GIT_CONFIG_COUNT = String(nextIndex + 1);
+  env[`GIT_CONFIG_KEY_${nextIndex}`] = "safe.directory";
+  env[`GIT_CONFIG_VALUE_${nextIndex}`] = safeDirectory;
+
+  return env;
 }
 
 function createStreamState(): StreamState {

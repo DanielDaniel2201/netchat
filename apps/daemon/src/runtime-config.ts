@@ -128,7 +128,7 @@ export function resolveRuntimeBinaryPath(
 
     if (existsSync(configuredPath)) {
       return {
-        binaryPath: configuredPath,
+        binaryPath: normalizeRuntimeBinaryPath(configuredPath, platform),
         issues,
       };
     }
@@ -139,7 +139,7 @@ export function resolveRuntimeBinaryPath(
   const discoveredFromPath = findExecutableOnPath(config.executableNames, platform);
   if (discoveredFromPath) {
     return {
-      binaryPath: discoveredFromPath,
+      binaryPath: normalizeRuntimeBinaryPath(discoveredFromPath, platform),
       issues,
     };
   }
@@ -148,7 +148,7 @@ export function resolveRuntimeBinaryPath(
   if (fallbackPath) {
     issues.push(`Resolved ${resolveRuntimeLabel(runtimeKind)} from a default install location.`);
     return {
-      binaryPath: fallbackPath,
+      binaryPath: normalizeRuntimeBinaryPath(fallbackPath, platform),
       issues,
     };
   }
@@ -177,7 +177,8 @@ export function readRuntimeVersion(
 
   for (const args of attempts) {
     try {
-      const output = execFileSync(binaryPath, args, {
+      const invocation = resolveBinaryInvocation(binaryPath, args);
+      const output = execFileSync(invocation.command, invocation.args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 5000,
@@ -280,4 +281,81 @@ function buildPosixCliFallbacks(commandName: string) {
 
 function isAgentRuntimeKind(value: string): value is AgentRuntimeKind {
   return value === "claude" || value === "codex" || value === "droid" || value === "opencode" || value === "mock";
+}
+
+export function shouldUseShellForBinary(binaryPath: string) {
+  if (process.platform !== "win32") {
+    return false;
+  }
+
+  const extension = path.extname(binaryPath).toLowerCase();
+  return extension === ".cmd" || extension === ".bat";
+}
+
+export function resolveBinaryInvocation(binaryPath: string, args: string[]) {
+  const nodeCliInvocation = resolveNodeCliInvocation(binaryPath, args);
+  if (nodeCliInvocation) {
+    return nodeCliInvocation;
+  }
+
+  if (!shouldUseShellForBinary(binaryPath)) {
+    return {
+      command: binaryPath,
+      args,
+    };
+  }
+
+  return {
+    command: resolveWindowsShellPath(),
+    args: ["/d", "/s", "/c", buildWindowsShellCommand(binaryPath, args)],
+  };
+}
+
+function normalizeRuntimeBinaryPath(binaryPath: string, platform: HostPlatform) {
+  if (platform !== "windows") {
+    return binaryPath;
+  }
+
+  const extension = path.extname(binaryPath).toLowerCase();
+  if (extension === ".cmd" || extension === ".exe" || extension === ".bat") {
+    return binaryPath;
+  }
+
+  const preferredSibling = [".cmd", ".exe", ".bat"]
+    .map((candidateExtension) => `${binaryPath}${candidateExtension}`)
+    .find((candidate) => existsSync(candidate));
+
+  return preferredSibling ?? binaryPath;
+}
+
+function resolveWindowsShellPath() {
+  return process.env.ComSpec?.trim() || "cmd.exe";
+}
+
+function resolveNodeCliInvocation(binaryPath: string, args: string[]) {
+  if (process.platform !== "win32" || path.basename(binaryPath).toLowerCase() !== "codex.cmd") {
+    return null;
+  }
+
+  const installRoot = path.dirname(binaryPath);
+  const jsEntry = path.join(installRoot, "node_modules", "@openai", "codex", "bin", "codex.js");
+  if (!existsSync(jsEntry)) {
+    return null;
+  }
+
+  const bundledNode = path.join(installRoot, "node.exe");
+  return {
+    command: existsSync(bundledNode) ? bundledNode : process.execPath,
+    args: [jsEntry, ...args],
+  };
+}
+
+function buildWindowsShellCommand(binaryPath: string, args: string[]) {
+  const quotedBinaryPath = quoteWindowsCommandArg(binaryPath);
+  const quotedArgs = args.map(quoteWindowsCommandArg).join(" ");
+  return quotedArgs.length > 0 ? `"${quotedBinaryPath} ${quotedArgs}"` : `"${quotedBinaryPath}"`;
+}
+
+function quoteWindowsCommandArg(value: string) {
+  return `"${value.replace(/%/g, "%%").replace(/"/g, "\"\"")}"`;
 }
