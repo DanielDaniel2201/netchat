@@ -10,6 +10,8 @@ const optionToEnv = new Map<string, string>([
   ["claude-binary-path", "CLAUDE_BINARY_PATH"],
   ["codex-binary", "CODEX_BINARY_PATH"],
   ["codex-binary-path", "CODEX_BINARY_PATH"],
+  ["droid-binary", "DROID_BINARY_PATH"],
+  ["droid-binary-path", "DROID_BINARY_PATH"],
 ]);
 
 export function applyCliEnvOverrides(argv = process.argv.slice(2)) {
@@ -61,10 +63,11 @@ function printDaemonHelp() {
       "Options:",
       "  --server, --server-url <url>       NETCHAT_SERVER_URL",
       "  --machine-name <name>              NETCHAT_MACHINE_NAME",
-      "  --runtime <kind>                   NETCHAT_RUNTIME (claude|codex|mock)",
+      "  --runtime <kind>                   NETCHAT_RUNTIME (claude|codex|droid|mock)",
       "  --project-cwd, --cwd <path>        NETCHAT_RUNTIME_CWD",
       "  --claude-binary <path>             CLAUDE_BINARY_PATH",
       "  --codex-binary <path>              CODEX_BINARY_PATH",
+      "  --droid-binary <path>              DROID_BINARY_PATH",
     ].join("\n"),
   );
 }

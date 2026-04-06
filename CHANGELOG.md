@@ -8,6 +8,7 @@ After each commit, update the Changelog under the current date. Each entry must 
 
 - Added a unified agent runtime contract across shared/server/daemon layers, so netchat now executes generic `executeTurn` requests with runtime-neutral events, results, and diagnostics instead of Claude-shaped adapter methods.
 - Added a Codex CLI adapter beside Claude and Mock, generalized runtime working-directory/binary configuration, and switched the web runtime chrome to use daemon-provided runtime labels instead of hard-coded Claude copy.
+- Added a Droid CLI adapter with resumable session handles, streamed tool/result event mapping, and daemon CLI support for `--runtime droid` plus `--droid-binary`.
 
 ## 2026-03-28
 

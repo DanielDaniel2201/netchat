@@ -198,6 +198,49 @@ type CodexStreamState = {
   thinkingBlocksById: Map<string, ThinkingBlockState>;
 };
 
+type DroidStreamEvent =
+  | {
+      session_id?: unknown;
+      subtype?: unknown;
+      type?: "system";
+    }
+  | {
+      id?: string;
+      role?: "assistant" | "user";
+      session_id?: unknown;
+      text?: string;
+      type?: "message";
+    }
+  | {
+      id?: string;
+      parameters?: unknown;
+      session_id?: unknown;
+      toolId?: string;
+      toolName?: string;
+      type?: "tool_call";
+    }
+  | {
+      id?: string;
+      isError?: boolean;
+      session_id?: unknown;
+      toolId?: string;
+      type?: "tool_result";
+      value?: unknown;
+    }
+  | {
+      finalText?: string;
+      session_id?: unknown;
+      type?: "completion";
+    };
+
+type DroidStreamState = {
+  blockOrder: number;
+  responseText: string;
+  responseWasCompleted: boolean;
+  sessionId: string | null;
+  toolBlocksById: Map<string, ToolBlockState>;
+};
+
 export interface AgentRuntimeAdapter {
   getDescriptor(): AgentRuntimeDescriptor;
   getWorkingDirectory(): string;
@@ -211,11 +254,13 @@ export function createRuntimeAdapter(): AgentRuntimeAdapter {
       return new ClaudeCliRuntime();
     case "codex":
       return new CodexCliRuntime();
+    case "droid":
+      return new DroidCliRuntime();
     case "mock":
       return new MockRuntimeAdapter();
     default:
       throw new Error(
-        `NETCHAT_RUNTIME=${runtimeKind} is not implemented yet. Supported runtimes: claude, codex, mock.`,
+        `NETCHAT_RUNTIME=${runtimeKind} is not implemented yet. Supported runtimes: claude, codex, droid, mock.`,
       );
   }
 }
@@ -1403,6 +1448,491 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
   }
 }
 
+type DroidAutoLevel = "low" | "medium" | "high";
+
+class DroidCliRuntime implements AgentRuntimeAdapter {
+  private readonly descriptor = createRuntimeDescriptor("droid");
+  private readonly binaryResolution = resolveRuntimeBinaryPath("droid");
+  private readonly cwdResolution = resolveRuntimeWorkingDirectory();
+  private readonly cwd = this.cwdResolution.workingDirectory;
+  private readonly binaryPath = this.binaryResolution.binaryPath;
+  private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
+  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
+  private readonly model = readStringEnv("NETCHAT_DROID_MODEL");
+  private readonly reasoningEffort = readStringEnv("NETCHAT_DROID_REASONING_EFFORT");
+  private readonly autoLevel = readDroidAutoLevelEnv("NETCHAT_DROID_AUTO", "medium");
+  private readonly skipPermissionsUnsafe = readBooleanEnv("NETCHAT_DROID_SKIP_PERMISSIONS_UNSAFE", false);
+  private readonly enabledTools = readListEnv("NETCHAT_DROID_ENABLED_TOOLS");
+  private readonly disabledTools = readListEnv("NETCHAT_DROID_DISABLED_TOOLS");
+
+  getDescriptor(): AgentRuntimeDescriptor {
+    return this.descriptor;
+  }
+
+  getWorkingDirectory(): string {
+    return this.cwd;
+  }
+
+  async executeTurn(
+    input: AgentTurnInput,
+    options?: AgentRuntimeExecutionOptions,
+  ): Promise<AgentTurnResult> {
+    if (!this.binaryPath) {
+      throw new Error(
+        [
+          "Droid binary could not be resolved.",
+          ...this.binaryResolution.issues,
+          "Install Droid CLI or set DROID_BINARY_PATH to a valid executable.",
+        ].join(" "),
+      );
+    }
+
+    const args = this.buildCliArgs(input);
+    const startedAtMs = Date.now();
+    const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
+    const resumeHandle = input.session.mode === "resume" ? input.session.handle : undefined;
+
+    logRuntime(
+      "info",
+      `Starting ${kind} via Droid CLI (cwd=${this.cwd}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+    );
+
+    let stdout = "";
+    let stderr = "";
+    try {
+      const liveState = createDroidStreamState();
+      const result = await this.executeCli(args, (line) => {
+        this.handleStreamLine(line, liveState, options?.onEvent);
+      });
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (error) {
+      throw this.formatExecutionError(error, {
+        kind,
+        startedAtMs,
+        resumeHandle,
+      });
+    }
+
+    const parsed = this.parseResult(stdout, stderr, input);
+    logRuntime(
+      "info",
+      `Droid CLI finished ${kind} in ${formatDuration(Date.now() - startedAtMs)} with session ${parsed.handle}.`,
+    );
+
+    return {
+      handle: parsed.handle,
+      machineId: this.machineId,
+      outputText: parsed.outputText,
+      runtimeId: this.descriptor.runtimeId,
+      runtimeKind: this.descriptor.runtimeKind,
+    };
+  }
+
+  private buildCliArgs(input: AgentTurnInput) {
+    const args = ["exec", "--output-format", "stream-json", "--cwd", this.cwd];
+
+    if (this.skipPermissionsUnsafe) {
+      args.push("--skip-permissions-unsafe");
+    } else if (this.autoLevel) {
+      args.push("--auto", this.autoLevel);
+    }
+
+    if (this.model) {
+      args.push("--model", this.model);
+    }
+
+    if (this.reasoningEffort) {
+      args.push("--reasoning-effort", this.reasoningEffort);
+    }
+
+    if (this.enabledTools.length > 0) {
+      args.push("--enabled-tools", this.enabledTools.join(","));
+    }
+
+    if (this.disabledTools.length > 0) {
+      args.push("--disabled-tools", this.disabledTools.join(","));
+    }
+
+    if (input.session.mode === "resume") {
+      args.push("--session-id", input.session.handle);
+    }
+
+    args.push(input.prompt);
+    return args;
+  }
+
+  private executeCli(
+    args: string[],
+    onStdoutLine?: (line: string) => void,
+  ): Promise<{ stdout: string; stderr: string }> {
+    if (!this.binaryPath) {
+      throw new Error("Droid binary path is required.");
+    }
+
+    const binaryPath = this.binaryPath;
+    const invocation = resolveBinaryInvocation(binaryPath, args);
+
+    return new Promise((resolve, reject) => {
+      const child = spawn(invocation.command, invocation.args, {
+        cwd: this.cwd,
+        env: createRuntimeProcessEnv(this.cwd),
+        windowsHide: true,
+      });
+      child.stdin.end();
+      let stdout = "";
+      let stderr = "";
+      let stdoutLineBuffer = "";
+      let settled = false;
+      let timedOut = false;
+      let hadActivity = false;
+      let activityCount = 0;
+      let lastActivityAtMs = Date.now();
+      const maxBufferBytes = 8 * 1024 * 1024;
+      let timeout: NodeJS.Timeout | null = null;
+
+      const armTimeout = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        timeout = setTimeout(() => {
+          timedOut = true;
+          child.kill();
+        }, this.activityTimeoutMs);
+      };
+
+      const noteActivity = () => {
+        hadActivity = true;
+        activityCount += 1;
+        lastActivityAtMs = Date.now();
+        armTimeout();
+      };
+
+      armTimeout();
+
+      const fail = (error: ClaudeCliExecutionError) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.hadActivity = hadActivity;
+        error.activityCount = activityCount;
+        error.lastActivityAtMs = lastActivityAtMs;
+        reject(error);
+      };
+
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        stdoutLineBuffer += chunk;
+        noteActivity();
+        flushStdoutLines();
+        if (Buffer.byteLength(stdout, "utf8") > maxBufferBytes) {
+          const error = new Error("Droid CLI stdout exceeded the maximum buffer size.") as ClaudeCliExecutionError;
+          child.kill();
+          fail(error);
+        }
+      });
+
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+        noteActivity();
+        if (Buffer.byteLength(stderr, "utf8") > maxBufferBytes) {
+          const error = new Error("Droid CLI stderr exceeded the maximum buffer size.") as ClaudeCliExecutionError;
+          child.kill();
+          fail(error);
+        }
+      });
+
+      child.on("error", (error) => {
+        fail(error as ClaudeCliExecutionError);
+      });
+
+      child.on("close", (code, signal) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        if (timedOut) {
+          const error = new Error("Droid CLI execution timed out.") as ClaudeCliExecutionError;
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.killed = true;
+          error.signal = signal;
+          error.timedOut = true;
+          error.hadActivity = hadActivity;
+          error.activityCount = activityCount;
+          error.lastActivityAtMs = lastActivityAtMs;
+          reject(error);
+          return;
+        }
+
+        flushStdoutLines(true);
+
+        if (code === 0) {
+          resolve({ stdout, stderr });
+          return;
+        }
+
+        const error = new Error(
+          `Droid CLI exited with code ${code ?? "unknown"}${signal ? ` (signal: ${signal})` : ""}.`,
+        ) as ClaudeCliExecutionError;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        error.signal = signal;
+        reject(error);
+      });
+
+      function flushStdoutLines(flushTail = false) {
+        let newlineIndex = stdoutLineBuffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = stdoutLineBuffer.slice(0, newlineIndex).trim();
+          stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
+          if (line) {
+            onStdoutLine?.(line);
+          }
+
+          newlineIndex = stdoutLineBuffer.indexOf("\n");
+        }
+
+        if (flushTail) {
+          const tail = stdoutLineBuffer.trim();
+          stdoutLineBuffer = "";
+          if (tail) {
+            onStdoutLine?.(tail);
+          }
+        }
+      }
+    });
+  }
+
+  private handleStreamLine(
+    line: string,
+    state: DroidStreamState,
+    onEvent?: (event: AgentTurnEvent) => void,
+  ) {
+    let event: DroidStreamEvent;
+    try {
+      event = JSON.parse(line) as DroidStreamEvent;
+    } catch {
+      return;
+    }
+
+    if (typeof event.session_id === "string" && event.session_id.trim().length > 0) {
+      state.sessionId = event.session_id.trim();
+    }
+
+    if (event.type === "tool_call") {
+      const blockId = event.id?.trim() || makeId("droid-tool");
+      const existing = state.toolBlocksById.get(blockId);
+      const block =
+        existing ??
+        {
+          kind: "tool" as const,
+          inputText: formatStructuredBlock(event.parameters),
+          order: nextDroidBlockOrder(state),
+          outputText: "",
+          toolCallId: blockId,
+          toolName: event.toolName?.trim() || event.toolId?.trim() || "Tool",
+        };
+
+      block.inputText = formatStructuredBlock(event.parameters) || block.inputText;
+      block.toolName = event.toolName?.trim() || event.toolId?.trim() || block.toolName;
+      state.toolBlocksById.set(blockId, block);
+      emitDroidToolUpdate({
+        block,
+        isComplete: false,
+        isError: false,
+        onEvent,
+      });
+      return;
+    }
+
+    if (event.type === "tool_result") {
+      const blockId = event.id?.trim() || makeId("droid-tool");
+      const existing = state.toolBlocksById.get(blockId);
+      const block =
+        existing ??
+        {
+          kind: "tool" as const,
+          inputText: "",
+          order: nextDroidBlockOrder(state),
+          outputText: "",
+          toolCallId: blockId,
+          toolName: event.toolId?.trim() || "Tool",
+        };
+
+      block.outputText = formatToolResultContent(event.value);
+      block.toolName = event.toolId?.trim() || block.toolName;
+      state.toolBlocksById.set(blockId, block);
+      emitDroidToolUpdate({
+        block,
+        isComplete: true,
+        isError: Boolean(event.isError),
+        onEvent,
+      });
+      return;
+    }
+
+    if (event.type === "message" && event.role === "assistant") {
+      const text = event.text?.trimEnd() ?? "";
+      if (!text) {
+        return;
+      }
+
+      state.responseText = text;
+      state.responseWasCompleted = false;
+      onEvent?.({
+        type: "response.update",
+        text,
+        isComplete: false,
+      });
+      return;
+    }
+
+    if (event.type === "completion") {
+      const text = event.finalText?.trimEnd() || state.responseText;
+      if (!text) {
+        return;
+      }
+
+      state.responseText = text;
+      state.responseWasCompleted = true;
+      onEvent?.({
+        type: "response.update",
+        text,
+        isComplete: true,
+      });
+    }
+  }
+
+  private parseResult(stdout: string, stderr: string, input: AgentTurnInput) {
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    let handle = input.session.mode === "resume" ? input.session.handle : "";
+    let outputText = "";
+
+    for (const line of lines) {
+      let event: DroidStreamEvent;
+      try {
+        event = JSON.parse(line) as DroidStreamEvent;
+      } catch {
+        continue;
+      }
+
+      if (typeof event.session_id === "string" && event.session_id.trim().length > 0) {
+        handle = event.session_id.trim();
+      }
+
+      if (
+        event.type === "message" &&
+        event.role === "assistant" &&
+        typeof event.text === "string" &&
+        event.text.trim().length > 0
+      ) {
+        outputText = event.text.trim();
+      }
+
+      if (event.type === "completion" && typeof event.finalText === "string" && event.finalText.trim().length > 0) {
+        outputText = event.finalText.trim();
+      }
+    }
+
+    if (!handle) {
+      throw new Error(`Droid CLI output did not include a session id: ${stdout.trim() || stderr.trim() || "empty output"}`);
+    }
+
+    if (!outputText) {
+      throw new Error(`Droid CLI completed without a final agent message: ${stdout.trim() || stderr.trim() || "empty output"}`);
+    }
+
+    return {
+      handle,
+      outputText,
+    };
+  }
+
+  private formatExecutionError(
+    error: unknown,
+    context: {
+      kind: "root-turn" | "branch-create" | "branch-turn";
+      startedAtMs: number;
+      resumeHandle?: string;
+    },
+  ) {
+    const duration = formatDuration(Date.now() - context.startedAtMs);
+    const execError = error as NodeJS.ErrnoException & ClaudeCliExecutionError;
+    const stderr = execError.stderr?.trim();
+    const stdout = execError.stdout?.trim();
+    const didTimeout =
+      Boolean(execError.timedOut) ||
+      Boolean(execError.killed && execError.signal) ||
+      /timed out/i.test(execError.message ?? "");
+
+    const message = didTimeout
+      ? [
+          `Droid CLI stopped making progress for ${formatDuration(this.activityTimeoutMs)} while running ${context.kind}.`,
+          execError.hadActivity
+            ? `Droid CLI emitted ${execError.activityCount ?? 0} stdout/stderr chunk(s) before going idle.`
+            : "Droid CLI did not emit any stdout/stderr activity before the inactivity timeout expired.",
+          `Try running \`${this.binaryPath} exec --output-format stream-json --cwd "${this.cwd}" "Reply with exactly: ping"\` manually to verify the local Droid runtime.`,
+        ].join(" ")
+      : [
+          `Droid CLI failed during ${context.kind} after ${duration}.`,
+          execError.message?.trim() || "Unknown Droid CLI error.",
+          stderr || stdout || "",
+        ]
+          .join(" ")
+          .trim();
+
+    logRuntime(
+      didTimeout ? "error" : "warn",
+      `${message} (resume=${context.resumeHandle ?? "new"}).`,
+    );
+
+    return new Error(message);
+  }
+
+  private describeCliConfig() {
+    const parts = [
+      this.model ? `model=${this.model}` : "model=droid-default",
+      this.reasoningEffort ? `reasoning-effort=${this.reasoningEffort}` : "reasoning-effort=droid-default",
+      this.skipPermissionsUnsafe
+        ? "skip-permissions-unsafe=true"
+        : this.autoLevel
+          ? `auto=${this.autoLevel}`
+          : "auto=read-only",
+    ];
+
+    if (this.enabledTools.length > 0) {
+      parts.push(`enabled-tools=${this.enabledTools.join(",")}`);
+    }
+
+    if (this.disabledTools.length > 0) {
+      parts.push(`disabled-tools=${this.disabledTools.join(",")}`);
+    }
+
+    return parts.join(", ");
+  }
+}
+
 class MockRuntimeAdapter implements AgentRuntimeAdapter {
   private readonly descriptor = createRuntimeDescriptor("mock");
   private sessions = new Map<string, SessionState>();
@@ -1512,6 +2042,26 @@ function readBooleanEnv(name: string, defaultValue = false) {
   return value.toLowerCase() === "true";
 }
 
+function readDroidAutoLevelEnv(
+  name: string,
+  defaultValue: DroidAutoLevel | null = null,
+): DroidAutoLevel | null {
+  const value = readStringEnv(name)?.toLowerCase() ?? null;
+  if (value === null) {
+    return defaultValue;
+  }
+
+  if (value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+
+  if (value === "off" || value === "none" || value === "false") {
+    return null;
+  }
+
+  return defaultValue;
+}
+
 function resolveRuntimeTimeoutMs() {
   const rawValue = Number(process.env.NETCHAT_RUNTIME_TIMEOUT_MS ?? 60000);
   if (!Number.isFinite(rawValue) || rawValue <= 0) {
@@ -1593,6 +2143,16 @@ function createCodexStreamState(): CodexStreamState {
   };
 }
 
+function createDroidStreamState(): DroidStreamState {
+  return {
+    blockOrder: 0,
+    responseText: "",
+    responseWasCompleted: false,
+    sessionId: null,
+    toolBlocksById: new Map(),
+  };
+}
+
 function makeStreamIndexKey(state: StreamState, index: number) {
   return `${Math.max(state.streamMessageOrdinal, 0)}:${index}`;
 }
@@ -1603,6 +2163,11 @@ function nextBlockOrder(state: StreamState) {
 }
 
 function nextCodexBlockOrder(state: CodexStreamState) {
+  state.blockOrder += 1;
+  return state.blockOrder;
+}
+
+function nextDroidBlockOrder(state: DroidStreamState) {
   state.blockOrder += 1;
   return state.blockOrder;
 }
@@ -1667,6 +2232,25 @@ function emitCodexThinkingUpdate(input: {
 }
 
 function emitCodexToolUpdate(input: {
+  block: ToolBlockState;
+  isComplete: boolean;
+  isError: boolean;
+  onEvent?: (event: AgentTurnEvent) => void;
+}) {
+  input.onEvent?.({
+    type: "tool.update",
+    blockId: input.block.toolCallId,
+    order: input.block.order,
+    toolCallId: input.block.toolCallId,
+    toolName: input.block.toolName,
+    inputText: input.block.inputText,
+    outputText: input.block.outputText,
+    isComplete: input.isComplete,
+    isError: input.isError,
+  });
+}
+
+function emitDroidToolUpdate(input: {
   block: ToolBlockState;
   isComplete: boolean;
   isError: boolean;
