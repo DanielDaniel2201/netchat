@@ -3283,7 +3283,7 @@ function projectAssistantStateForRender(state: AssistantStreamState | null | und
         ? block.text.trim().length > 0
         : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
     ),
-    responseText: state.status === "complete" ? state.responseText : "",
+    responseText: state.responseText,
   };
 }
 
