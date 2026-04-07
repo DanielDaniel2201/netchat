@@ -1377,6 +1377,8 @@ function NetchatApp() {
   const isUpdatingActiveNetAgent =
     updateNetAgentMutation.isPending && updateNetAgentMutation.variables?.netId === activeNetId;
   const activeNetAgentValue = activeNet?.agentRuntimeId ?? "";
+  const displayedAgentSelectValue =
+    activeNetAgentValue || defaultNewNetAgent?.runtimeId || agentOptions[0]?.runtimeId || "";
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
@@ -1393,12 +1395,9 @@ function NetchatApp() {
                       <select
                         className="h-9 w-full appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] pl-3 pr-9 text-[14px] font-medium text-[var(--text-main)] outline-none focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
                         disabled={workspaceQuery.isLoading || isSwitchingNet || agentOptions.length === 0}
-                        value={activeNetAgentValue}
+                        value={displayedAgentSelectValue}
                         onChange={(event) => updateActiveNetAgent(event.target.value)}
                       >
-                        <option value="" disabled>
-                          Select agent
-                        </option>
                         {agentOptions.map((agent) => (
                           <option key={agent.runtimeId} disabled={!agent.installed} value={agent.runtimeId}>
                             {buildAgentOptionLabel(agent)}
@@ -1683,9 +1682,9 @@ function NetchatApp() {
                     }
                   }}
                 />
-                <div className="absolute bottom-4 left-7 right-20 flex items-center gap-3">
+                <div className="absolute bottom-4 left-7 flex max-w-[calc(100%-7rem)] flex-wrap items-center gap-3">
                   <div
-                    className="pointer-events-none min-w-0 flex-1 truncate text-[14px] leading-6 text-[rgba(26,26,26,0.46)]"
+                    className="pointer-events-none max-w-[320px] shrink-0 truncate text-[14px] leading-6 text-[rgba(26,26,26,0.46)]"
                     title={workingDirectoryPath}
                   >
                     {truncateMiddle(workingDirectoryPath, 64)}
@@ -1694,12 +1693,9 @@ function NetchatApp() {
                     <select
                       className="h-10 min-w-[188px] appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] pl-3 pr-10 text-[14px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
                       disabled={workspaceQuery.isLoading || isSwitchingNet || isUpdatingActiveNetAgent || agentOptions.length === 0}
-                      value={activeNetAgentValue}
+                      value={displayedAgentSelectValue}
                       onChange={(event) => updateActiveNetAgent(event.target.value)}
                     >
-                      <option value="" disabled>
-                        Select agent
-                      </option>
                       {agentOptions.map((agent) => (
                         <option
                           key={agent.runtimeId}

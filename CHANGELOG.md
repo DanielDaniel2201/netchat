@@ -9,6 +9,7 @@ After each commit, update the Changelog under the current date. Each entry must 
 - Switched local app startup from a single runtime daemon to parallel Claude/Codex/Droid daemons, exposed `/api/agents`, and routed turns by stable `runtimeId` so nets can target an agent without setting `NETCHAT_RUNTIME` before launch.
 - Added net-scoped agent persistence to `workspace.json` plus runtime metadata on branches/messages, so reopening a historical net keeps its original agent choice and branch/session resumes survive daemon restarts without relying on stale random machine ids.
 - Added a new-net agent dropdown beside the workspace path, surfaced each net's bound agent in the history drawer and header status, and blocked sending when the selected net agent is offline or missing so agent selection is explicit and visible in the UI.
+- Moved the new-net agent selector to sit directly beside the workspace path and removed the non-selectable `Select agent` option from the runtime dropdown menu so the control reads as a real runtime picker instead of a placeholder field.
 
 ## 2026-04-06
 
