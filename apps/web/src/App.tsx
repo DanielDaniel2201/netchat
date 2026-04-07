@@ -60,6 +60,7 @@ const messageEstimateLineHeight = 38;
 const canvasMinZoom = 0.35;
 const canvasMaxZoom = 1.45;
 const branchRevealBubbleWidthRatio = 5 / 6;
+const initialRootTurnVerticalCenterRatio = 0.25;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -288,7 +289,13 @@ function NetchatApp() {
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
-  const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, zoom: 1 });
+  const [viewport, setViewport] = useState<CanvasViewport>(
+    () =>
+      buildInitialRootTurnViewport({
+        canvasSize: getViewportCanvasSize(),
+        prompt: "",
+      }) ?? { x: 0, y: 0, zoom: 1 },
+  );
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [measuredNodeHeights, setMeasuredNodeHeights] = useState<Record<string, number>>({});
   const [editingNetId, setEditingNetId] = useState<string | null>(null);
@@ -878,6 +885,10 @@ function NetchatApp() {
   }, []);
 
   useEffect(() => {
+    lastAutoFitNetIdRef.current = null;
+  }, [activeNetId]);
+
+  useEffect(() => {
     if (!snapshot || snapshot.messages.length === 0 || !nodesInitialized) {
       return;
     }
@@ -1157,6 +1168,27 @@ function NetchatApp() {
   const isOnNewNetScreen = !graphQuery.isLoading && !hasMessages;
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
+
+  useEffect(() => {
+    if (!isOnNewNetScreen) {
+      return;
+    }
+
+    const nextViewport = buildInitialRootTurnViewport({
+      canvasSize,
+      prompt: "",
+    });
+    if (!nextViewport) {
+      return;
+    }
+
+    setViewport((current) =>
+      current.x === nextViewport.x && current.y === nextViewport.y && current.zoom === nextViewport.zoom
+        ? current
+        : nextViewport,
+    );
+    void reactFlow.setViewport(nextViewport, { duration: 0 });
+  }, [canvasSize, isOnNewNetScreen, reactFlow]);
 
   function beginOptimisticTurn(optimisticTurn: PendingTurnMetadata) {
     setActiveStreamedTurn({
@@ -1640,6 +1672,7 @@ function NetchatApp() {
           className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
           nodes={graph.nodes}
           edges={graph.edges}
+          defaultViewport={viewport}
           onNodeClick={(_event, node) => {
             const selectedText = window.getSelection()?.toString().trim();
             const message = (node.data as MessageNodeData | undefined)?.message;
@@ -1659,7 +1692,9 @@ function NetchatApp() {
             setSelectionDraft(null);
             clearBrowserSelection();
           }}
-          panOnDrag
+          panOnDrag={!isOnNewNetScreen}
+          zoomOnScroll={!isOnNewNetScreen}
+          zoomOnPinch={!isOnNewNetScreen}
           zoomOnDoubleClick={false}
         >
           <Background gap={96} size={1} color="var(--line-color)" />
@@ -1686,7 +1721,7 @@ function NetchatApp() {
         ) : null}
 
         {!graphQuery.isLoading && !hasMessages ? (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
+          <div className="absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
             <form className="pointer-events-auto w-full max-w-[920px]" onSubmit={handleSubmit}>
               <div className="relative border border-[var(--text-main)] bg-white px-7 py-6 shadow-[14px_14px_0_rgba(26,26,26,0.08)]">
                 <Textarea
@@ -3261,8 +3296,19 @@ function buildInitialRootTurnViewport(input: {
 
   return {
     x: input.canvasSize.width / 2,
-    y: input.canvasSize.height / 2 - (bubbleHeight / 2) * zoom,
+    y: Math.max(32, input.canvasSize.height * initialRootTurnVerticalCenterRatio - (bubbleHeight / 2) * zoom),
     zoom,
+  };
+}
+
+function getViewportCanvasSize() {
+  if (typeof window === "undefined") {
+    return { width: 0, height: 0 };
+  }
+
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
   };
 }
 
