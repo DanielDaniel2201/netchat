@@ -1918,24 +1918,6 @@ function CanvasThumbnail({
     };
   }, [bounds, thumbnailHeight, thumbnailWidth]);
 
-  const thumbnailFlowBounds = useMemo(() => {
-    if (!bounds || !thumbnailGeometry || thumbnailGeometry.scale <= 0) {
-      return null;
-    }
-
-    const width = thumbnailWidth / thumbnailGeometry.scale;
-    const height = thumbnailHeight / thumbnailGeometry.scale;
-
-    return {
-      minX: bounds.minX - thumbnailGeometry.offsetX / thumbnailGeometry.scale,
-      minY: bounds.minY - thumbnailGeometry.offsetY / thumbnailGeometry.scale,
-      maxX: bounds.minX - thumbnailGeometry.offsetX / thumbnailGeometry.scale + width,
-      maxY: bounds.minY - thumbnailGeometry.offsetY / thumbnailGeometry.scale + height,
-      width,
-      height,
-    };
-  }, [bounds, thumbnailGeometry, thumbnailHeight, thumbnailWidth]);
-
   const viewportRect = useMemo(() => {
     if (!bounds || !thumbnailGeometry || canvasSize.width <= 0 || canvasSize.height <= 0 || viewport.zoom <= 0) {
       return null;
@@ -1945,61 +1927,54 @@ function CanvasThumbnail({
     const flowTop = -viewport.y / viewport.zoom;
     const flowWidth = canvasSize.width / viewport.zoom;
     const flowHeight = canvasSize.height / viewport.zoom;
+    const rawWidth = flowWidth * thumbnailGeometry.scale;
+    const rawHeight = flowHeight * thumbnailGeometry.scale;
+    const width = Math.min(thumbnailWidth, rawWidth);
+    const height = Math.min(thumbnailHeight, rawHeight);
+    const maxLeft = Math.max(0, thumbnailWidth - width);
+    const maxTop = Math.max(0, thumbnailHeight - height);
 
     return {
-      left: thumbnailGeometry.offsetX + (flowLeft - bounds.minX) * thumbnailGeometry.scale,
-      top: thumbnailGeometry.offsetY + (flowTop - bounds.minY) * thumbnailGeometry.scale,
-      width: flowWidth * thumbnailGeometry.scale,
-      height: flowHeight * thumbnailGeometry.scale,
-      flowLeft,
-      flowTop,
-      flowWidth,
-      flowHeight,
+      left: clamp(thumbnailGeometry.offsetX + (flowLeft - bounds.minX) * thumbnailGeometry.scale, 0, maxLeft),
+      top: clamp(thumbnailGeometry.offsetY + (flowTop - bounds.minY) * thumbnailGeometry.scale, 0, maxTop),
+      width,
+      height,
     };
-  }, [bounds, canvasSize.height, canvasSize.width, thumbnailGeometry, viewport.x, viewport.y, viewport.zoom]);
+  }, [bounds, canvasSize.height, canvasSize.width, thumbnailGeometry, thumbnailHeight, thumbnailWidth, viewport.x, viewport.y, viewport.zoom]);
 
-  const flowPointFromClient = useCallback(
+  const localPointFromClient = useCallback(
     (clientX: number, clientY: number) => {
-      if (!thumbnailFlowBounds || !thumbnailGeometry || !frameRef.current) {
+      if (!frameRef.current) {
         return null;
       }
 
       const rect = frameRef.current.getBoundingClientRect();
-      const localX = clamp(clientX - rect.left, 0, rect.width);
-      const localY = clamp(clientY - rect.top, 0, rect.height);
-
       return {
-        x: thumbnailFlowBounds.minX + localX / thumbnailGeometry.scale,
-        y: thumbnailFlowBounds.minY + localY / thumbnailGeometry.scale,
+        x: clamp(clientX - rect.left, 0, rect.width),
+        y: clamp(clientY - rect.top, 0, rect.height),
       };
     },
-    [thumbnailFlowBounds, thumbnailGeometry],
+    [],
   );
 
-  const moveViewport = useCallback(
-    (flowLeft: number, flowTop: number) => {
-      if (!thumbnailFlowBounds || !viewportRect) {
+  const moveViewportFromThumbnail = useCallback(
+    (thumbnailLeft: number, thumbnailTop: number) => {
+      if (!bounds || !thumbnailGeometry || !viewportRect) {
         return;
       }
 
-      const nextLeft = clamp(
-        flowLeft,
-        thumbnailFlowBounds.minX,
-        Math.max(thumbnailFlowBounds.minX, thumbnailFlowBounds.maxX - viewportRect.flowWidth),
-      );
-      const nextTop = clamp(
-        flowTop,
-        thumbnailFlowBounds.minY,
-        Math.max(thumbnailFlowBounds.minY, thumbnailFlowBounds.maxY - viewportRect.flowHeight),
-      );
+      const nextLeft = clamp(thumbnailLeft, 0, Math.max(0, thumbnailWidth - viewportRect.width));
+      const nextTop = clamp(thumbnailTop, 0, Math.max(0, thumbnailHeight - viewportRect.height));
+      const flowLeft = bounds.minX + (nextLeft - thumbnailGeometry.offsetX) / thumbnailGeometry.scale;
+      const flowTop = bounds.minY + (nextTop - thumbnailGeometry.offsetY) / thumbnailGeometry.scale;
 
       onViewportChange({
-        x: -nextLeft * viewport.zoom,
-        y: -nextTop * viewport.zoom,
+        x: -flowLeft * viewport.zoom,
+        y: -flowTop * viewport.zoom,
         zoom: viewport.zoom,
       });
     },
-    [onViewportChange, thumbnailFlowBounds, viewport.zoom, viewportRect],
+    [bounds, onViewportChange, thumbnailGeometry, thumbnailHeight, thumbnailWidth, viewport.zoom, viewportRect],
   );
 
   useEffect(() => {
@@ -2008,12 +1983,12 @@ function CanvasThumbnail({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      const flowPoint = flowPointFromClient(event.clientX, event.clientY);
-      if (!flowPoint) {
+      const localPoint = localPointFromClient(event.clientX, event.clientY);
+      if (!localPoint) {
         return;
       }
 
-      moveViewport(flowPoint.x - dragState.offsetX, flowPoint.y - dragState.offsetY);
+      moveViewportFromThumbnail(localPoint.x - dragState.offsetX, localPoint.y - dragState.offsetY);
     };
 
     const handlePointerUp = () => {
@@ -2027,22 +2002,22 @@ function CanvasThumbnail({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [dragState, flowPointFromClient, moveViewport]);
+  }, [dragState, localPointFromClient, moveViewportFromThumbnail]);
 
   if (!bounds || !thumbnailGeometry || !viewportRect) {
     return null;
   }
 
   const beginThumbnailDrag = (clientX: number, clientY: number, lockToViewport: boolean) => {
-    const flowPoint = flowPointFromClient(clientX, clientY);
-    if (!flowPoint) {
+    const localPoint = localPointFromClient(clientX, clientY);
+    if (!localPoint) {
       return;
     }
 
-    const offsetX = lockToViewport ? flowPoint.x - viewportRect.flowLeft : viewportRect.flowWidth / 2;
-    const offsetY = lockToViewport ? flowPoint.y - viewportRect.flowTop : viewportRect.flowHeight / 2;
+    const offsetX = lockToViewport ? localPoint.x - viewportRect.left : viewportRect.width / 2;
+    const offsetY = lockToViewport ? localPoint.y - viewportRect.top : viewportRect.height / 2;
 
-    moveViewport(flowPoint.x - offsetX, flowPoint.y - offsetY);
+    moveViewportFromThumbnail(localPoint.x - offsetX, localPoint.y - offsetY);
     setDragState({ offsetX, offsetY });
   };
 
