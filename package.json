@@ -27,7 +27,9 @@
     "bin",
     "dist"
   ],
-  "bin": "./bin/netchat.mjs",
+  "bin": {
+    "netchat": "bin/netchat.mjs"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
