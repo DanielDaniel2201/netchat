@@ -6,6 +6,8 @@ After each commit, update the Changelog under the current date. Each entry must 
 
 ## 2026-04-07
 
+- Fixed minimap recentering at extreme zoom-out by centering non-pannable axes instead of clamping them to the thumbnail's top-left corner, so clicking a fully-covered minimap no longer shoves the canvas graph off toward the upper-left.
+- Reset the canvas viewport whenever the active net changes and always reopen a net from the root session's first user bubble, so zoom/pan state from one net no longer leaks into another net's default camera position.
 - Normalized the published CLI `bin` metadata to an explicit `{ "netchat": "bin/netchat.mjs" }` mapping, so npm no longer has to rewrite the package manifest during publish and the installed command name stays stable.
 - Switched local app startup from a single runtime daemon to parallel Claude/Codex/Droid daemons, exposed `/api/agents`, and routed turns by stable `runtimeId` so nets can target an agent without setting `NETCHAT_RUNTIME` before launch.
 - Added net-scoped agent persistence to `workspace.json` plus runtime metadata on branches/messages, so reopening a historical net keeps its original agent choice and branch/session resumes survive daemon restarts without relying on stale random machine ids.

@@ -281,6 +281,7 @@ function NetchatApp() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const openNetMenuRef = useRef<HTMLDivElement>(null);
   const lastAutoFitNetIdRef = useRef<string | null>(null);
+  const lastViewportResetNetIdRef = useRef<string | null>(null);
   const selectedMessageId = useComposerStore((state) => state.selectedMessageId);
   const setSelectedMessageId = useComposerStore((state) => state.setSelectedMessageId);
   const [activePathMessageId, setActivePathMessageId] = useState<string | null>(null);
@@ -631,6 +632,18 @@ function NetchatApp() {
     });
   }
 
+  const applyViewport = useCallback(
+    (nextViewport: CanvasViewport) => {
+      setViewport((current) =>
+        current.x === nextViewport.x && current.y === nextViewport.y && current.zoom === nextViewport.zoom
+          ? current
+          : nextViewport,
+      );
+      void reactFlow.setViewport(nextViewport, { duration: 0 });
+    },
+    [reactFlow],
+  );
+
   const setInitialRootTurnViewport = useCallback(
     (prompt: string) => {
       const nextViewport = buildInitialRootTurnViewport({
@@ -642,11 +655,10 @@ function NetchatApp() {
       }
 
       lastAutoFitNetIdRef.current = activeNetId ?? "__active-net__";
-      setViewport(nextViewport);
-      void reactFlow.setViewport(nextViewport, { duration: 0 });
+      applyViewport(nextViewport);
       return true;
     },
-    [activeNetId, canvasSize, reactFlow],
+    [activeNetId, applyViewport, canvasSize],
   );
 
   function activateMessagePath(messageId: string | null) {
@@ -886,10 +898,32 @@ function NetchatApp() {
 
   useEffect(() => {
     lastAutoFitNetIdRef.current = null;
+    lastViewportResetNetIdRef.current = null;
   }, [activeNetId]);
 
   useEffect(() => {
-    if (!snapshot || snapshot.messages.length === 0 || !nodesInitialized) {
+    if (!activeNetId || canvasSize.width <= 0 || canvasSize.height <= 0) {
+      return;
+    }
+
+    if (lastViewportResetNetIdRef.current === activeNetId) {
+      return;
+    }
+
+    const nextViewport = buildInitialRootTurnViewport({
+      canvasSize,
+      prompt: "",
+    });
+    if (!nextViewport) {
+      return;
+    }
+
+    lastViewportResetNetIdRef.current = activeNetId;
+    applyViewport(nextViewport);
+  }, [activeNetId, applyViewport, canvasSize.height, canvasSize.width]);
+
+  useEffect(() => {
+    if (graphQuery.isFetching || !snapshot || snapshot.messages.length === 0 || !nodesInitialized) {
       return;
     }
 
@@ -898,7 +932,7 @@ function NetchatApp() {
       return;
     }
 
-    const initialRootTurnMessage = getInitialRootTurnUserMessage(snapshot);
+    const initialRootTurnMessage = getRootBranchFirstUserMessage(snapshot);
     if (initialRootTurnMessage) {
       if (canvasSize.width <= 0 || canvasSize.height <= 0) {
         return;
@@ -938,6 +972,7 @@ function NetchatApp() {
     activeNetId,
     canvasSize.height,
     canvasSize.width,
+    graphQuery.isFetching,
     nodesInitialized,
     reactFlow,
     setInitialRootTurnViewport,
@@ -1994,14 +2029,22 @@ function CanvasThumbnail({
 
   const moveViewportFromThumbnail = useCallback(
     (thumbnailLeft: number, thumbnailTop: number) => {
-      if (!bounds || !thumbnailGeometry || !viewportRect) {
+      if (!bounds || !thumbnailGeometry || !viewportRect || canvasSize.width <= 0 || canvasSize.height <= 0) {
         return;
       }
 
       const nextLeft = clamp(thumbnailLeft, 0, Math.max(0, thumbnailWidth - viewportRect.width));
       const nextTop = clamp(thumbnailTop, 0, Math.max(0, thumbnailHeight - viewportRect.height));
-      const flowLeft = bounds.minX + (nextLeft - thumbnailGeometry.offsetX) / thumbnailGeometry.scale;
-      const flowTop = bounds.minY + (nextTop - thumbnailGeometry.offsetY) / thumbnailGeometry.scale;
+      const flowWidth = canvasSize.width / viewport.zoom;
+      const flowHeight = canvasSize.height / viewport.zoom;
+      const flowLeft =
+        flowWidth < bounds.width
+          ? bounds.minX + (nextLeft - thumbnailGeometry.offsetX) / thumbnailGeometry.scale
+          : bounds.minX + (bounds.width - flowWidth) / 2;
+      const flowTop =
+        flowHeight < bounds.height
+          ? bounds.minY + (nextTop - thumbnailGeometry.offsetY) / thumbnailGeometry.scale
+          : bounds.minY + (bounds.height - flowHeight) / 2;
 
       onViewportChange({
         x: -flowLeft * viewport.zoom,
@@ -2009,7 +2052,7 @@ function CanvasThumbnail({
         zoom: viewport.zoom,
       });
     },
-    [bounds, onViewportChange, thumbnailGeometry, thumbnailHeight, thumbnailWidth, viewport.zoom, viewportRect],
+    [bounds, canvasSize.height, canvasSize.width, onViewportChange, thumbnailGeometry, thumbnailHeight, thumbnailWidth, viewport.zoom, viewportRect],
   );
 
   useEffect(() => {
@@ -3312,19 +3355,8 @@ function getViewportCanvasSize() {
   };
 }
 
-function getInitialRootTurnUserMessage(snapshot: GraphSnapshot) {
-  if (snapshot.branches.length !== 1 || snapshot.messages.length !== 2) {
-    return null;
-  }
-
-  if (!snapshot.messages.every((message) => message.branchId === rootBranchId)) {
-    return null;
-  }
-
-  const userMessage = snapshot.messages.find((message) => message.role === "user") ?? null;
-  const assistantMessage = snapshot.messages.find((message) => message.role === "assistant") ?? null;
-
-  return userMessage && assistantMessage ? userMessage : null;
+function getRootBranchFirstUserMessage(snapshot: GraphSnapshot) {
+  return snapshot.messages.find((message) => message.branchId === rootBranchId && message.role === "user") ?? null;
 }
 
 function getVisibleBranchIds(
