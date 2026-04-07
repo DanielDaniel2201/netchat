@@ -122,6 +122,8 @@ If the release should land on the default branch, merge it and push that branch 
 
 ### 7. Build release notes from the correct range
 
+Check first if there was a last release tag, if not, ask user for the baseline commit hash or tag to compare against.
+
 Determine the range from the user-confirmed baseline to the new tag:
 
 ```bash

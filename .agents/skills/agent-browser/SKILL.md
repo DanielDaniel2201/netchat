@@ -347,25 +347,3 @@ Usage:
 ./templates/authenticated-session.sh https://app.example.com/login
 ./templates/capture-workflow.sh https://example.com ./output
 ```
-
-### Common Issues & Troubleshooting
-
-**Error: "Browser not launched. Call launch first" or "Daemon failed to start"**
-This usually indicates a hung daemon process or a state conflict in Windows environments.
-- **Solution**: Kill all existing Node.js processes to force a clean restart of the agent-browser daemon.
-  ```bash
-  taskkill //F //IM node.exe
-  ```
-  *(Note: The double slash `//` is required in Git Bash to prevent the shell from incorrectly expanding `/F` as a path.)*
-
-**Error: Invalid argument/option - 'C:/...'**
-Occurs when using commands like `taskkill` in Git Bash where flags are misinterpreted as file paths.
-- **Solution**: Use double slashes for flags (e.g., `//F`, `//IM`).
-
-## HTTPS Certificate Errors
-
-
-For sites with self-signed or invalid certificates:
-```bash
-agent-browser open https://localhost:8443 --ignore-https-errors
-```
