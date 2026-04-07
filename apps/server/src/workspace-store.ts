@@ -289,9 +289,10 @@ export class WorkspaceStore {
   }
 
   private repairManifest(manifest: WorkspaceManifest): WorkspaceManifest {
+    const manifestVersion = typeof manifest.version === "number" ? manifest.version : 1;
     const repairedNets = Array.isArray(manifest.nets)
       ? manifest.nets
-          .map((candidate) => this.normalizeNetRecord(candidate))
+          .map((candidate) => this.normalizeNetRecord(candidate, manifestVersion))
           .filter((candidate): candidate is WorkspaceNetRecord => candidate !== null)
       : [];
     const nets = repairedNets.length > 0 ? repairedNets : [this.createRecoveredNetRecord()];
@@ -308,7 +309,7 @@ export class WorkspaceStore {
     };
   }
 
-  private normalizeNetRecord(candidate: unknown): WorkspaceNetRecord | null {
+  private normalizeNetRecord(candidate: unknown, manifestVersion: number): WorkspaceNetRecord | null {
     if (!candidate || typeof candidate !== "object") {
       return null;
     }
@@ -340,12 +341,20 @@ export class WorkspaceStore {
       typeof record.databasePath === "string" && record.databasePath.trim().length > 0
         ? path.resolve(record.databasePath)
         : path.join(this.netsDirectory, `${id}.db`);
+    const shouldDefaultLegacyAgent =
+      !agentRuntimeId &&
+      !agentRuntimeKind &&
+      (manifestVersion < 2 || readLatestMessageTimestamp(databasePath) !== null);
+    const normalizedAgentRuntimeId = shouldDefaultLegacyAgent ? "claude_local" : agentRuntimeId;
+    const normalizedAgentRuntimeKind = shouldDefaultLegacyAgent ? "claude" : agentRuntimeKind;
 
     return {
       id,
       title,
-      agentRuntimeId: agentRuntimeId && agentRuntimeKind ? agentRuntimeId : null,
-      agentRuntimeKind: agentRuntimeId && agentRuntimeKind ? agentRuntimeKind : null,
+      agentRuntimeId:
+        normalizedAgentRuntimeId && normalizedAgentRuntimeKind ? normalizedAgentRuntimeId : null,
+      agentRuntimeKind:
+        normalizedAgentRuntimeId && normalizedAgentRuntimeKind ? normalizedAgentRuntimeKind : null,
       createdAt,
       lastOpenedAt,
       databasePath,

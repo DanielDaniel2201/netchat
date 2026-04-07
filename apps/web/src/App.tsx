@@ -407,7 +407,11 @@ function NetchatApp() {
   const activeAgentLabel =
     activeNet?.agentRuntimeLabel ??
     activeNetAgent?.runtimeLabel ??
-    (activeNet?.agentRuntimeId ? "Unknown agent" : "Select agent");
+    (activeNet?.agentRuntimeId
+      ? "Unknown agent"
+      : (snapshot?.messages.length ?? 0) > 0
+        ? "Claude Code"
+        : "Select agent");
 
   async function runStreamedTurn(
     path: string,
@@ -1390,25 +1394,7 @@ function NetchatApp() {
             <div className="border-b border-[var(--node-border)] px-5 py-4">
               <div className="flex items-start justify-between gap-4 text-[15px] font-medium leading-6">
                 <div className="flex min-w-0 items-center gap-2 text-[var(--text-main)]">
-                  {!activeNet?.agentRuntimeId && !isOnNewNetScreen ? (
-                    <div className="relative min-w-0 max-w-[170px]">
-                      <select
-                        className="h-9 w-full appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] pl-3 pr-9 text-[14px] font-medium text-[var(--text-main)] outline-none focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
-                        disabled={workspaceQuery.isLoading || isSwitchingNet || agentOptions.length === 0}
-                        value={displayedAgentSelectValue}
-                        onChange={(event) => updateActiveNetAgent(event.target.value)}
-                      >
-                        {agentOptions.map((agent) => (
-                          <option key={agent.runtimeId} disabled={!agent.installed} value={agent.runtimeId}>
-                            {buildAgentOptionLabel(agent)}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[rgba(26,26,26,0.54)]" />
-                    </div>
-                  ) : (
-                    <span>{activeAgentLabel}</span>
-                  )}
+                  <span>{activeAgentLabel}</span>
                   <span
                     className={cn(
                       "inline-flex h-2.5 w-2.5 rounded-full border border-[rgba(26,26,26,0.16)]",
