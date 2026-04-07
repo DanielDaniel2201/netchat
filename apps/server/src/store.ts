@@ -23,6 +23,8 @@ type BranchRow = {
   source_message_id: string | null;
   session_id: string | null;
   machine_id: string | null;
+  runtime_id: string | null;
+  runtime_kind: Branch["runtimeKind"];
   title: string;
   selected_text: string | null;
   start_offset: number | null;
@@ -38,6 +40,8 @@ type MessageRow = {
   selected_text: string | null;
   session_id: string | null;
   machine_id: string | null;
+  runtime_id: string | null;
+  runtime_kind: MessageNode["runtimeKind"];
   ordinal_in_branch: number;
   created_at: string;
 };
@@ -86,7 +90,7 @@ export class GraphStore {
   getBranch(branchId: string): Branch | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, parent_branch_id, source_message_id, session_id, machine_id, title, selected_text, start_offset, end_offset, created_at
+        `SELECT id, parent_branch_id, source_message_id, session_id, machine_id, runtime_id, runtime_kind, title, selected_text, start_offset, end_offset, created_at
          FROM branches
          WHERE id = ?`,
       )
@@ -98,7 +102,7 @@ export class GraphStore {
   getMessage(messageId: string): MessageNode | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, ordinal_in_branch, created_at
+        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, runtime_id, runtime_kind, ordinal_in_branch, created_at
          FROM messages
          WHERE id = ?`,
       )
@@ -196,10 +200,10 @@ export class GraphStore {
       this.database
         .prepare(
           `UPDATE branches
-           SET session_id = ?, machine_id = ?, title = ?
+           SET session_id = ?, machine_id = ?, runtime_id = ?, runtime_kind = ?, title = ?
            WHERE id = ?`,
         )
-        .run(runtime.handle, runtime.machineId, "Root session", branch.id);
+        .run(runtime.handle, runtime.machineId, runtime.runtimeId, runtime.runtimeKind, "Root session", branch.id);
 
       const nextOrdinal = this.getNextMessageOrdinal(branch.id);
       this.insertMessage({
@@ -210,6 +214,8 @@ export class GraphStore {
         selectedText: options?.selectedText ?? null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
+        runtimeId: runtime.runtimeId,
+        runtimeKind: runtime.runtimeKind,
         ordinalInBranch: nextOrdinal,
       });
       this.insertMessage({
@@ -220,6 +226,8 @@ export class GraphStore {
         selectedText: null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
+        runtimeId: runtime.runtimeId,
+        runtimeKind: runtime.runtimeKind,
         ordinalInBranch: nextOrdinal + 1,
       });
       this.upsertAssistantState(assistantMessageId, options?.assistantState);
@@ -258,12 +266,14 @@ export class GraphStore {
              source_message_id,
              session_id,
              machine_id,
+             runtime_id,
+             runtime_kind,
              title,
              selected_text,
              start_offset,
              end_offset,
              created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           branchId,
@@ -271,6 +281,8 @@ export class GraphStore {
           sourceMessage.id,
           runtime.handle,
           runtime.machineId,
+          runtime.runtimeId,
+          runtime.runtimeKind,
           branchTitle,
           isSelectionBranch ? input.selectedText! : null,
           isSelectionBranch ? input.startOffset! : null,
@@ -286,6 +298,8 @@ export class GraphStore {
         selectedText: isSelectionBranch ? input.selectedText! : null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
+        runtimeId: runtime.runtimeId,
+        runtimeKind: runtime.runtimeKind,
         ordinalInBranch: 0,
       });
       this.insertMessage({
@@ -296,6 +310,8 @@ export class GraphStore {
         selectedText: null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
+        runtimeId: runtime.runtimeId,
+        runtimeKind: runtime.runtimeKind,
         ordinalInBranch: 1,
       });
       this.upsertAssistantState(assistantMessageId, options?.assistantState);
@@ -326,10 +342,10 @@ export class GraphStore {
       this.database
         .prepare(
           `UPDATE branches
-           SET session_id = ?, machine_id = ?
+           SET session_id = ?, machine_id = ?, runtime_id = ?, runtime_kind = ?
            WHERE id = ?`,
         )
-        .run(runtime.handle, runtime.machineId, branchId);
+        .run(runtime.handle, runtime.machineId, runtime.runtimeId, runtime.runtimeKind, branchId);
 
       const nextOrdinal = this.getNextMessageOrdinal(branchId);
       this.insertMessage({
@@ -340,6 +356,8 @@ export class GraphStore {
         selectedText: options?.selectedText ?? null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
+        runtimeId: runtime.runtimeId,
+        runtimeKind: runtime.runtimeKind,
         ordinalInBranch: nextOrdinal,
       });
       this.insertMessage({
@@ -350,6 +368,8 @@ export class GraphStore {
         selectedText: null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
+        runtimeId: runtime.runtimeId,
+        runtimeKind: runtime.runtimeKind,
         ordinalInBranch: nextOrdinal + 1,
       });
       this.upsertAssistantState(assistantMessageId, options?.assistantState);
@@ -365,7 +385,7 @@ export class GraphStore {
   private listBranches() {
     const rows = this.database
       .prepare(
-        `SELECT id, parent_branch_id, source_message_id, session_id, machine_id, title, selected_text, start_offset, end_offset, created_at
+        `SELECT id, parent_branch_id, source_message_id, session_id, machine_id, runtime_id, runtime_kind, title, selected_text, start_offset, end_offset, created_at
          FROM branches
          ORDER BY created_at ASC, id ASC`,
       )
@@ -377,7 +397,7 @@ export class GraphStore {
   private listMessages() {
     const rows = this.database
       .prepare(
-        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, ordinal_in_branch, created_at
+        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, runtime_id, runtime_kind, ordinal_in_branch, created_at
          FROM messages
          ORDER BY created_at ASC, ordinal_in_branch ASC, id ASC`,
       )
@@ -413,6 +433,8 @@ export class GraphStore {
         source_message_id TEXT,
         session_id TEXT,
         machine_id TEXT,
+        runtime_id TEXT,
+        runtime_kind TEXT,
         title TEXT NOT NULL,
         selected_text TEXT,
         start_offset INTEGER,
@@ -428,6 +450,8 @@ export class GraphStore {
         selected_text TEXT,
         session_id TEXT,
         machine_id TEXT,
+        runtime_id TEXT,
+        runtime_kind TEXT,
         ordinal_in_branch INTEGER NOT NULL,
         created_at TEXT NOT NULL
       );
@@ -443,6 +467,8 @@ export class GraphStore {
     `);
 
     this.ensureMessageSelectedTextColumn();
+    this.ensureBranchRuntimeColumns();
+    this.ensureMessageRuntimeColumns();
   }
 
   private ensureRootBranch(): Branch {
@@ -457,6 +483,8 @@ export class GraphStore {
       sourceMessageId: null,
       sessionId: null,
       machineId: null,
+      runtimeId: null,
+      runtimeKind: null,
       title: "Root session",
       selectedText: null,
       startOffset: null,
@@ -472,12 +500,14 @@ export class GraphStore {
            source_message_id,
            session_id,
            machine_id,
+           runtime_id,
+           runtime_kind,
            title,
            selected_text,
            start_offset,
            end_offset,
            created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         created.id,
@@ -485,6 +515,8 @@ export class GraphStore {
         created.sourceMessageId,
         created.sessionId,
         created.machineId,
+        created.runtimeId,
+        created.runtimeKind,
         created.title,
         created.selectedText,
         created.startOffset,
@@ -503,6 +535,8 @@ export class GraphStore {
     selectedText: string | null;
     sessionId: string | null;
     machineId: string | null;
+    runtimeId: string | null;
+    runtimeKind: MessageNode["runtimeKind"];
     ordinalInBranch: number;
   }) {
     this.database
@@ -515,9 +549,11 @@ export class GraphStore {
            selected_text,
            session_id,
            machine_id,
+           runtime_id,
+           runtime_kind,
            ordinal_in_branch,
            created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
@@ -527,6 +563,8 @@ export class GraphStore {
         input.selectedText,
         input.sessionId,
         input.machineId,
+        input.runtimeId,
+        input.runtimeKind,
         input.ordinalInBranch,
         nowIso(),
       );
@@ -583,6 +621,28 @@ export class GraphStore {
 
     this.database.exec(`ALTER TABLE messages ADD COLUMN selected_text TEXT;`);
   }
+
+  private ensureBranchRuntimeColumns() {
+    const columns = this.database.prepare(`PRAGMA table_info(branches)`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "runtime_id")) {
+      this.database.exec(`ALTER TABLE branches ADD COLUMN runtime_id TEXT;`);
+    }
+
+    if (!columns.some((column) => column.name === "runtime_kind")) {
+      this.database.exec(`ALTER TABLE branches ADD COLUMN runtime_kind TEXT;`);
+    }
+  }
+
+  private ensureMessageRuntimeColumns() {
+    const columns = this.database.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "runtime_id")) {
+      this.database.exec(`ALTER TABLE messages ADD COLUMN runtime_id TEXT;`);
+    }
+
+    if (!columns.some((column) => column.name === "runtime_kind")) {
+      this.database.exec(`ALTER TABLE messages ADD COLUMN runtime_kind TEXT;`);
+    }
+  }
 }
 
 export function readLatestMessageTimestamp(databasePath: string) {
@@ -628,6 +688,8 @@ function mapBranchRow(row: BranchRow): Branch {
     sourceMessageId: row.source_message_id,
     sessionId: row.session_id,
     machineId: row.machine_id,
+    runtimeId: row.runtime_id,
+    runtimeKind: row.runtime_kind,
     title: row.title,
     selectedText: row.selected_text,
     startOffset: row.start_offset,
@@ -645,6 +707,8 @@ function mapMessageRow(row: MessageRow): MessageNode {
     selectedText: row.selected_text,
     sessionId: row.session_id,
     machineId: row.machine_id,
+    runtimeId: row.runtime_id,
+    runtimeKind: row.runtime_kind,
     createdAt: row.created_at,
   };
 }

@@ -1,4 +1,4 @@
-import { AgentRuntimeEnvironment, AgentRuntimeKind } from "@netchat/shared";
+import { AgentRuntimeDescriptor, AgentRuntimeEnvironment, AgentRuntimeKind } from "@netchat/shared";
 
 import {
   detectHostPlatform,
@@ -8,9 +8,13 @@ import {
 } from "./runtime-config.js";
 
 export async function detectRuntimeEnvironment(
-  runtimeKind: AgentRuntimeKind,
+  runtimeDescriptor: AgentRuntimeDescriptor | AgentRuntimeKind,
   workingDirectory: string,
 ): Promise<AgentRuntimeEnvironment> {
+  const runtimeKind =
+    typeof runtimeDescriptor === "string" ? runtimeDescriptor : runtimeDescriptor.runtimeKind;
+  const runtimeId =
+    typeof runtimeDescriptor === "string" ? `${runtimeDescriptor}_local` : runtimeDescriptor.runtimeId;
   const platform = detectHostPlatform();
   const runtimeLabel = resolveRuntimeLabel(runtimeKind);
 
@@ -18,6 +22,7 @@ export async function detectRuntimeEnvironment(
     return {
       platform,
       arch: process.arch,
+      runtimeId,
       runtimeKind,
       runtimeLabel,
       installed: true,
@@ -34,6 +39,7 @@ export async function detectRuntimeEnvironment(
     return {
       platform,
       arch: process.arch,
+      runtimeId,
       runtimeKind,
       runtimeLabel,
       installed: false,
@@ -55,6 +61,7 @@ export async function detectRuntimeEnvironment(
   return {
     platform,
     arch: process.arch,
+    runtimeId,
     runtimeKind,
     runtimeLabel,
     installed: true,

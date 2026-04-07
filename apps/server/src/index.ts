@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
+  AgentRuntimeOption,
   AgentTurnEvent,
   AgentTurnInput,
   AgentTurnResult,
@@ -82,6 +83,8 @@ app.get("/api/workspace", async (): Promise<WorkspaceState> => store.getWorkspac
 
 app.get("/api/graph", async () => store.getSnapshot());
 
+app.get("/api/agents", async (): Promise<AgentRuntimeOption[]> => machines.listAgentRuntimes());
+
 app.get("/api/ui-config", async (): Promise<UiConfig> => ({
   showSessionIds: readBooleanEnv("NETCHAT_SHOW_SESSION_IDS"),
 }));
@@ -144,11 +147,11 @@ app.patch("/api/nets/:netId", async (request, reply) => {
   }
 
   try {
-    const workspace = store.renameNet(netId, (input.data as UpdateNetInput).title);
-    diagnostics.log("info", `Renamed net ${netId} for workspace ${workspace.workspaceId}.`);
+    const workspace = store.updateNet(netId, input.data as UpdateNetInput);
+    diagnostics.log("info", `Updated net ${netId} for workspace ${workspace.workspaceId}.`);
     return workspace;
   } catch (error) {
-    diagnostics.log("warn", `Renaming net ${netId} failed: ${formatError(error)}`);
+    diagnostics.log("warn", `Updating net ${netId} failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });
@@ -253,12 +256,16 @@ app.post("/api/root-turn/stream", async (request, reply) => {
 
   const baseSnapshot = store.getSnapshot();
   const rootBranch = baseSnapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
+  const activeNet = store.getActiveNetSummary();
   const runtimePrompt = input.data.selectedText
     ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
     : input.data.prompt;
 
   try {
-    const machine = machines.resolveMachine(input.data.machineId ?? rootBranch?.machineId ?? null);
+    const machine = machines.resolveMachine({
+      preferredMachineId: input.data.machineId ?? rootBranch?.machineId ?? null,
+      preferredRuntimeId: rootBranch?.runtimeId ?? activeNet.agentRuntimeId ?? null,
+    });
     const turnId = input.data.clientTurnId ?? makeId("turn");
     const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
     const assistantMessageId = input.data.clientAssistantMessageId ?? makeId("msg");
@@ -285,6 +292,8 @@ app.post("/api/root-turn/stream", async (request, reply) => {
       assistantMessageId,
       createdAt,
       machineId: machine.id,
+      runtimeId: machine.environment.runtimeId,
+      runtimeKind: machine.environment.runtimeKind,
       prompt: input.data.prompt,
       selectedText: input.data.selectedText ?? null,
       userMessageId,
@@ -333,11 +342,16 @@ app.post("/api/branches/stream", async (request, reply) => {
   }
 
   const sourceMessage = store.getMessage(input.data.sourceMessageId);
-  if (!sourceMessage?.machineId) {
-    return reply.status(400).send({ error: "The source message does not have a machine id yet." });
+  if (!sourceMessage) {
+    return reply.status(400).send({ error: "The source message does not exist." });
   }
 
   try {
+    const activeNet = store.getActiveNetSummary();
+    const machine = machines.resolveMachine({
+      preferredMachineId: sourceMessage.machineId ?? null,
+      preferredRuntimeId: sourceMessage.runtimeId ?? activeNet.agentRuntimeId ?? null,
+    });
     const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
     const branchPrompt = buildPrefixReplayPrompt({
       history: visibleHistory,
@@ -354,9 +368,17 @@ app.post("/api/branches/stream", async (request, reply) => {
       branchId,
       createdAt,
       input: input.data as CreateBranchInput,
+      machineId: machine.id,
+      runtimeId: machine.environment.runtimeId,
+      runtimeKind: machine.environment.runtimeKind,
       userMessageId,
     });
-    const streamingJob = machines.enqueueStreamingJob(sourceMessage.machineId, {
+    const streamingJob = machines.enqueueStreamingJob(
+      {
+        preferredMachineId: sourceMessage.machineId ?? null,
+        preferredRuntimeId: sourceMessage.runtimeId ?? activeNet.agentRuntimeId ?? null,
+      },
+      {
       kind: "branch-create",
       payload: {
         prompt: branchPrompt,
@@ -368,13 +390,14 @@ app.post("/api/branches/stream", async (request, reply) => {
           selectedText: input.data.mode === "selection" ? input.data.selectedText ?? null : null,
         },
       } satisfies AgentTurnInput,
-    });
+      },
+    );
 
     diagnostics.log(
       "info",
       input.data.mode === "message"
-        ? `Streaming branch-from-message request from ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
-        : `Streaming branch-from-selection request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
+        ? `Streaming branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
+        : `Streaming branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
     );
 
     return streamTurnResponse({
@@ -414,7 +437,7 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
   }
 
   const branch = store.getBranch(branchId);
-  if (!branch?.sessionId || !branch.machineId) {
+  if (!branch?.sessionId) {
     return reply.status(400).send({ error: "This branch does not have a session id yet." });
   }
 
@@ -423,6 +446,11 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
     : input.data.prompt;
 
   try {
+    const activeNet = store.getActiveNetSummary();
+    const machine = machines.resolveMachine({
+      preferredMachineId: branch.machineId ?? null,
+      preferredRuntimeId: branch.runtimeId ?? activeNet.agentRuntimeId ?? null,
+    });
     const turnId = input.data.clientTurnId ?? makeId("turn");
     const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
     const assistantMessageId = input.data.clientAssistantMessageId ?? makeId("msg");
@@ -431,12 +459,19 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
       assistantMessageId,
       branchId,
       createdAt,
-      machineId: branch.machineId,
+      machineId: machine.id,
+      runtimeId: machine.environment.runtimeId,
+      runtimeKind: machine.environment.runtimeKind,
       prompt: input.data.prompt,
       selectedText: input.data.selectedText ?? null,
       userMessageId,
     });
-    const streamingJob = machines.enqueueStreamingJob(branch.machineId, {
+    const streamingJob = machines.enqueueStreamingJob(
+      {
+        preferredMachineId: branch.machineId ?? null,
+        preferredRuntimeId: branch.runtimeId ?? activeNet.agentRuntimeId ?? null,
+      },
+      {
       kind: "branch-turn",
       payload: {
         prompt: runtimePrompt,
@@ -449,13 +484,14 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
           selectedText: input.data.selectedText ?? null,
         },
       },
-    });
+      },
+    );
 
     diagnostics.log(
       "info",
       input.data.selectedText
-        ? `Streaming branch turn for ${branchId} from highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`
-        : `Streaming branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`,
+        ? `Streaming branch turn for ${branchId} from highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${branch.sessionId}.`
+        : `Streaming branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${branch.sessionId}.`,
     );
 
     return streamTurnResponse({
@@ -495,12 +531,16 @@ app.post("/api/root-turn", async (request, reply) => {
 
   const snapshot = store.getSnapshot();
   const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
+  const activeNet = store.getActiveNetSummary();
   const runtimePrompt = input.data.selectedText
     ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
     : input.data.prompt;
 
   try {
-    const machine = machines.resolveMachine(input.data.machineId ?? rootBranch?.machineId ?? null);
+    const machine = machines.resolveMachine({
+      preferredMachineId: input.data.machineId ?? rootBranch?.machineId ?? null,
+      preferredRuntimeId: rootBranch?.runtimeId ?? activeNet.agentRuntimeId ?? null,
+    });
     diagnostics.log(
       "info",
       input.data.selectedText
@@ -547,11 +587,16 @@ app.post("/api/branches", async (request, reply) => {
   }
 
   const sourceMessage = store.getMessage(input.data.sourceMessageId);
-  if (!sourceMessage?.machineId) {
-    return reply.status(400).send({ error: "The source message does not have a machine id yet." });
+  if (!sourceMessage) {
+    return reply.status(400).send({ error: "The source message does not exist." });
   }
 
   try {
+    const activeNet = store.getActiveNetSummary();
+    const machine = machines.resolveMachine({
+      preferredMachineId: sourceMessage.machineId ?? null,
+      preferredRuntimeId: sourceMessage.runtimeId ?? activeNet.agentRuntimeId ?? null,
+    });
     const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
     const branchPrompt = buildPrefixReplayPrompt({
       history: visibleHistory,
@@ -562,10 +607,15 @@ app.post("/api/branches", async (request, reply) => {
     diagnostics.log(
       "info",
       input.data.mode === "message"
-        ? `Received branch-from-message request from ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
-        : `Received branch-from-selection request from message ${sourceMessage.id} on machine ${sourceMessage.machineId} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
+        ? `Received branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
+        : `Received branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
     );
-    const runtime = await machines.enqueueJob(sourceMessage.machineId, {
+    const runtime = await machines.enqueueJob(
+      {
+        preferredMachineId: sourceMessage.machineId ?? null,
+        preferredRuntimeId: sourceMessage.runtimeId ?? activeNet.agentRuntimeId ?? null,
+      },
+      {
       kind: "branch-create",
       payload: {
         prompt: branchPrompt,
@@ -577,7 +627,8 @@ app.post("/api/branches", async (request, reply) => {
           selectedText: input.data.mode === "selection" ? input.data.selectedText ?? null : null,
         },
       } satisfies AgentTurnInput,
-    });
+      },
+    );
 
     const nextSnapshot = store.applyBranchCreation(input.data as CreateBranchInput, runtime);
     diagnostics.log(
@@ -599,7 +650,7 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
   }
 
   const branch = store.getBranch(branchId);
-  if (!branch?.sessionId || !branch.machineId) {
+  if (!branch?.sessionId) {
     return reply.status(400).send({ error: "This branch does not have a session id yet." });
   }
 
@@ -608,13 +659,23 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
     : input.data.prompt;
 
   try {
+    const activeNet = store.getActiveNetSummary();
+    const machine = machines.resolveMachine({
+      preferredMachineId: branch.machineId ?? null,
+      preferredRuntimeId: branch.runtimeId ?? activeNet.agentRuntimeId ?? null,
+    });
     diagnostics.log(
       "info",
       input.data.selectedText
-        ? `Received branch turn for ${branchId} from a highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`
-        : `Received branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to machine ${branch.machineId} with session ${branch.sessionId}.`,
+        ? `Received branch turn for ${branchId} from a highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${branch.sessionId}.`
+        : `Received branch turn for ${branchId} (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${branch.sessionId}.`,
     );
-    const runtime = await machines.enqueueJob(branch.machineId, {
+    const runtime = await machines.enqueueJob(
+      {
+        preferredMachineId: branch.machineId ?? null,
+        preferredRuntimeId: branch.runtimeId ?? activeNet.agentRuntimeId ?? null,
+      },
+      {
       kind: "branch-turn",
       payload: {
         prompt: runtimePrompt,
@@ -627,7 +688,8 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
           selectedText: input.data.selectedText ?? null,
         },
       },
-    });
+      },
+    );
 
     const nextSnapshot = store.applyBranchTurn(branchId, input.data.prompt, runtime, {
       selectedText: input.data.selectedText ?? null,
@@ -827,6 +889,8 @@ function buildOptimisticRootTurnSnapshot(
     prompt: string;
     selectedText: string | null;
     machineId: string;
+    runtimeId: string;
+    runtimeKind: MessageNode["runtimeKind"];
     createdAt: string;
   },
 ) {
@@ -840,6 +904,8 @@ function buildOptimisticRootTurnSnapshot(
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt: input.createdAt,
     } satisfies MessageNode,
     {
@@ -850,6 +916,8 @@ function buildOptimisticRootTurnSnapshot(
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt: input.createdAt,
     } satisfies MessageNode,
   ];
@@ -875,6 +943,9 @@ function buildOptimisticBranchCreationSnapshot(
     userMessageId: string;
     assistantMessageId: string;
     input: CreateBranchInput;
+    machineId: string;
+    runtimeId: string;
+    runtimeKind: Branch["runtimeKind"];
     createdAt: string;
   },
 ) {
@@ -889,7 +960,9 @@ function buildOptimisticBranchCreationSnapshot(
     parentBranchId: sourceMessage.branchId,
     sourceMessageId: sourceMessage.id,
     sessionId: null,
-    machineId: sourceMessage.machineId,
+    machineId: input.machineId,
+    runtimeId: input.runtimeId,
+    runtimeKind: input.runtimeKind,
     title: branchTitle,
     selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
     startOffset: input.input.mode === "selection" ? input.input.startOffset ?? null : null,
@@ -905,7 +978,9 @@ function buildOptimisticBranchCreationSnapshot(
       content: userMessageContent,
       selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
       sessionId: null,
-      machineId: sourceMessage.machineId,
+      machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt: input.createdAt,
     } satisfies MessageNode,
     {
@@ -915,7 +990,9 @@ function buildOptimisticBranchCreationSnapshot(
       content: "",
       selectedText: null,
       sessionId: null,
-      machineId: sourceMessage.machineId,
+      machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt: input.createdAt,
     } satisfies MessageNode,
   ];
@@ -941,6 +1018,8 @@ function buildOptimisticBranchTurnSnapshot(
     prompt: string;
     selectedText: string | null;
     machineId: string;
+    runtimeId: string;
+    runtimeKind: MessageNode["runtimeKind"];
     createdAt: string;
   },
 ) {
@@ -954,6 +1033,8 @@ function buildOptimisticBranchTurnSnapshot(
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt: input.createdAt,
     } satisfies MessageNode,
     {
@@ -964,6 +1045,8 @@ function buildOptimisticBranchTurnSnapshot(
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt: input.createdAt,
     } satisfies MessageNode,
   ];

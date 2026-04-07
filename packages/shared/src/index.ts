@@ -8,6 +8,8 @@ export type Branch = {
   sourceMessageId: string | null;
   sessionId: string | null;
   machineId: string | null;
+  runtimeId: string | null;
+  runtimeKind: AgentRuntimeKind | null;
   title: string;
   selectedText: string | null;
   startOffset: number | null;
@@ -23,6 +25,8 @@ export type MessageNode = {
   selectedText: string | null;
   sessionId: string | null;
   machineId: string | null;
+  runtimeId: string | null;
+  runtimeKind: AgentRuntimeKind | null;
   createdAt: string;
 };
 
@@ -43,6 +47,9 @@ export type GraphSnapshot = {
 export type WorkspaceNetSummary = {
   id: string;
   title: string;
+  agentRuntimeId: string | null;
+  agentRuntimeKind: AgentRuntimeKind | null;
+  agentRuntimeLabel: string | null;
   createdAt: string;
   lastOpenedAt: string;
   latestMessageAt: string | null;
@@ -63,6 +70,8 @@ export type HostPlatform = "windows" | "macos" | "linux" | "unknown";
 
 export type AgentRuntimeKind = "claude" | "codex" | "droid" | "opencode" | "mock";
 
+export const agentRuntimeKindSchema = z.enum(["claude", "codex", "droid", "opencode", "mock"]);
+
 export type AgentRuntimeDescriptor = {
   runtimeKind: AgentRuntimeKind;
   runtimeLabel: string;
@@ -72,6 +81,7 @@ export type AgentRuntimeDescriptor = {
 export type AgentRuntimeEnvironment = {
   platform: HostPlatform;
   arch: string;
+  runtimeId: string;
   runtimeKind: AgentRuntimeKind;
   runtimeLabel: string;
   installed: boolean;
@@ -82,6 +92,20 @@ export type AgentRuntimeEnvironment = {
 };
 
 export type RuntimeEnvironment = AgentRuntimeEnvironment;
+
+export type AgentRuntimeOption = {
+  runtimeId: string;
+  runtimeKind: AgentRuntimeKind;
+  runtimeLabel: string;
+  machineId: string | null;
+  machineName: string | null;
+  status: MachineStatus;
+  installed: boolean;
+  version: string | null;
+  executablePath: string | null;
+  workingDirectory: string;
+  detectionError: string | null;
+};
 
 export type DaemonLogLevel = "info" | "warn" | "error";
 
@@ -340,13 +364,50 @@ export type CreateBranchTurnInput = z.infer<typeof createBranchTurnInputSchema>;
 
 export const createNetInputSchema = z.object({
   title: z.string().trim().max(120).default(""),
+  agentRuntimeId: z.string().trim().min(1).max(120).optional(),
+  agentRuntimeKind: agentRuntimeKindSchema.optional(),
+}).superRefine((input, ctx) => {
+  const hasRuntimeId = typeof input.agentRuntimeId === "string";
+  const hasRuntimeKind = typeof input.agentRuntimeKind === "string";
+
+  if (hasRuntimeId !== hasRuntimeKind) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "agentRuntimeId and agentRuntimeKind must be provided together.",
+      path: hasRuntimeId ? ["agentRuntimeKind"] : ["agentRuntimeId"],
+    });
+  }
 });
 
 export type CreateNetInput = z.infer<typeof createNetInputSchema>;
 
-export const updateNetInputSchema = z.object({
-  title: z.string().trim().min(1).max(120),
-});
+export const updateNetInputSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120).optional(),
+    agentRuntimeId: z.string().trim().min(1).max(120).optional(),
+    agentRuntimeKind: agentRuntimeKindSchema.optional(),
+  })
+  .superRefine((input, ctx) => {
+    const hasTitle = typeof input.title === "string";
+    const hasRuntimeId = typeof input.agentRuntimeId === "string";
+    const hasRuntimeKind = typeof input.agentRuntimeKind === "string";
+
+    if (!hasTitle && !hasRuntimeId && !hasRuntimeKind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one net field must be updated.",
+        path: [],
+      });
+    }
+
+    if (hasRuntimeId !== hasRuntimeKind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "agentRuntimeId and agentRuntimeKind must be provided together.",
+        path: hasRuntimeId ? ["agentRuntimeKind"] : ["agentRuntimeId"],
+      });
+    }
+  });
 
 export type UpdateNetInput = z.infer<typeof updateNetInputSchema>;
 
@@ -394,6 +455,21 @@ export function createPendingAssistantState(): AssistantStreamState {
     responseText: "",
     errorMessage: null,
   };
+}
+
+export function resolveAgentRuntimeLabel(runtimeKind: AgentRuntimeKind) {
+  switch (runtimeKind) {
+    case "claude":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    case "droid":
+      return "Droid";
+    case "opencode":
+      return "OpenCode";
+    case "mock":
+      return "Mock runtime";
+  }
 }
 
 function finalizeAssistantBlocks(blocks: AssistantStreamBlock[] | null | undefined): AssistantStreamBlock[] {

@@ -19,12 +19,12 @@ loadLocalEnv();
 const app = Fastify({ logger: false });
 const runtime = createRuntimeAdapter();
 const runtimeDescriptor = runtime.getDescriptor();
-const initialEnvironment = await detectRuntimeEnvironment(runtimeDescriptor.runtimeKind, runtime.getWorkingDirectory());
+const initialEnvironment = await detectRuntimeEnvironment(runtimeDescriptor, runtime.getWorkingDirectory());
 const diagnostics = new DaemonDiagnosticsStore(initialEnvironment);
 const machineClient = new MachineClient(
   runtime,
   async () => {
-    const environment = await detectRuntimeEnvironment(runtimeDescriptor.runtimeKind, runtime.getWorkingDirectory());
+    const environment = await detectRuntimeEnvironment(runtimeDescriptor, runtime.getWorkingDirectory());
     diagnostics.recordEnvironment(environment);
     return environment;
   },
@@ -45,7 +45,7 @@ await app.register(cors, { origin: true });
 app.get("/health", async () => ({ ok: true }));
 
 app.get("/runtime/environment", async () => {
-  const environment = await detectRuntimeEnvironment(runtimeDescriptor.runtimeKind, runtime.getWorkingDirectory());
+  const environment = await detectRuntimeEnvironment(runtimeDescriptor, runtime.getWorkingDirectory());
   diagnostics.recordEnvironment(environment);
   return environment;
 });

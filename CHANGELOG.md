@@ -4,6 +4,14 @@
 
 After each commit, update the Changelog under the current date. Each entry must be short, specific, and describe the actual change and its impact; do not copy vague commit messages. Prioritize new features, behavior changes, bug fixes, and API/config/schema updates. Use a consistent date + bullet list format, with one change per bullet, so others can understand it immediately.
 
+## 2026-04-07
+
+- Switched local app startup from a single runtime daemon to parallel Claude/Codex/Droid daemons, exposed `/api/agents`, and routed turns by stable `runtimeId` so nets can target an agent without setting `NETCHAT_RUNTIME` before launch.
+- Added net-scoped agent persistence to `workspace.json` plus runtime metadata on branches/messages, so reopening a historical net keeps its original agent choice and branch/session resumes survive daemon restarts without relying on stale random machine ids.
+- Added a new-net agent dropdown beside the workspace path, surfaced each net's bound agent in the history drawer and header status, and blocked sending when the selected net agent is offline or missing so agent selection is explicit and visible in the UI.
+- Moved the new-net agent selector to sit directly beside the workspace path and removed the non-selectable `Select agent` option from the runtime dropdown menu so the control reads as a real runtime picker instead of a placeholder field.
+- Auto-migrated legacy nets with existing history to `Claude Code` and removed the old-net header dropdown fallback, so pre-agent-binding conversations now open with a stable default agent instead of prompting again in the top-right chrome.
+
 ## 2026-04-06
 
 - Added a unified agent runtime contract across shared/server/daemon layers, so netchat now executes generic `executeTurn` requests with runtime-neutral events, results, and diagnostics instead of Claude-shaped adapter methods.
