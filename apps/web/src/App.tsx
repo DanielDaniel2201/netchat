@@ -1918,6 +1918,24 @@ function CanvasThumbnail({
     };
   }, [bounds, thumbnailHeight, thumbnailWidth]);
 
+  const thumbnailFlowBounds = useMemo(() => {
+    if (!bounds || !thumbnailGeometry || thumbnailGeometry.scale <= 0) {
+      return null;
+    }
+
+    const width = thumbnailWidth / thumbnailGeometry.scale;
+    const height = thumbnailHeight / thumbnailGeometry.scale;
+
+    return {
+      minX: bounds.minX - thumbnailGeometry.offsetX / thumbnailGeometry.scale,
+      minY: bounds.minY - thumbnailGeometry.offsetY / thumbnailGeometry.scale,
+      maxX: bounds.minX - thumbnailGeometry.offsetX / thumbnailGeometry.scale + width,
+      maxY: bounds.minY - thumbnailGeometry.offsetY / thumbnailGeometry.scale + height,
+      width,
+      height,
+    };
+  }, [bounds, thumbnailGeometry, thumbnailHeight, thumbnailWidth]);
+
   const viewportRect = useMemo(() => {
     if (!bounds || !thumbnailGeometry || canvasSize.width <= 0 || canvasSize.height <= 0 || viewport.zoom <= 0) {
       return null;
@@ -1942,7 +1960,7 @@ function CanvasThumbnail({
 
   const flowPointFromClient = useCallback(
     (clientX: number, clientY: number) => {
-      if (!bounds || !thumbnailGeometry || !frameRef.current) {
+      if (!thumbnailFlowBounds || !thumbnailGeometry || !frameRef.current) {
         return null;
       }
 
@@ -1951,21 +1969,29 @@ function CanvasThumbnail({
       const localY = clamp(clientY - rect.top, 0, rect.height);
 
       return {
-        x: bounds.minX + (localX - thumbnailGeometry.offsetX) / thumbnailGeometry.scale,
-        y: bounds.minY + (localY - thumbnailGeometry.offsetY) / thumbnailGeometry.scale,
+        x: thumbnailFlowBounds.minX + localX / thumbnailGeometry.scale,
+        y: thumbnailFlowBounds.minY + localY / thumbnailGeometry.scale,
       };
     },
-    [bounds, thumbnailGeometry],
+    [thumbnailFlowBounds, thumbnailGeometry],
   );
 
   const moveViewport = useCallback(
     (flowLeft: number, flowTop: number) => {
-      if (!bounds || !viewportRect) {
+      if (!thumbnailFlowBounds || !viewportRect) {
         return;
       }
 
-      const nextLeft = clamp(flowLeft, bounds.minX, Math.max(bounds.minX, bounds.maxX - viewportRect.flowWidth));
-      const nextTop = clamp(flowTop, bounds.minY, Math.max(bounds.minY, bounds.maxY - viewportRect.flowHeight));
+      const nextLeft = clamp(
+        flowLeft,
+        thumbnailFlowBounds.minX,
+        Math.max(thumbnailFlowBounds.minX, thumbnailFlowBounds.maxX - viewportRect.flowWidth),
+      );
+      const nextTop = clamp(
+        flowTop,
+        thumbnailFlowBounds.minY,
+        Math.max(thumbnailFlowBounds.minY, thumbnailFlowBounds.maxY - viewportRect.flowHeight),
+      );
 
       onViewportChange({
         x: -nextLeft * viewport.zoom,
@@ -1973,7 +1999,7 @@ function CanvasThumbnail({
         zoom: viewport.zoom,
       });
     },
-    [bounds, onViewportChange, viewport.zoom, viewportRect],
+    [onViewportChange, thumbnailFlowBounds, viewport.zoom, viewportRect],
   );
 
   useEffect(() => {
