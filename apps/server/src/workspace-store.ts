@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  AgentRuntimeKind,
   AgentTurnResult,
   AssistantStreamState,
   Branch,
@@ -11,19 +12,21 @@ import {
   CreateNetInput,
   GraphSnapshot,
   MessageNode,
+  UpdateNetInput,
   WorkspaceNetSummary,
   WorkspaceState,
   nowIso,
+  resolveAgentRuntimeLabel,
 } from "@netchat/shared";
 
 import { GraphStore, readLatestMessageTimestamp } from "./store.js";
 
-type WorkspaceNetRecord = Omit<WorkspaceNetSummary, "latestMessageAt"> & {
+type WorkspaceNetRecord = Omit<WorkspaceNetSummary, "latestMessageAt" | "agentRuntimeLabel"> & {
   databasePath: string;
 };
 
 type WorkspaceManifest = {
-  version: 1;
+  version: 2;
   workspaceId: string;
   workingDirectory: string;
   activeNetId: string;
@@ -71,6 +74,10 @@ export class WorkspaceStore {
     return this.activeStore.getSnapshot();
   }
 
+  getActiveNetSummary(): WorkspaceNetSummary {
+    return this.buildNetSummary(this.getActiveNetRecord());
+  }
+
   getBranch(branchId: string): Branch | undefined {
     return this.activeStore.getBranch(branchId);
   }
@@ -92,6 +99,8 @@ export class WorkspaceStore {
     this.manifest.nets.push({
       id: netId,
       title,
+      agentRuntimeId: input.agentRuntimeId ?? null,
+      agentRuntimeKind: input.agentRuntimeKind ?? null,
       createdAt,
       lastOpenedAt: createdAt,
       databasePath,
@@ -118,13 +127,26 @@ export class WorkspaceStore {
     return this.getWorkspaceState();
   }
 
-  renameNet(netId: string, title: string): WorkspaceState {
+  updateNet(netId: string, input: UpdateNetInput): WorkspaceState {
     const net = this.findNetRecord(netId);
     if (!net) {
       throw new Error("The requested net does not exist in this workspace.");
     }
 
-    net.title = title.trim();
+    if (typeof input.title === "string") {
+      net.title = input.title.trim();
+    }
+
+    if (typeof input.agentRuntimeId === "string" && input.agentRuntimeKind) {
+      const canUpdateAgent = !this.netHasMessages(net) || net.agentRuntimeId === null;
+      if (!canUpdateAgent) {
+        throw new Error("This net already has messages, so its agent can no longer be changed.");
+      }
+
+      net.agentRuntimeId = input.agentRuntimeId;
+      net.agentRuntimeKind = input.agentRuntimeKind;
+    }
+
     this.writeManifest();
 
     return this.getWorkspaceState();
@@ -176,7 +198,10 @@ export class WorkspaceStore {
   ): GraphSnapshot {
     const shouldRetitle = this.activeStore.getSnapshot().messages.length === 0;
     const nextSnapshot = this.activeStore.applyRootTurn(prompt, runtime, options);
-    this.touchActiveNet(shouldRetitle ? prompt : null);
+    this.touchActiveNet({
+      promptToRetitle: shouldRetitle ? prompt : null,
+      runtime,
+    });
     return nextSnapshot;
   }
 
@@ -191,7 +216,9 @@ export class WorkspaceStore {
     },
   ): GraphSnapshot {
     const nextSnapshot = this.activeStore.applyBranchCreation(input, runtime, options);
-    this.touchActiveNet();
+    this.touchActiveNet({
+      runtime,
+    });
     return nextSnapshot;
   }
 
@@ -207,7 +234,9 @@ export class WorkspaceStore {
     },
   ): GraphSnapshot {
     const nextSnapshot = this.activeStore.applyBranchTurn(branchId, prompt, runtime, options);
-    this.touchActiveNet();
+    this.touchActiveNet({
+      runtime,
+    });
     return nextSnapshot;
   }
 
@@ -226,7 +255,7 @@ export class WorkspaceStore {
     const createdAt = nowIso();
     const netId = makeNetId();
     const manifest: WorkspaceManifest = {
-      version: 1,
+      version: 2,
       workspaceId: this.workspaceId,
       workingDirectory: this.workingDirectory,
       activeNetId: netId,
@@ -234,6 +263,8 @@ export class WorkspaceStore {
         {
           id: netId,
           title: createDefaultNetTitle(createdAt),
+          agentRuntimeId: null,
+          agentRuntimeKind: null,
           createdAt,
           lastOpenedAt: createdAt,
           databasePath: this.resolveInitialNetDatabasePath(netId),
@@ -269,7 +300,7 @@ export class WorkspaceStore {
       : nets[0].id;
 
     return {
-      version: 1,
+      version: 2,
       workspaceId: this.workspaceId,
       workingDirectory: this.workingDirectory,
       activeNetId,
@@ -300,6 +331,11 @@ export class WorkspaceStore {
       typeof record.lastOpenedAt === "string" && record.lastOpenedAt.trim().length > 0
         ? record.lastOpenedAt
         : createdAt;
+    const agentRuntimeId =
+      typeof record.agentRuntimeId === "string" && record.agentRuntimeId.trim().length > 0
+        ? record.agentRuntimeId.trim()
+        : null;
+    const agentRuntimeKind = isAgentRuntimeKind(record.agentRuntimeKind) ? record.agentRuntimeKind : null;
     const databasePath =
       typeof record.databasePath === "string" && record.databasePath.trim().length > 0
         ? path.resolve(record.databasePath)
@@ -308,6 +344,8 @@ export class WorkspaceStore {
     return {
       id,
       title,
+      agentRuntimeId: agentRuntimeId && agentRuntimeKind ? agentRuntimeId : null,
+      agentRuntimeKind: agentRuntimeId && agentRuntimeKind ? agentRuntimeKind : null,
       createdAt,
       lastOpenedAt,
       databasePath,
@@ -320,6 +358,8 @@ export class WorkspaceStore {
     return {
       id: netId,
       title: createDefaultNetTitle(createdAt),
+      agentRuntimeId: null,
+      agentRuntimeKind: null,
       createdAt,
       lastOpenedAt: createdAt,
       databasePath: this.resolveInitialNetDatabasePath(netId),
@@ -364,6 +404,8 @@ export class WorkspaceStore {
         {
           id: netId,
           title: createDefaultNetTitle(createdAt),
+          agentRuntimeId: null,
+          agentRuntimeKind: null,
           createdAt,
           lastOpenedAt: createdAt,
           databasePath: path.join(this.netsDirectory, `${netId}.db`),
@@ -394,6 +436,9 @@ export class WorkspaceStore {
     return {
       id: net.id,
       title: net.title,
+      agentRuntimeId: net.agentRuntimeId,
+      agentRuntimeKind: net.agentRuntimeKind,
+      agentRuntimeLabel: net.agentRuntimeKind ? resolveAgentRuntimeLabel(net.agentRuntimeKind) : null,
       createdAt: net.createdAt,
       lastOpenedAt: net.lastOpenedAt,
       latestMessageAt: readLatestMessageTimestamp(net.databasePath),
@@ -439,11 +484,18 @@ export class WorkspaceStore {
     return fallback;
   }
 
-  private touchActiveNet(promptToRetitle?: string | null) {
+  private touchActiveNet(input?: {
+    promptToRetitle?: string | null;
+    runtime?: Pick<AgentTurnResult, "runtimeId" | "runtimeKind">;
+  }) {
     const activeNet = this.getActiveNetRecord();
     activeNet.lastOpenedAt = nowIso();
-    if (promptToRetitle && isDefaultNetTitle(activeNet.title)) {
-      activeNet.title = deriveNetTitleFromPrompt(promptToRetitle);
+    if (!activeNet.agentRuntimeId && input?.runtime) {
+      activeNet.agentRuntimeId = input.runtime.runtimeId;
+      activeNet.agentRuntimeKind = input.runtime.runtimeKind;
+    }
+    if (input?.promptToRetitle && isDefaultNetTitle(activeNet.title)) {
+      activeNet.title = deriveNetTitleFromPrompt(input.promptToRetitle);
     }
     this.writeManifest();
   }
@@ -478,10 +530,17 @@ export class WorkspaceStore {
     return {
       id: net.id,
       title: net.title,
+      agentRuntimeId: net.agentRuntimeId,
+      agentRuntimeKind: net.agentRuntimeKind,
+      agentRuntimeLabel: net.agentRuntimeKind ? resolveAgentRuntimeLabel(net.agentRuntimeKind) : null,
       createdAt: net.createdAt,
       lastOpenedAt: net.lastOpenedAt,
     };
   }
+}
+
+function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {
+  return value === "claude" || value === "codex" || value === "droid" || value === "opencode" || value === "mock";
 }
 
 function resolveWorkspaceWorkingDirectory() {

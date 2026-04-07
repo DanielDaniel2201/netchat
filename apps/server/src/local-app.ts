@@ -7,6 +7,8 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import { AgentRuntimeKind, AgentRuntimeOption, resolveAgentRuntimeLabel } from "@netchat/shared";
+
 const runtimeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const sourceMode = existsSync(path.join(runtimeRoot, "apps", "server", "src", "index.ts"));
 const tsxCliPath = path.join(runtimeRoot, "node_modules", "tsx", "dist", "cli.mjs");
@@ -29,6 +31,7 @@ const packagedServerEntryPath = path.join(runtimeRoot, "dist", "apps", "server",
 const sourceDaemonEntryPath = path.join(runtimeRoot, "apps", "daemon", "src", "index.ts");
 const packagedDaemonEntryPath = path.join(runtimeRoot, "dist", "apps", "daemon", "index.mjs");
 const managedChildren: ChildProcess[] = [];
+const managedRuntimeKinds = ["claude", "codex", "droid"] as const satisfies readonly AgentRuntimeKind[];
 
 let shuttingDown = false;
 
@@ -77,7 +80,7 @@ async function main() {
       ...process.env,
       NODE_NO_WARNINGS: "1",
       NETCHAT_APP_DATA_DIR: config.appDataDirectory,
-      NETCHAT_DAEMON_URL: config.daemonUrl,
+      NETCHAT_DAEMON_URL: config.daemons[0]?.url ?? "",
       NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
       NETCHAT_WORKSPACE_DIR: config.workingDirectory,
       NETCHAT_LOCAL_MODE: "true",
@@ -91,29 +94,41 @@ async function main() {
   void serverProcess.exitPromise.catch(() => undefined);
   await waitForHealth(`${config.serverUrl}/health`);
 
-  const daemonProcess = startProcess("daemon", process.execPath, resolveManagedEntryArgs("daemon"), {
-    cwd: runtimeRoot,
-    env: {
-      ...process.env,
-      NODE_NO_WARNINGS: "1",
-      NETCHAT_RUNTIME_CWD: process.env.NETCHAT_RUNTIME_CWD ?? process.env.CLAUDE_PROJECT_CWD ?? config.workingDirectory,
-      CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? process.env.NETCHAT_RUNTIME_CWD ?? config.workingDirectory,
-      DAEMON_PORT: String(config.daemonPort),
-      NETCHAT_APP_DATA_DIR: config.appDataDirectory,
-      NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
-      NETCHAT_LOCAL_MODE: "true",
-      NETCHAT_SERVER_URL: config.serverUrl,
-      NETCHAT_WORKSPACE_DIR: config.workingDirectory,
-    },
-    stdio: "inherit",
+  const daemonProcesses = config.daemons.map((daemon) => {
+    const daemonProcess = startProcess(
+      `${daemon.runtimeLabel} daemon`,
+      process.execPath,
+      resolveManagedEntryArgs("daemon"),
+      {
+        cwd: runtimeRoot,
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+          NETCHAT_RUNTIME: daemon.runtimeKind,
+          NETCHAT_RUNTIME_ID: daemon.runtimeId,
+          NETCHAT_MACHINE_NAME: daemon.runtimeLabel,
+          NETCHAT_RUNTIME_CWD: process.env.NETCHAT_RUNTIME_CWD ?? process.env.CLAUDE_PROJECT_CWD ?? config.workingDirectory,
+          CLAUDE_PROJECT_CWD: process.env.CLAUDE_PROJECT_CWD ?? process.env.NETCHAT_RUNTIME_CWD ?? config.workingDirectory,
+          DAEMON_PORT: String(daemon.port),
+          NETCHAT_APP_DATA_DIR: config.appDataDirectory,
+          NETCHAT_LAUNCH_CWD: process.env.NETCHAT_LAUNCH_CWD ?? config.workingDirectory,
+          NETCHAT_LOCAL_MODE: "true",
+          NETCHAT_SERVER_URL: config.serverUrl,
+          NETCHAT_WORKSPACE_DIR: config.workingDirectory,
+        },
+        stdio: "inherit",
+      },
+    );
+    void daemonProcess.exitPromise.catch(() => undefined);
+    return daemonProcess;
   });
-  void daemonProcess.exitPromise.catch(() => undefined);
 
-  await waitForHealth(`${config.daemonUrl}/health`);
-  await waitForRuntimeOnline(`${config.serverUrl}/api/runtime/diagnostics`);
+  await Promise.all(config.daemons.map((daemon) => waitForHealth(daemon.url + "/health")));
+  await waitForAgentsReady(`${config.serverUrl}/api/agents`);
 
   log(`Local controller ready at ${config.serverUrl}.`);
   log(`Workspace-scoped net history will persist under ${config.appDataDirectory}.`);
+  log(`Local agents ready: ${config.daemons.map((daemon) => `${daemon.runtimeLabel} (${daemon.url})`).join(", ")}.`);
   if (config.showSessionIds) {
     log("Developer mode is enabled: every message bubble will show its session_id.");
   }
@@ -121,7 +136,7 @@ async function main() {
     await openBrowser(config.serverUrl);
   }
 
-  await Promise.race([serverProcess.exitPromise, daemonProcess.exitPromise]);
+  await Promise.race([serverProcess.exitPromise, ...daemonProcesses.map((daemon) => daemon.exitPromise)]);
 }
 
 process.on("SIGINT", () => {
@@ -214,9 +229,14 @@ type LocalAppConfig = {
   databasePath: string | null;
   workingDirectory: string;
   serverPort: number;
-  daemonPort: number;
   serverUrl: string;
-  daemonUrl: string;
+  daemons: Array<{
+    runtimeKind: (typeof managedRuntimeKinds)[number];
+    runtimeId: string;
+    runtimeLabel: string;
+    port: number;
+    url: string;
+  }>;
   openBrowser: boolean;
   webBuildMode: WebBuildMode;
   showSessionIds: boolean;
@@ -239,10 +259,24 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
     explicit: configuredServerPort !== null,
   });
   const configuredDaemonPort = parsedArgs.daemonPort ?? readPortEnv("DAEMON_PORT");
-  const daemonPort = await resolvePort("daemon", configuredDaemonPort ?? 4318, {
-    explicit: configuredDaemonPort !== null,
-    reservedPorts: new Set([serverPort]),
-  });
+  const daemonBasePort = configuredDaemonPort ?? 4318;
+  const reservedPorts = new Set([serverPort]);
+  const daemons: LocalAppConfig["daemons"] = [];
+  for (const [index, runtimeKind] of managedRuntimeKinds.entries()) {
+    const runtimeLabel = resolveAgentRuntimeLabel(runtimeKind);
+    const port = await resolvePort(`${runtimeLabel} daemon`, daemonBasePort + index, {
+      explicit: configuredDaemonPort !== null && index === 0,
+      reservedPorts,
+    });
+    reservedPorts.add(port);
+    daemons.push({
+      runtimeKind,
+      runtimeId: `${runtimeKind}_local`,
+      runtimeLabel,
+      port,
+      url: `http://127.0.0.1:${port}`,
+    });
+  }
   const openBrowser =
     parsedArgs.openBrowser ?? !readBooleanEnv("NETCHAT_NO_BROWSER");
   const webBuildMode =
@@ -261,9 +295,8 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
     databasePath,
     workingDirectory,
     serverPort,
-    daemonPort,
     serverUrl: `http://127.0.0.1:${serverPort}`,
-    daemonUrl: `http://127.0.0.1:${daemonPort}`,
+    daemons,
     openBrowser,
     webBuildMode,
     showSessionIds,
@@ -379,7 +412,7 @@ function printLocalAppHelp() {
       "",
       "Options:",
       "  --port <number>               Controller port (default: 3001)",
-      "  --daemon-port <number>        Daemon port (default: 4318)",
+      "  --daemon-port <number>        First runtime daemon port (default: 4318)",
       "  --data-dir <path>             Override the local app data directory",
       "  --db-path <path>              Override the SQLite database path",
       "  --no-browser                  Do not open the browser automatically",
@@ -622,22 +655,22 @@ async function waitForHealth(url: string, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to become healthy.`);
 }
 
-async function waitForRuntimeOnline(url: string, timeoutMs = 30000) {
+async function waitForAgentsReady(url: string, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const diagnostics = await requestJson<{ status?: string }>(url);
-      if (diagnostics.status === "online") {
+      const agents = await requestJson<AgentRuntimeOption[]>(url);
+      if (agents.some((agent) => agent.status === "online" && agent.installed)) {
         return;
       }
     } catch {
-      // Ignore while the local daemon is still starting.
+      // Ignore while the local daemons are still starting.
     }
 
     await delay(500);
   }
 
-  throw new Error("Timed out waiting for the local daemon runtime to come online.");
+  throw new Error("Timed out waiting for the local runtime agents to come online.");
 }
 
 async function requestJson<T>(url: string, init?: RequestInit) {

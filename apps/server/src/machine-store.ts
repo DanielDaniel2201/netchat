@@ -1,4 +1,5 @@
 import {
+  AgentRuntimeOption,
   AgentTurnEvent,
   AgentTurnInput,
   AgentTurnResult,
@@ -120,53 +121,123 @@ export class MachineStore {
       .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt));
   }
 
-  resolveMachine(preferredMachineId?: string | null): MachineRecord {
+  listAgentRuntimes(): AgentRuntimeOption[] {
+    const grouped = new Map<string, MachineRecord[]>();
+
+    for (const machine of this.listMachines()) {
+      const runtimeId = machine.environment.runtimeId;
+      const group = grouped.get(runtimeId) ?? [];
+      group.push(machine);
+      grouped.set(runtimeId, group);
+    }
+
+    const agents: AgentRuntimeOption[] = [];
+    for (const [runtimeId, machines] of grouped.entries()) {
+      const preferredMachine = [...machines].sort(comparePreferredRuntimeMachine)[0] ?? null;
+      const environment = preferredMachine?.environment;
+      if (!preferredMachine || !environment) {
+        continue;
+      }
+
+      agents.push({
+          runtimeId,
+          runtimeKind: environment.runtimeKind,
+          runtimeLabel: environment.runtimeLabel,
+          machineId: preferredMachine.id,
+          machineName: preferredMachine.name,
+          status: preferredMachine.status,
+          installed: environment.installed,
+          version: environment.version,
+          executablePath: environment.executablePath,
+          workingDirectory: environment.workingDirectory,
+          detectionError: environment.detectionError,
+      });
+    }
+
+    return agents.sort(compareAgentRuntimeOption);
+  }
+
+  resolveMachine(input?: {
+    preferredMachineId?: string | null;
+    preferredRuntimeId?: string | null;
+  }): MachineRecord {
+    const preferredMachineId = input?.preferredMachineId ?? null;
+    const preferredRuntimeId = input?.preferredRuntimeId ?? null;
+
     if (preferredMachineId) {
       const preferred = this.machines.get(preferredMachineId);
       if (preferred) {
         const record = this.toPublicRecord(preferred);
-        if (record.status === "online") {
+        if (record.status === "online" && record.environment.installed) {
           return record;
         }
       }
+    }
 
-      const fallback = this.resolveSingleLocalMachineFallback(preferredMachineId);
+    if (preferredRuntimeId) {
+      const runtimeMatch = this.listMachines()
+        .filter(
+          (machine) =>
+            machine.environment.runtimeId === preferredRuntimeId &&
+            machine.status === "online" &&
+            machine.environment.installed,
+        )
+        .sort(comparePreferredRuntimeMachine)[0];
+
+      if (runtimeMatch) {
+        return runtimeMatch;
+      }
+    }
+
+    if (preferredMachineId || preferredRuntimeId) {
+      const fallback = this.resolveSingleLocalMachineFallback(preferredMachineId ?? preferredRuntimeId ?? "unknown");
       if (fallback) {
         return fallback;
       }
 
-      if (!preferred) {
+      if (preferredRuntimeId) {
+        throw new Error("The selected agent is offline or not installed.");
+      }
+
+      if (!preferredMachineId || !this.machines.get(preferredMachineId)) {
         throw new Error("Selected machine does not exist.");
       }
 
       throw new Error("Selected machine is offline.");
     }
 
-    const online = this.listMachines().filter((machine) => machine.status === "online");
+    const online = this.listMachines().filter((machine) => machine.status === "online" && machine.environment.installed);
     if (online.length === 0) {
-      throw new Error("No online machine is registered yet.");
+      throw new Error("No installed online agent is registered yet.");
     }
 
     if (online.length > 1) {
-      throw new Error("Multiple machines are online. Select one explicitly.");
+      throw new Error("Multiple agents are online. Select one explicitly.");
     }
 
     return online[0];
   }
 
-  enqueueJob(machineId: string, job: EnqueuedJob): Promise<AgentTurnResult> {
-    const handle = this.enqueueStreamingJob(machineId, job);
+  enqueueJob(
+    machine: string | { preferredMachineId?: string | null; preferredRuntimeId?: string | null },
+    job: EnqueuedJob,
+  ): Promise<AgentTurnResult> {
+    const handle = this.enqueueStreamingJob(machine, job);
     handle.result.finally(handle.dispose);
     return handle.result;
   }
 
-  enqueueStreamingJob(machineId: string, job: EnqueuedJob): StreamingJobHandle {
-    const machine = this.resolveMachine(machineId);
-    const pending = this.pendingJobs.get(machine.id) ?? [];
+  enqueueStreamingJob(
+    machine: string | { preferredMachineId?: string | null; preferredRuntimeId?: string | null },
+    job: EnqueuedJob,
+  ): StreamingJobHandle {
+    const resolvedMachine =
+      typeof machine === "string" ? this.resolveMachine({ preferredMachineId: machine }) : this.resolveMachine(machine);
+    const pending = this.pendingJobs.get(resolvedMachine.id) ?? [];
     const base = {
       id: makeId("job"),
       createdAt: nowIso(),
-      machineId: machine.id,
+      machineId: resolvedMachine.id,
     };
 
     const queuedJob: PendingJob = {
@@ -176,12 +247,12 @@ export class MachineStore {
     };
 
     pending.push(queuedJob);
-    this.pendingJobs.set(machine.id, pending);
+    this.pendingJobs.set(resolvedMachine.id, pending);
     this.jobEventHistory.set(queuedJob.id, []);
     this.jobEventListeners.set(queuedJob.id, new Set());
     this.diagnostics?.log(
       "info",
-      `Enqueued job ${queuedJob.id} (${queuedJob.kind}) for ${machine.name}. Pending jobs: ${pending.length}.`,
+      `Enqueued job ${queuedJob.id} (${queuedJob.kind}) for ${resolvedMachine.name}. Pending jobs: ${pending.length}.`,
     );
     this.syncDiagnostics();
 
@@ -189,21 +260,21 @@ export class MachineStore {
       const timeout = setTimeout(() => {
         this.inFlightJobs.delete(queuedJob.id);
         this.pendingJobs.set(
-          machine.id,
-          (this.pendingJobs.get(machine.id) ?? []).filter((candidate) => candidate.id !== queuedJob.id),
+          resolvedMachine.id,
+          (this.pendingJobs.get(resolvedMachine.id) ?? []).filter((candidate) => candidate.id !== queuedJob.id),
         );
         this.jobEventHistory.delete(queuedJob.id);
         this.jobEventListeners.delete(queuedJob.id);
         this.diagnostics?.log(
           "error",
-          `Job ${queuedJob.id} (${queuedJob.kind}) timed out after ${formatDuration(this.jobTimeoutMs)} on ${machine.name}.`,
+          `Job ${queuedJob.id} (${queuedJob.kind}) timed out after ${formatDuration(this.jobTimeoutMs)} on ${resolvedMachine.name}.`,
         );
         this.syncDiagnostics();
         reject(new Error("Machine job timed out."));
       }, this.jobTimeoutMs);
 
       this.inFlightJobs.set(queuedJob.id, {
-        machineId: machine.id,
+        machineId: resolvedMachine.id,
         kind: queuedJob.kind,
         enqueuedAtMs: Date.now(),
         claimedAtMs: null,
@@ -359,26 +430,74 @@ export class MachineStore {
     });
   }
 
-  private resolveSingleLocalMachineFallback(staleMachineId: string) {
+  private resolveSingleLocalMachineFallback(staleMachineLabel: string) {
     if (!this.localMode) {
       return null;
     }
 
-    const online = this.listMachines().filter((machine) => machine.status === "online");
+    const online = this.listMachines().filter((machine) => machine.status === "online" && machine.environment.installed);
     if (online.length !== 1) {
       return null;
     }
 
     const fallback = online[0];
-    if (fallback.id === staleMachineId) {
+    if (fallback.id === staleMachineLabel || fallback.environment.runtimeId === staleMachineLabel) {
       return fallback;
     }
 
     this.diagnostics?.log(
       "warn",
-      `Falling back from stale machine ${staleMachineId} to the active local machine ${fallback.id}.`,
+      `Falling back from stale agent target ${staleMachineLabel} to the active local machine ${fallback.id}.`,
     );
     return fallback;
+  }
+}
+
+function comparePreferredRuntimeMachine(left: MachineRecord, right: MachineRecord) {
+  if (left.status !== right.status) {
+    return left.status === "online" ? -1 : 1;
+  }
+
+  if (left.environment.installed !== right.environment.installed) {
+    return left.environment.installed ? -1 : 1;
+  }
+
+  return right.lastSeenAt.localeCompare(left.lastSeenAt);
+}
+
+function compareAgentRuntimeOption(left: AgentRuntimeOption, right: AgentRuntimeOption) {
+  const kindDelta = compareRuntimeKindPriority(left.runtimeKind, right.runtimeKind);
+  if (kindDelta !== 0) {
+    return kindDelta;
+  }
+
+  if (left.installed !== right.installed) {
+    return left.installed ? -1 : 1;
+  }
+
+  if (left.status !== right.status) {
+    return left.status === "online" ? -1 : 1;
+  }
+
+  return left.runtimeLabel.localeCompare(right.runtimeLabel);
+}
+
+function compareRuntimeKindPriority(left: AgentRuntimeOption["runtimeKind"], right: AgentRuntimeOption["runtimeKind"]) {
+  return getRuntimeKindPriority(left) - getRuntimeKindPriority(right);
+}
+
+function getRuntimeKindPriority(runtimeKind: AgentRuntimeOption["runtimeKind"]) {
+  switch (runtimeKind) {
+    case "claude":
+      return 0;
+    case "codex":
+      return 1;
+    case "droid":
+      return 2;
+    case "opencode":
+      return 3;
+    case "mock":
+      return 4;
   }
 }
 

@@ -19,8 +19,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, ChevronDown, LoaderCircle, MoreHorizontal } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
+  AgentRuntimeOption,
   AssistantStreamState,
-  DaemonDiagnostics,
   CreateBranchInput,
   CreateBranchTurnInput,
   CreateNetInput,
@@ -36,6 +36,7 @@ import {
   describeBranchCreation,
   finalizeAssistantState,
   makeId,
+  resolveAgentRuntimeLabel,
   rootBranchId,
 } from "@netchat/shared";
 import remarkGfm from "remark-gfm";
@@ -313,9 +314,9 @@ function NetchatApp() {
     queryKey: ["ui-config"],
     queryFn: () => request<UiConfig>("/api/ui-config"),
   });
-  const daemonDiagnosticsQuery = useQuery({
-    queryKey: ["daemon-diagnostics"],
-    queryFn: () => request<DaemonDiagnostics>("/api/runtime/diagnostics"),
+  const agentsQuery = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => request<AgentRuntimeOption[]>("/api/agents"),
     refetchInterval: 2500,
     retry: false,
   });
@@ -324,7 +325,7 @@ function NetchatApp() {
   const persistedSnapshot = graphQuery.data;
   const snapshot = activeStreamedTurn?.optimisticSnapshot ?? persistedSnapshot;
   const uiConfig = uiConfigQuery.data;
-  const daemonDiagnostics = daemonDiagnosticsQuery.data;
+  const agentOptions = agentsQuery.data ?? [];
   const workspaceNets = workspace?.nets ?? [];
   const activeNetId = workspace?.activeNetId ?? null;
   const activeNet = workspaceNets.find((net) => net.id === activeNetId) ?? null;
@@ -361,6 +362,7 @@ function NetchatApp() {
       ? (messagesById.get(selectedMessageId) ?? null)
       : null;
   const selectedBranch = selectedMessage ? (branchesById.get(selectedMessage.branchId) ?? null) : null;
+  const rootBranch = branchesById.get(rootBranchId) ?? null;
   const selectedBranchMessages = selectedMessage ? messagesByBranch.get(selectedMessage.branchId) ?? [] : [];
   const selectionForSelectedMessage =
     selectedMessage && selectionDraft?.sourceMessageId === selectedMessage.id ? selectionDraft : null;
@@ -377,8 +379,35 @@ function NetchatApp() {
         : selectedBranch?.id === rootBranchId
           ? "continue-root"
           : "continue-branch";
-  const canSendOnActiveLane = daemonDiagnostics?.status === "online";
-  const runtimeLabel = resolveRuntimeLabel(daemonDiagnostics);
+  const activeNetAgent =
+    activeNet?.agentRuntimeId
+      ? (agentOptions.find((agent) => agent.runtimeId === activeNet.agentRuntimeId) ?? null)
+      : null;
+  const fallbackAgent =
+    agentOptions.find((agent) => agent.status === "online" && agent.installed) ??
+    agentOptions.find((agent) => agent.installed) ??
+    agentOptions[0] ??
+    null;
+  const defaultNewNetAgent = activeNetAgent ?? fallbackAgent;
+  const sendTargetRuntimeId =
+    sendMode === "root" || sendMode === "continue-root"
+      ? rootBranch?.runtimeId ?? activeNet?.agentRuntimeId ?? null
+      : sendMode === "continue-branch"
+        ? selectedBranch?.runtimeId ?? activeNet?.agentRuntimeId ?? null
+        : selectedMessage?.runtimeId ?? activeNet?.agentRuntimeId ?? null;
+  const sendTargetRuntimeKind =
+    sendMode === "root" || sendMode === "continue-root"
+      ? rootBranch?.runtimeKind ?? activeNet?.agentRuntimeKind ?? null
+      : sendMode === "continue-branch"
+        ? selectedBranch?.runtimeKind ?? activeNet?.agentRuntimeKind ?? null
+        : selectedMessage?.runtimeKind ?? activeNet?.agentRuntimeKind ?? null;
+  const sendTargetAgent =
+    sendTargetRuntimeId ? (agentOptions.find((agent) => agent.runtimeId === sendTargetRuntimeId) ?? null) : null;
+  const canSendOnActiveLane = Boolean(sendTargetAgent && sendTargetAgent.status === "online" && sendTargetAgent.installed);
+  const activeAgentLabel =
+    activeNet?.agentRuntimeLabel ??
+    activeNetAgent?.runtimeLabel ??
+    (activeNet?.agentRuntimeId ? "Unknown agent" : "Select agent");
 
   async function runStreamedTurn(
     path: string,
@@ -522,7 +551,7 @@ function NetchatApp() {
   });
   const renameNetMutation = useMutation({
     mutationFn: async (variables: { netId: string; input: UpdateNetInput }) => {
-      logWeb("info", `Renaming net ${variables.netId}.`);
+      logWeb("info", `Updating net ${variables.netId}.`);
       return request<WorkspaceState>(`/api/nets/${variables.netId}`, {
         method: "PATCH",
         body: JSON.stringify(variables.input),
@@ -536,6 +565,21 @@ function NetchatApp() {
     },
     onError: (error) => {
       logWeb("error", `Renaming a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const updateNetAgentMutation = useMutation({
+    mutationFn: async (variables: { netId: string; input: UpdateNetInput }) => {
+      logWeb("info", `Updating net agent for ${variables.netId}.`);
+      return request<WorkspaceState>(`/api/nets/${variables.netId}`, {
+        method: "PATCH",
+        body: JSON.stringify(variables.input),
+      });
+    },
+    onSuccess: (nextWorkspace) => {
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+    },
+    onError: (error) => {
+      logWeb("error", `Updating a net agent failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
   const deleteNetMutation = useMutation({
@@ -650,6 +694,25 @@ function NetchatApp() {
     });
   }
 
+  function updateActiveNetAgent(runtimeId: string) {
+    if (!activeNetId) {
+      return;
+    }
+
+    const nextAgent = agentOptions.find((agent) => agent.runtimeId === runtimeId);
+    if (!nextAgent || nextAgent.runtimeId === activeNet?.agentRuntimeId) {
+      return;
+    }
+
+    updateNetAgentMutation.mutate({
+      netId: activeNetId,
+      input: {
+        agentRuntimeId: nextAgent.runtimeId,
+        agentRuntimeKind: nextAgent.runtimeKind,
+      },
+    });
+  }
+
   function requestNetDeletion(netId: string, title: string) {
     setOpenNetMenuId(null);
     setPendingNetDeletion({ id: netId, title });
@@ -722,7 +785,7 @@ function NetchatApp() {
     }
 
     return buildFlowGraph({
-      assistantLabel: runtimeLabel,
+      defaultAssistantLabel: activeAgentLabel,
       expandedBranchIds: expandedBranchIdSet,
       snapshot,
       activePathMessageId,
@@ -737,7 +800,7 @@ function NetchatApp() {
     });
   }, [
     activePathMessageId,
-    runtimeLabel,
+    activeAgentLabel,
     expandedBranchIdSet,
     measuredNodeHeights,
     persistedAssistantStatesByMessageId,
@@ -1052,6 +1115,7 @@ function NetchatApp() {
     createNetMutation.isPending ||
     selectNetMutation.isPending ||
     renameNetMutation.isPending ||
+    updateNetAgentMutation.isPending ||
     deleteNetMutation.isPending;
   const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
   const isOnNewNetScreen = !graphQuery.isLoading && !hasMessages;
@@ -1076,7 +1140,15 @@ function NetchatApp() {
       return;
     }
 
-    createNetMutation.mutate({ title: "" });
+    createNetMutation.mutate({
+      title: "",
+      ...(defaultNewNetAgent
+        ? {
+            agentRuntimeId: defaultNewNetAgent.runtimeId,
+            agentRuntimeKind: defaultNewNetAgent.runtimeKind,
+          }
+        : {}),
+    });
   }
 
   function submitCurrentPrompt() {
@@ -1094,6 +1166,8 @@ function NetchatApp() {
       const optimisticTurn = snapshot
         ? buildOptimisticRootStreamTurn(snapshot, {
             machineId: null,
+            runtimeId: sendTargetRuntimeId,
+            runtimeKind: sendTargetRuntimeKind,
             prompt,
             selectedText: selectionForSelectedMessage?.selectedText ?? null,
           })
@@ -1119,6 +1193,8 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: null,
+            runtimeId: sendTargetRuntimeId,
+            runtimeKind: sendTargetRuntimeKind,
             selectedText: selectionForSelectedMessage?.selectedText ?? null,
             snapshot,
           }),
@@ -1131,6 +1207,8 @@ function NetchatApp() {
         ? buildOptimisticBranchTurnStreamTurn(snapshot, {
             branchId: selectedBranch.id,
             machineId: selectedBranch.machineId,
+            runtimeId: selectedBranch.runtimeId,
+            runtimeKind: selectedBranch.runtimeKind,
             prompt,
             selectedText: selectionForSelectedMessage?.selectedText ?? null,
           })
@@ -1156,6 +1234,8 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: selectedBranch.machineId ?? null,
+            runtimeId: selectedBranch.runtimeId ?? activeNet?.agentRuntimeId ?? null,
+            runtimeKind: selectedBranch.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
             selectedText: selectionForSelectedMessage?.selectedText ?? null,
             snapshot,
           }),
@@ -1207,6 +1287,8 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: selectedMessage.machineId ?? null,
+            runtimeId: selectedMessage.runtimeId ?? activeNet?.agentRuntimeId ?? null,
+            runtimeKind: selectedMessage.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
             selectedText: selectionForSelectedMessage.selectedText,
             snapshot,
           }),
@@ -1247,6 +1329,8 @@ function NetchatApp() {
           buildFallbackOptimisticTurn({
             prompt,
             machineId: selectedMessage.machineId ?? null,
+            runtimeId: selectedMessage.runtimeId ?? activeNet?.agentRuntimeId ?? null,
+            runtimeKind: selectedMessage.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
             selectedText: null,
             snapshot,
           }),
@@ -1259,20 +1343,24 @@ function NetchatApp() {
     submitCurrentPrompt();
   }
 
-  const connectionStatus = buildConnectionStatus(daemonDiagnostics, daemonDiagnosticsQuery.error);
-  const workingDirectoryValue =
-    workspace?.workingDirectory ??
-    daemonDiagnostics?.environment.workingDirectory ??
-    null;
+  const connectionStatus = buildAgentConnectionStatus({
+    agent: activeNetAgent,
+    error: agentsQuery.error,
+    hasSelectedAgent: Boolean(activeNet?.agentRuntimeId),
+  });
+  const workingDirectoryValue = workspace?.workingDirectory ?? null;
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
   const workspaceName = resolveWorkspaceName(workingDirectoryPath);
-  const composerPlaceholder = selectedMessage
-    ? selectionForSelectedMessage
-      ? "Ask about the selected text in this context..."
-      : sendMode === "branch-from-message"
-        ? "Start a branch from this reply..."
-        : "Continue from this reply..."
-    : "Start the first turn...";
+  const composerPlaceholder =
+    !selectedMessage && !activeNet?.agentRuntimeId
+      ? "Select an agent for this net, then start the first turn..."
+      : selectedMessage
+        ? selectionForSelectedMessage
+          ? "Ask about the selected text in this context..."
+          : sendMode === "branch-from-message"
+            ? "Start a branch from this reply..."
+            : "Continue from this reply..."
+        : "Start the first turn...";
   const composerErrorMessage =
     activeStreamedTurn && !activeStreamedTurn.isPending
       ? liveAssistantStates[activeStreamedTurn.assistantMessageId]?.errorMessage ?? streamErrorMessage
@@ -1281,10 +1369,14 @@ function NetchatApp() {
     createNetMutation.error ??
       selectNetMutation.error ??
       renameNetMutation.error ??
+      updateNetAgentMutation.error ??
       deleteNetMutation.error,
   );
   const pendingDeletionNetId = pendingNetDeletion?.id ?? null;
   const isConfirmingDeletion = deleteNetMutation.isPending && deleteNetMutation.variables === pendingDeletionNetId;
+  const isUpdatingActiveNetAgent =
+    updateNetAgentMutation.isPending && updateNetAgentMutation.variables?.netId === activeNetId;
+  const activeNetAgentValue = activeNet?.agentRuntimeId ?? "";
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
@@ -1296,7 +1388,28 @@ function NetchatApp() {
             <div className="border-b border-[var(--node-border)] px-5 py-4">
               <div className="flex items-start justify-between gap-4 text-[15px] font-medium leading-6">
                 <div className="flex min-w-0 items-center gap-2 text-[var(--text-main)]">
-                  <span>{runtimeLabel}</span>
+                  {!activeNet?.agentRuntimeId && !isOnNewNetScreen ? (
+                    <div className="relative min-w-0 max-w-[170px]">
+                      <select
+                        className="h-9 w-full appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] pl-3 pr-9 text-[14px] font-medium text-[var(--text-main)] outline-none focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
+                        disabled={workspaceQuery.isLoading || isSwitchingNet || agentOptions.length === 0}
+                        value={activeNetAgentValue}
+                        onChange={(event) => updateActiveNetAgent(event.target.value)}
+                      >
+                        <option value="" disabled>
+                          Select agent
+                        </option>
+                        {agentOptions.map((agent) => (
+                          <option key={agent.runtimeId} disabled={!agent.installed} value={agent.runtimeId}>
+                            {buildAgentOptionLabel(agent)}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[rgba(26,26,26,0.54)]" />
+                    </div>
+                  ) : (
+                    <span>{activeAgentLabel}</span>
+                  )}
                   <span
                     className={cn(
                       "inline-flex h-2.5 w-2.5 rounded-full border border-[rgba(26,26,26,0.16)]",
@@ -1436,7 +1549,9 @@ function NetchatApp() {
                                     isActiveNet ? "text-white/64" : "text-[rgba(26,26,26,0.56)]",
                                   )}
                                 >
-                                  {latestMessageLabel ?? "No messages yet"}
+                                  <span>{net.agentRuntimeLabel ?? "Agent not set"}</span>
+                                  <span className="mx-1.5 opacity-50">•</span>
+                                  <span>{latestMessageLabel ?? "No messages yet"}</span>
                                 </div>
                               </button>
                             )}
@@ -1555,7 +1670,7 @@ function NetchatApp() {
               <div className="relative border border-[var(--text-main)] bg-white px-7 py-6 shadow-[14px_14px_0_rgba(26,26,26,0.08)]">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[188px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-16 !pr-20 text-[20px] font-medium leading-10 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
+                  className="!min-h-[188px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-20 !pr-20 text-[20px] font-medium leading-10 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -1568,11 +1683,35 @@ function NetchatApp() {
                     }
                   }}
                 />
-                <div
-                  className="pointer-events-none absolute bottom-6 left-7 max-w-[calc(100%-7.5rem)] truncate text-[14px] leading-6 text-[rgba(26,26,26,0.46)]"
-                  title={workingDirectoryPath}
-                >
-                  {truncateMiddle(workingDirectoryPath, 88)}
+                <div className="absolute bottom-4 left-7 right-20 flex items-center gap-3">
+                  <div
+                    className="pointer-events-none min-w-0 flex-1 truncate text-[14px] leading-6 text-[rgba(26,26,26,0.46)]"
+                    title={workingDirectoryPath}
+                  >
+                    {truncateMiddle(workingDirectoryPath, 64)}
+                  </div>
+                  <div className="relative shrink-0">
+                    <select
+                      className="h-10 min-w-[188px] appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] pl-3 pr-10 text-[14px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
+                      disabled={workspaceQuery.isLoading || isSwitchingNet || isUpdatingActiveNetAgent || agentOptions.length === 0}
+                      value={activeNetAgentValue}
+                      onChange={(event) => updateActiveNetAgent(event.target.value)}
+                    >
+                      <option value="" disabled>
+                        Select agent
+                      </option>
+                      {agentOptions.map((agent) => (
+                        <option
+                          key={agent.runtimeId}
+                          disabled={!agent.installed}
+                          value={agent.runtimeId}
+                        >
+                          {buildAgentOptionLabel(agent)}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[rgba(26,26,26,0.54)]" />
+                  </div>
                 </div>
                 <Button
                   className="absolute bottom-4 right-4 h-12 w-12 rounded-none border border-[var(--text-main)] bg-[var(--text-main)] px-0 text-white shadow-none hover:bg-[var(--block-slate)]"
@@ -2847,7 +2986,7 @@ function makeSelectionAnchorHandleId(branchId: string) {
 }
 
 function buildFlowGraph({
-  assistantLabel,
+  defaultAssistantLabel,
   expandedBranchIds,
   persistedAssistantStatesByMessageId,
   snapshot,
@@ -2860,7 +2999,7 @@ function buildFlowGraph({
   onSelectionDraft,
   showSessionIds,
 }: {
-  assistantLabel: string;
+  defaultAssistantLabel: string;
   expandedBranchIds: Set<string>;
   persistedAssistantStatesByMessageId: Record<string, AssistantStreamState | null>;
   snapshot: GraphSnapshot;
@@ -3004,7 +3143,8 @@ function buildFlowGraph({
         data: {
           message,
           persistedAssistantState: persistedAssistantStatesByMessageId[message.id] ?? null,
-          assistantLabel,
+          assistantLabel:
+            message.runtimeKind ? resolveAgentRuntimeLabel(message.runtimeKind) : defaultAssistantLabel,
           isActiveMessage: message.id === activePathMessageId,
           hasSelectionDraft: selectionDraft?.sourceMessageId === message.id,
           selectionAnchors: selectionAnchorsByMessageId.get(message.id) ?? [],
@@ -3161,30 +3301,34 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function buildConnectionStatus(
-  diagnostics: DaemonDiagnostics | undefined,
-  error: unknown,
-) {
-  if (!diagnostics) {
-    const disconnected = error instanceof Error && error.message.trim().length > 0;
+function buildAgentConnectionStatus(input: {
+  agent: AgentRuntimeOption | null;
+  hasSelectedAgent: boolean;
+  error: unknown;
+}) {
+  if (!input.hasSelectedAgent) {
+    const disconnected = input.error instanceof Error && input.error.message.trim().length > 0;
     return {
-      label: disconnected ? "Disconnected" : "Connecting",
+      label: disconnected ? "Agent unavailable" : "Select agent",
       tone: disconnected ? ("offline" as const) : ("connecting" as const),
     };
   }
 
-  if (
-    diagnostics.status === "starting" ||
-    diagnostics.status === "registering" ||
-    diagnostics.status === "registered"
-  ) {
+  if (!input.agent) {
     return {
       label: "Connecting",
       tone: "connecting" as const,
     };
   }
 
-  if (diagnostics.machineId || diagnostics.status === "online") {
+  if (!input.agent.installed) {
+    return {
+      label: "Not installed",
+      tone: "offline" as const,
+    };
+  }
+
+  if (input.agent.status === "online") {
     return {
       label: "Connected",
       tone: "connected" as const,
@@ -3192,8 +3336,8 @@ function buildConnectionStatus(
   }
 
   return {
-    label: diagnostics.status === "error" || diagnostics.status === "local_only" ? "Disconnected" : "Connecting",
-    tone: diagnostics.status === "error" || diagnostics.status === "local_only" ? ("offline" as const) : ("connecting" as const),
+    label: "Disconnected",
+    tone: "offline" as const,
   };
 }
 
@@ -3213,11 +3357,25 @@ function formatErrorMessage(error: unknown) {
   return "The request failed. Check the daemon/server logs for more detail.";
 }
 
+function buildAgentOptionLabel(agent: AgentRuntimeOption) {
+  if (!agent.installed) {
+    return `${agent.runtimeLabel} - not installed`;
+  }
+
+  if (agent.status !== "online") {
+    return `${agent.runtimeLabel} - offline`;
+  }
+
+  return agent.runtimeLabel;
+}
+
 function buildOptimisticRootStreamTurn(
   snapshot: GraphSnapshot,
   input: {
     prompt: string;
     machineId: string | null;
+    runtimeId: string | null;
+    runtimeKind: MessageNode["runtimeKind"];
     selectedText: string | null;
   },
 ): PendingTurnMetadata {
@@ -3236,6 +3394,8 @@ function buildOptimisticRootStreamTurn(
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt,
     } satisfies MessageNode,
     {
@@ -3246,6 +3406,8 @@ function buildOptimisticRootStreamTurn(
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt,
     } satisfies MessageNode,
   ];
@@ -3369,6 +3531,8 @@ function buildOptimisticBranchCreationStreamTurn(
     sourceMessageId: sourceMessage.id,
     sessionId: null,
     machineId: sourceMessage.machineId,
+    runtimeId: sourceMessage.runtimeId,
+    runtimeKind: sourceMessage.runtimeKind,
     title: branchTitle,
     selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
     startOffset: input.input.mode === "selection" ? input.input.startOffset ?? null : null,
@@ -3386,6 +3550,8 @@ function buildOptimisticBranchCreationStreamTurn(
       selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
       sessionId: null,
       machineId: sourceMessage.machineId,
+      runtimeId: sourceMessage.runtimeId,
+      runtimeKind: sourceMessage.runtimeKind,
       createdAt,
     } satisfies MessageNode,
     {
@@ -3396,6 +3562,8 @@ function buildOptimisticBranchCreationStreamTurn(
       selectedText: null,
       sessionId: null,
       machineId: sourceMessage.machineId,
+      runtimeId: sourceMessage.runtimeId,
+      runtimeKind: sourceMessage.runtimeKind,
       createdAt,
     } satisfies MessageNode,
   ];
@@ -3425,6 +3593,8 @@ function buildOptimisticBranchTurnStreamTurn(
     branchId: string;
     prompt: string;
     machineId: string | null;
+    runtimeId: string | null;
+    runtimeKind: MessageNode["runtimeKind"];
     selectedText: string | null;
   },
 ): PendingTurnMetadata {
@@ -3443,6 +3613,8 @@ function buildOptimisticBranchTurnStreamTurn(
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt,
     } satisfies MessageNode,
     {
@@ -3453,6 +3625,8 @@ function buildOptimisticBranchTurnStreamTurn(
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
+      runtimeId: input.runtimeId,
+      runtimeKind: input.runtimeKind,
       createdAt,
     } satisfies MessageNode,
   ];
@@ -3481,12 +3655,16 @@ function buildOptimisticBranchTurnStreamTurn(
 function buildFallbackOptimisticTurn(input: {
   prompt: string;
   machineId: string | null;
+  runtimeId: string | null;
+  runtimeKind: MessageNode["runtimeKind"];
   selectedText: string | null;
   snapshot: GraphSnapshot | undefined;
 }): PendingTurnMetadata {
   return buildOptimisticRootStreamTurn(input.snapshot ?? createEmptyRootSnapshot(), {
     prompt: input.prompt,
     machineId: input.machineId,
+    runtimeId: input.runtimeId,
+    runtimeKind: input.runtimeKind,
     selectedText: input.selectedText,
   });
 }
@@ -3500,6 +3678,8 @@ function createEmptyRootSnapshot(): GraphSnapshot {
         sourceMessageId: null,
         sessionId: null,
         machineId: null,
+        runtimeId: null,
+        runtimeKind: null,
         title: "Root session",
         selectedText: null,
         startOffset: null,
@@ -3548,10 +3728,6 @@ function resolveWorkspaceName(value: string) {
   const normalized = value.replace(/\/+$/, "");
   const parts = normalized.split("/");
   return parts.at(-1) || value;
-}
-
-function resolveRuntimeLabel(diagnostics: DaemonDiagnostics | undefined) {
-  return diagnostics?.environment.runtimeLabel?.trim() || "Assistant";
 }
 
 /*
