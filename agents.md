@@ -128,3 +128,9 @@ npm run app:local
 
 Refer to /DESIGN.md for frontend UI design principles.
 Update the changelog after each major code change
+
+## Testing and Validation
+
+After implementing a new feature or fixing a bug, validate the result using the `agent-browser` CLI.
+
+If the new implementation is unrelated to agent runtime, use Claude Code by default.
