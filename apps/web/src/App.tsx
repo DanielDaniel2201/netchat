@@ -54,6 +54,7 @@ const branchMessageGap = 96;
 const branchForkGap = 92;
 const bubbleComposerGap = 20;
 const bubbleComposerWidth = 840;
+const newNetComposerWidth = 920;
 const messageEstimateCharsPerLine = 90;
 const messageEstimateLineHeight = 38;
 const canvasMinZoom = 0.35;
@@ -623,6 +624,24 @@ function NetchatApp() {
     });
   }
 
+  const setInitialRootTurnViewport = useCallback(
+    (prompt: string) => {
+      const nextViewport = buildInitialRootTurnViewport({
+        canvasSize,
+        prompt,
+      });
+      if (!nextViewport) {
+        return false;
+      }
+
+      lastAutoFitNetIdRef.current = activeNetId ?? "__active-net__";
+      setViewport(nextViewport);
+      void reactFlow.setViewport(nextViewport, { duration: 0 });
+      return true;
+    },
+    [activeNetId, canvasSize, reactFlow],
+  );
+
   function activateMessagePath(messageId: string | null) {
     setActivePathMessageId(messageId);
   }
@@ -868,6 +887,16 @@ function NetchatApp() {
       return;
     }
 
+    const initialRootTurnMessage = getInitialRootTurnUserMessage(snapshot);
+    if (initialRootTurnMessage) {
+      if (canvasSize.width <= 0 || canvasSize.height <= 0) {
+        return;
+      }
+
+      setInitialRootTurnViewport(initialRootTurnMessage.content);
+      return;
+    }
+
     let cancelled = false;
     let timeoutId: number | null = null;
 
@@ -896,8 +925,11 @@ function NetchatApp() {
     };
   }, [
     activeNetId,
+    canvasSize.height,
+    canvasSize.width,
     nodesInitialized,
     reactFlow,
+    setInitialRootTurnViewport,
     snapshot?.branches.length,
     snapshot?.edges.length,
     snapshot?.messages.length,
@@ -1159,6 +1191,10 @@ function NetchatApp() {
     const prompt = composerValue.trim();
     if (prompt.length === 0) {
       return;
+    }
+
+    if (isOnNewNetScreen && sendMode === "root") {
+      setInitialRootTurnViewport(prompt);
     }
 
     setComposerValue("");
@@ -3178,8 +3214,12 @@ function buildFlowGraph({
 
 
 function estimateMessageBubbleHeight(message: MessageNode) {
-  const normalized = message.content.replace(/\r\n/g, "\n");
-  const selectedPassage = message.selectedText?.replace(/\r\n/g, "\n").trim() ?? "";
+  return estimateBubbleHeightFromContent(message.content, message.selectedText);
+}
+
+function estimateBubbleHeightFromContent(content: string, selectedText: string | null) {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const selectedPassage = selectedText?.replace(/\r\n/g, "\n").trim() ?? "";
   const selectionLines = selectedPassage
     ? selectedPassage.split("\n").reduce((count, line) => {
         const visibleLength = Math.max(line.trim().length, 1);
@@ -3194,6 +3234,50 @@ function estimateMessageBubbleHeight(message: MessageNode) {
   const selectionBonus = selectedPassage ? 24 + selectionLines * 24 : 0;
 
   return Math.max(230, 150 + wrappedLines * messageEstimateLineHeight + codeBlockBonus + selectionBonus);
+}
+
+function estimateViewportBubbleHeightFromContent(content: string) {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const wrappedLines = normalized.split("\n").reduce((count, line) => {
+    const visibleLength = Math.max(line.trim().length, 1);
+    return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
+  }, 0);
+
+  return 98 + wrappedLines * 40;
+}
+
+function buildInitialRootTurnViewport(input: {
+  canvasSize: { width: number; height: number };
+  prompt: string;
+}): CanvasViewport | null {
+  if (input.canvasSize.width <= 0 || input.canvasSize.height <= 0) {
+    return null;
+  }
+
+  const targetBubbleWidth = Math.min(newNetComposerWidth, Math.max(320, input.canvasSize.width - 48));
+  const zoom = clamp(targetBubbleWidth / messageNodeWidth, canvasMinZoom, canvasMaxZoom);
+  const bubbleHeight = estimateViewportBubbleHeightFromContent(input.prompt);
+
+  return {
+    x: input.canvasSize.width / 2,
+    y: input.canvasSize.height / 2 - (bubbleHeight / 2) * zoom,
+    zoom,
+  };
+}
+
+function getInitialRootTurnUserMessage(snapshot: GraphSnapshot) {
+  if (snapshot.branches.length !== 1 || snapshot.messages.length !== 2) {
+    return null;
+  }
+
+  if (!snapshot.messages.every((message) => message.branchId === rootBranchId)) {
+    return null;
+  }
+
+  const userMessage = snapshot.messages.find((message) => message.role === "user") ?? null;
+  const assistantMessage = snapshot.messages.find((message) => message.role === "assistant") ?? null;
+
+  return userMessage && assistantMessage ? userMessage : null;
 }
 
 function getVisibleBranchIds(
