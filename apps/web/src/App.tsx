@@ -2207,6 +2207,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   const canSelectAssistantResponse = !liveAssistantState || liveAssistantState.status === "complete";
   const showPendingAssistantState =
     !isUser && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
+  const renderStreamingResponseAsMarkdown = !showPendingAssistantState;
   const shouldFreezeMeasuredHeight = showPendingAssistantState;
   const visibleAssistantBlocks =
     liveAssistantState?.blocks.filter((block) =>
@@ -2480,7 +2481,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                       content={responseContent}
                       anchors={data.selectionAnchors}
                       disabled={!canSelectAssistantResponse}
-                      renderMarkdown
+                      renderMarkdown={renderStreamingResponseAsMarkdown}
                       onToggleAnchor={data.onToggleSelectionAnchor}
                       onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
                     />
