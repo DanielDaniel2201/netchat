@@ -124,6 +124,82 @@ This is useful when working on a single module, but the recommended day-to-day f
 npm run app:local
 ```
 
+## Bug Fix Postmortem Policy
+
+A bug fix task is not complete until a corresponding postmortem file has been created under `postmortem/`. You can only create the corresponding postmortem file until the user explicitly confirms you that this bug fix task is completed. If the user forgets, ask proactively if a postmortem file is needed.
+
+### Rules
+
+- Every bug fix must create exactly one new markdown file in `postmortem/`.
+- Create the postmortem only after the fix has been implemented and verified.
+- Do not overwrite an existing postmortem file for a different bug.
+- Keep the document concise, specific, and factual.
+- Use JSON frontmatter.
+- Put the bug summary in the frontmatter field `summary`.
+- If a value is unknown, write `unknown`.
+- If no follow-up is needed, write `none`.
+
+### Filename
+
+Use this format:
+
+`postmortem/YYYY-MM-DD-HHMM-bug-slug.md`
+
+Example:
+
+`postmortem/2026-04-08-1430-login-timeout.md`
+
+### Required Frontmatter
+
+The frontmatter must include:
+
+- `title`
+- `summary`
+- `timestamp`
+- `slug`
+- `severity`
+
+Optional but recommended:
+
+- `owner`
+- `reported_by`
+- `related_issue`
+
+### Template
+
+```md
+---
+{
+  "title": "<short bug title>",
+  "summary": "<1-2 sentence summary of the bug, user impact, and fix>",
+  "timestamp": "<YYYY-MM-DD HH:MM>",
+  "slug": "<bug-slug>",
+  "severity": "<low|medium|high|critical|unknown>",
+  "owner": "<agent name|unknown>",
+  "reported_by": "<user|qa|monitoring|agent|unknown>",
+  "related_issue": "<issue/pr/commit/unknown>"
+}
+---
+
+# <short bug title>
+
+## Root Cause
+<direct technical cause, concise and specific>
+
+## Fix
+<what was changed to resolve the bug>
+
+## Files Changed
+- `<path/to/file1>`
+- `<path/to/file2>`
+
+## Verification
+- <test, reproduction, manual check, or command used to verify the fix>
+
+## Follow-up
+- <next action or `none`>
+```
+
 ## Other references
 
 Refer to /DESIGN.md for frontend UI design principles.
