@@ -306,7 +306,6 @@ function NetchatApp() {
   const [showNetHistory, setShowNetHistory] = useState(false);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
-  const liveAssistantStates = useLiveAssistantStateStore((state) => state.statesByMessageId);
   const clearLiveAssistantStates = useLiveAssistantStateStore((state) => state.clearStates);
   const pruneLiveAssistantStates = useLiveAssistantStateStore((state) => state.pruneStates);
   const setLiveAssistantState = useLiveAssistantStateStore((state) => state.setState);
@@ -667,13 +666,13 @@ function NetchatApp() {
 
   const syncBubbleComposerAnchor = useCallback(() => {
     if (!selectedMessage) {
-      setComposerAnchor(null);
+      setComposerAnchor((current) => (current === null ? current : null));
       return;
     }
 
     const nodeElement = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectedMessage.id}"]`);
     if (!nodeElement) {
-      setComposerAnchor(null);
+      setComposerAnchor((current) => (current === null ? current : null));
       return;
     }
 
@@ -683,11 +682,20 @@ function NetchatApp() {
     const composerWidth = Math.min(bubbleComposerWidth, Math.max(320, viewportWidth - 32));
     const maxTop = Math.max(16, viewportHeight - 320);
 
-    setComposerAnchor({
+    const nextAnchor = {
       left: clamp(rect.left + rect.width / 2 - composerWidth / 2, 16, viewportWidth - composerWidth - 16),
       top: clamp(rect.bottom + bubbleComposerGap, 16, maxTop),
       width: composerWidth,
-    });
+    } satisfies ComposerAnchor;
+
+    setComposerAnchor((current) =>
+      current &&
+      current.left === nextAnchor.left &&
+      current.top === nextAnchor.top &&
+      current.width === nextAnchor.width
+        ? current
+        : nextAnchor,
+    );
   }, [selectedMessage]);
 
   function pickMessage(messageId: string) {
@@ -859,15 +867,21 @@ function NetchatApp() {
     [],
   );
 
+  const handleViewportChange = useCallback(
+    (nextViewport: CanvasViewport) => {
+      setViewport((current) =>
+        current.x === nextViewport.x && current.y === nextViewport.y && current.zoom === nextViewport.zoom
+          ? current
+          : nextViewport,
+      );
+      syncBubbleComposerAnchor();
+    },
+    [syncBubbleComposerAnchor],
+  );
+
   useOnViewportChange({
-    onChange: (nextViewport) => {
-      setViewport(nextViewport);
-      syncBubbleComposerAnchor();
-    },
-    onEnd: (nextViewport) => {
-      setViewport(nextViewport);
-      syncBubbleComposerAnchor();
-    },
+    onChange: handleViewportChange,
+    onEnd: handleViewportChange,
   });
 
   useEffect(() => {
@@ -1455,6 +1469,16 @@ function NetchatApp() {
     error: agentsQuery.error,
     hasSelectedAgent: Boolean(activeNet?.agentRuntimeId),
   });
+  const activeStreamedAssistantMessageId = activeStreamedTurn?.assistantMessageId ?? null;
+  const activeStreamedAssistantErrorMessage = useLiveAssistantStateStore(
+    useCallback(
+      (state) =>
+        activeStreamedAssistantMessageId
+          ? state.statesByMessageId[activeStreamedAssistantMessageId]?.errorMessage ?? null
+          : null,
+      [activeStreamedAssistantMessageId],
+    ),
+  );
   const workingDirectoryValue = workspace?.workingDirectory ?? null;
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
   const workspaceName = resolveWorkspaceName(workingDirectoryPath);
@@ -1470,7 +1494,7 @@ function NetchatApp() {
         : "Start the first turn...";
   const composerErrorMessage =
     activeStreamedTurn && !activeStreamedTurn.isPending
-      ? liveAssistantStates[activeStreamedTurn.assistantMessageId]?.errorMessage ?? streamErrorMessage
+      ? activeStreamedAssistantErrorMessage ?? streamErrorMessage
       : streamErrorMessage;
   const netErrorMessage = formatErrorMessage(
     createNetMutation.error ??
@@ -2350,7 +2374,8 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                   data-stream-block="true"
                   open={assistantTraceExpanded}
                   onToggle={(event) => {
-                    setAssistantTraceExpanded(event.currentTarget.open);
+                    const nextExpanded = event.currentTarget.open;
+                    setAssistantTraceExpanded((current) => (current === nextExpanded ? current : nextExpanded));
                   }}
                   className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.34)]"
                 >
@@ -2516,7 +2541,7 @@ function SelectableMessage({
 
   useEffect(() => {
     if (!hasAnchors || !contentRef.current) {
-      setPositionedAnchors([]);
+      setPositionedAnchors((current) => (current.length === 0 ? current : []));
       return;
     }
 
