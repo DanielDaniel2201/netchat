@@ -13,7 +13,7 @@ export class ServerDiagnosticsStore {
   private snapshot: ServerDiagnostics;
 
   constructor(config: {
-    jobTimeoutMs: number;
+    jobTimeoutMs: number | null;
     onlineThresholdMs: number;
     pollingIntervalMs: number;
   }) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-08
+
+- Removed the server-side machine job time limit and marked diagnostics as unbounded, so long-running turns now rely only on the runtime inactivity timeout instead of being force-failed after a fixed total duration.
+
 ## Changelog rule
 
 After each commit, update the Changelog under the current date. Each entry must be short, specific, and describe the actual change and its impact; do not copy vague commit messages. Prioritize new features, behavior changes, bug fixes, and API/config/schema updates. Use a consistent date + bullet list format, with one change per bullet, so others can understand it immediately.

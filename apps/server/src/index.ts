@@ -59,7 +59,7 @@ const app = Fastify({
 const store = new WorkspaceStore();
 const machines = new MachineStore();
 const diagnostics = new ServerDiagnosticsStore({
-  jobTimeoutMs: machines.getJobTimeoutMs(),
+  jobTimeoutMs: null,
   onlineThresholdMs: machines.getOnlineThresholdMs(),
   pollingIntervalMs: machines.getPollingIntervalMs(),
 });
@@ -68,7 +68,7 @@ const port = Number(process.env.PORT ?? 3001);
 
 diagnostics.log(
   "info",
-  `Server booting with job timeout ${machines.getJobTimeoutMs()}ms and machine polling interval ${machines.getPollingIntervalMs()}ms.`,
+  `Server booting with no machine job timeout and machine polling interval ${machines.getPollingIntervalMs()}ms.`,
 );
 
 await app.register(cors, {

@@ -140,7 +140,7 @@ export type DaemonDiagnostics = {
 
 export type ServerDiagnostics = {
   startedAt: string;
-  jobTimeoutMs: number;
+  jobTimeoutMs: number | null;
   onlineThresholdMs: number;
   pollingIntervalMs: number;
   machineCount: number;

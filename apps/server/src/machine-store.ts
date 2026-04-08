@@ -41,7 +41,6 @@ type InFlightJob = {
   claimedAtMs: number | null;
   resolve: (value: AgentTurnResult) => void;
   reject: (error: Error) => void;
-  timeout: NodeJS.Timeout;
 };
 
 type JobEventListener = (event: AgentTurnEvent) => void;
@@ -61,17 +60,12 @@ export class MachineStore {
   private readonly jobEventListeners = new Map<string, Set<JobEventListener>>();
   private readonly localMode = (process.env.NETCHAT_LOCAL_MODE ?? "false").toLowerCase() === "true";
   private readonly onlineThresholdMs = Number(process.env.NETCHAT_MACHINE_ONLINE_THRESHOLD_MS ?? 30000);
-  private readonly jobTimeoutMs = Number(process.env.NETCHAT_JOB_TIMEOUT_MS ?? 600000);
   private readonly pollingIntervalMs = Number(process.env.NETCHAT_MACHINE_POLL_MS ?? 1200);
   private diagnostics?: ServerDiagnosticsStore;
 
   attachDiagnostics(diagnostics: ServerDiagnosticsStore) {
     this.diagnostics = diagnostics;
     this.syncDiagnostics();
-  }
-
-  getJobTimeoutMs() {
-    return this.jobTimeoutMs;
   }
 
   getOnlineThresholdMs() {
@@ -257,22 +251,6 @@ export class MachineStore {
     this.syncDiagnostics();
 
     const result = new Promise<AgentTurnResult>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.inFlightJobs.delete(queuedJob.id);
-        this.pendingJobs.set(
-          resolvedMachine.id,
-          (this.pendingJobs.get(resolvedMachine.id) ?? []).filter((candidate) => candidate.id !== queuedJob.id),
-        );
-        this.jobEventHistory.delete(queuedJob.id);
-        this.jobEventListeners.delete(queuedJob.id);
-        this.diagnostics?.log(
-          "error",
-          `Job ${queuedJob.id} (${queuedJob.kind}) timed out after ${formatDuration(this.jobTimeoutMs)} on ${resolvedMachine.name}.`,
-        );
-        this.syncDiagnostics();
-        reject(new Error("Machine job timed out."));
-      }, this.jobTimeoutMs);
-
       this.inFlightJobs.set(queuedJob.id, {
         machineId: resolvedMachine.id,
         kind: queuedJob.kind,
@@ -280,7 +258,6 @@ export class MachineStore {
         claimedAtMs: null,
         resolve,
         reject,
-        timeout,
       });
       this.syncDiagnostics();
     });
@@ -346,7 +323,6 @@ export class MachineStore {
       throw new Error("Machine is not allowed to complete this job.");
     }
 
-    clearTimeout(inFlight.timeout);
     this.inFlightJobs.delete(jobId);
     const totalDurationMs = Date.now() - inFlight.enqueuedAtMs;
     const executionDurationMs = inFlight.claimedAtMs
