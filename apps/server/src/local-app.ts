@@ -32,6 +32,7 @@ const sourceDaemonEntryPath = path.join(runtimeRoot, "apps", "daemon", "src", "i
 const packagedDaemonEntryPath = path.join(runtimeRoot, "dist", "apps", "daemon", "index.mjs");
 const managedChildren: ChildProcess[] = [];
 const managedRuntimeKinds = ["claude", "codex", "droid"] as const satisfies readonly AgentRuntimeKind[];
+const localLoopbackHost = "localhost";
 
 let shuttingDown = false;
 
@@ -274,7 +275,7 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
       runtimeId: `${runtimeKind}_local`,
       runtimeLabel,
       port,
-      url: `http://127.0.0.1:${port}`,
+      url: `http://${localLoopbackHost}:${port}`,
     });
   }
   const openBrowser =
@@ -295,7 +296,7 @@ async function resolveLocalAppConfig(argv: string[]): Promise<LocalAppConfig> {
     databasePath,
     workingDirectory,
     serverPort,
-    serverUrl: `http://127.0.0.1:${serverPort}`,
+    serverUrl: `http://${localLoopbackHost}:${serverPort}`,
     daemons,
     openBrowser,
     webBuildMode,

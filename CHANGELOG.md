@@ -2,6 +2,7 @@
 
 ## 2026-04-08
 
+- Switched the local app's default controller and daemon URLs from `127.0.0.1` to `localhost`, so browser auto-open, runtime wiring, and CLI examples now consistently use the project's advertised localhost loopback host.
 - Removed the server-side machine job time limit and marked diagnostics as unbounded, so long-running turns now rely only on the runtime inactivity timeout instead of being force-failed after a fixed total duration.
 - Stabilized React Flow handle refreshes in selection-enabled message nodes, so Claude/Codex stream completion no longer risks a `Minified React error #185` infinite update loop in the canvas.
 - Narrowed top-level assistant-stream subscriptions and stabilized viewport/composer state updates, so streaming replies no longer force the entire canvas app through avoidable React/React Flow update cycles on every token.

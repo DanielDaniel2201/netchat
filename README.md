@@ -15,7 +15,7 @@ npx @danielwyq/netchat@latest
 Run daemon-only mode:
 
 ```bash
-npx @danielwyq/netchat@latest daemon --server http://127.0.0.1:3001
+npx @danielwyq/netchat@latest daemon --server http://localhost:3001
 ```
 
 Show local help:

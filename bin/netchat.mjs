@@ -97,7 +97,7 @@ function printHelp() {
       "  npx @danielwyq/netchat@latest",
       "  npx @danielwyq/netchat@latest --no-browser",
       "  npx @danielwyq/netchat@latest --show-session-ids",
-      "  npx @danielwyq/netchat@latest daemon --server http://127.0.0.1:3001 --pair ABC123",
+      "  npx @danielwyq/netchat@latest daemon --server http://localhost:3001",
       "",
       "Run `npx @danielwyq/netchat@latest local --help` or `npx @danielwyq/netchat@latest daemon --help` for command-specific options.",
     ].join("\n"),
