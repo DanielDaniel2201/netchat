@@ -3,6 +3,7 @@
 ## 2026-04-08
 
 - Removed the server-side machine job time limit and marked diagnostics as unbounded, so long-running turns now rely only on the runtime inactivity timeout instead of being force-failed after a fixed total duration.
+- Stabilized React Flow handle refreshes in selection-enabled message nodes, so Claude/Codex stream completion no longer risks a `Minified React error #185` infinite update loop in the canvas.
 
 ## Changelog rule
 

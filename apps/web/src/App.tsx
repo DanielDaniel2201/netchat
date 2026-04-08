@@ -2552,22 +2552,31 @@ function SelectableMessage({
   }, [hasAnchors, renderableAnchors]);
 
   const positionedAnchorsById = useMemo(() => new Map(positionedAnchors.map((anchor) => [anchor.id, anchor])), [positionedAnchors]);
-  const anchorsForRender = renderableAnchors.map((anchor, index) => {
-    const positioned = positionedAnchorsById.get(anchor.id);
-    if (positioned) {
-      return positioned;
-    }
+  const anchorsForRender = useMemo(
+    () =>
+      renderableAnchors.map((anchor, index) => {
+        const positioned = positionedAnchorsById.get(anchor.id);
+        if (positioned) {
+          return positioned;
+        }
 
-    return {
-      ...anchor,
-      side: index % 2 === 0 ? ("left" as const) : ("right" as const),
-      top: 30 + index * 36,
-    };
-  });
-  const leftAnchors = anchorsForRender.filter((anchor) => anchor.side === "left");
-  const rightAnchors = anchorsForRender.filter((anchor) => anchor.side === "right");
+        return {
+          ...anchor,
+          side: index % 2 === 0 ? ("left" as const) : ("right" as const),
+          top: 30 + index * 36,
+        };
+      }),
+    [positionedAnchorsById, renderableAnchors],
+  );
+  const leftAnchors = useMemo(() => anchorsForRender.filter((anchor) => anchor.side === "left"), [anchorsForRender]);
+  const rightAnchors = useMemo(() => anchorsForRender.filter((anchor) => anchor.side === "right"), [anchorsForRender]);
+  const nodeInternalsSignature = useMemo(
+    () => JSON.stringify(anchorsForRender.map((anchor) => [anchor.id, anchor.handleId, anchor.side, anchor.top])),
+    [anchorsForRender],
+  );
 
   useEffect(() => {
+    // React Flow only needs to refresh handles when their layout actually changes.
     const frame = window.requestAnimationFrame(() => {
       updateNodeInternals(nodeId);
     });
@@ -2575,7 +2584,7 @@ function SelectableMessage({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [anchorsForRender, nodeId, updateNodeInternals]);
+  }, [nodeId, nodeInternalsSignature, updateNodeInternals]);
 
   return (
     <div
