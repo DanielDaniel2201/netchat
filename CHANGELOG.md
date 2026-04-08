@@ -7,6 +7,7 @@
 - Stabilized React Flow handle refreshes in selection-enabled message nodes, so Claude/Codex stream completion no longer risks a `Minified React error #185` infinite update loop in the canvas.
 - Narrowed top-level assistant-stream subscriptions and stabilized viewport/composer state updates, so streaming replies no longer force the entire canvas app through avoidable React/React Flow update cycles on every token.
 - Rendered in-progress assistant replies as lightweight plain text until stream completion, so very long markdown/code responses no longer reparse and relayout the full markdown tree on every token mid-stream.
+- Fixed the canvas camera to use a controlled React Flow viewport instead of relying on one-time `defaultViewport` initialization, so `npm run app:local` now opens nets at the intended default zoom instead of falling back to an oversized `scale(1)` first paint.
 
 ## Changelog rule
 

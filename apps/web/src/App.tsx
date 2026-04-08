@@ -10,7 +10,6 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useNodesInitialized,
-  useOnViewportChange,
   useUpdateNodeInternals,
   useReactFlow,
 } from "@xyflow/react";
@@ -879,11 +878,6 @@ function NetchatApp() {
     [syncBubbleComposerAnchor],
   );
 
-  useOnViewportChange({
-    onChange: handleViewportChange,
-    onEnd: handleViewportChange,
-  });
-
   useEffect(() => {
     const hostElement = canvasHostRef.current;
     if (!hostElement) {
@@ -1731,7 +1725,8 @@ function NetchatApp() {
           className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
           nodes={graph.nodes}
           edges={graph.edges}
-          defaultViewport={viewport}
+          viewport={viewport}
+          onViewportChange={handleViewportChange}
           onNodeClick={(_event, node) => {
             const selectedText = window.getSelection()?.toString().trim();
             const message = (node.data as MessageNodeData | undefined)?.message;
