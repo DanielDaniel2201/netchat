@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-09
+
+- Added a repo-local `check-postmortem` skill plus a postmortem indexing script, so agents fixing stubborn bugs can quickly scan historical bug reports by `title` and `summary` before opening the full write-up.
+
 ## 2026-04-08
 
 - Switched the local app's default controller and daemon URLs from `127.0.0.1` to `localhost`, so browser auto-open, runtime wiring, and CLI examples now consistently use the project's advertised localhost loopback host.

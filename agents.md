@@ -126,11 +126,11 @@ npm run app:local
 
 ## Bug Fix Postmortem Policy
 
-A bug fix task is not complete until a corresponding postmortem file has been created under `postmortem/`. You can only create the corresponding postmortem file until the user explicitly confirms you that this bug fix task is completed. If the user forgets, ask proactively if a postmortem file is needed.
+A bug fix task is not complete until a corresponding postmortem file has been created under `.agents/postmortem/`. You can only create the corresponding postmortem file until the user explicitly confirms you that this bug fix task is completed. If the user forgets, ask proactively if a postmortem file is needed.
 
 ### Rules
 
-- Every bug fix must create exactly one new markdown file in `postmortem/`.
+- Every bug fix must create exactly one new markdown file in `.agents/postmortem/`.
 - Create the postmortem only after the fix has been implemented and verified.
 - Do not overwrite an existing postmortem file for a different bug.
 - Keep the document concise, specific, and factual.
@@ -143,11 +143,11 @@ A bug fix task is not complete until a corresponding postmortem file has been cr
 
 Use this format:
 
-`postmortem/YYYY-MM-DD-HHMM-bug-slug.md`
+`YYYY-MM-DD-HHMM-bug-slug.md`
 
 Example:
 
-`postmortem/2026-04-08-1430-login-timeout.md`
+`2026-04-08-1430-login-timeout.md`
 
 ### Required Frontmatter
 
@@ -199,6 +199,12 @@ Optional but recommended:
 ## Follow-up
 - <next action or `none`>
 ```
+
+### Verify Template
+
+Ignore this step if there is not a check-postmortem skill within available skills you see.
+
+Invoke check-postmortem skill,  to verify if the newly created postmortem markdown file's format complies with the template.
 
 ## Other references
 
