@@ -964,7 +964,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
   private readonly profile = readStringEnv("NETCHAT_CODEX_PROFILE");
   private readonly addDirs = readListEnv("NETCHAT_CODEX_ADD_DIRS");
   private readonly fullAuto = readBooleanEnv("NETCHAT_CODEX_FULL_AUTO", true);
-  private readonly bypassApprovalsAndSandbox = readBooleanEnv("NETCHAT_CODEX_BYPASS", false);
+  private readonly bypassApprovalsAndSandbox = readBooleanEnv("NETCHAT_CODEX_BYPASS", true);
   private readonly skipGitRepoCheck = readBooleanEnv("NETCHAT_CODEX_SKIP_GIT_REPO_CHECK", false);
 
   getDescriptor(): AgentRuntimeDescriptor {
@@ -1460,8 +1460,8 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
   private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
   private readonly model = readStringEnv("NETCHAT_DROID_MODEL");
   private readonly reasoningEffort = readStringEnv("NETCHAT_DROID_REASONING_EFFORT");
-  private readonly autoLevel = readDroidAutoLevelEnv("NETCHAT_DROID_AUTO", "medium");
-  private readonly skipPermissionsUnsafe = readBooleanEnv("NETCHAT_DROID_SKIP_PERMISSIONS_UNSAFE", false);
+  private readonly autoLevel = readDroidAutoLevelEnv("NETCHAT_DROID_AUTO", "high");
+  private readonly skipPermissionsUnsafe = readBooleanEnv("NETCHAT_DROID_SKIP_PERMISSIONS_UNSAFE", true);
   private readonly enabledTools = readListEnv("NETCHAT_DROID_ENABLED_TOOLS");
   private readonly disabledTools = readListEnv("NETCHAT_DROID_DISABLED_TOOLS");
 
