@@ -15,7 +15,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, ChevronDown, LoaderCircle, MoreHorizontal } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, LoaderCircle, MoreHorizontal, Plus } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
   AgentRuntimeOption,
@@ -25,7 +25,9 @@ import {
   CreateNetInput,
   CreateRootTurnInput,
   GraphSnapshot,
+  MachineWorkspacesState,
   MessageNode,
+  PickWorkspaceFolderResult,
   TurnStreamEvent,
   UiConfig,
   UpdateNetInput,
@@ -302,7 +304,7 @@ function NetchatApp() {
   const [editingNetTitle, setEditingNetTitle] = useState("");
   const [openNetMenuId, setOpenNetMenuId] = useState<string | null>(null);
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
-  const [showNetHistory, setShowNetHistory] = useState(false);
+  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<string[]>([]);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
   const clearLiveAssistantStates = useLiveAssistantStateStore((state) => state.clearStates);
@@ -312,6 +314,10 @@ function NetchatApp() {
   const workspaceQuery = useQuery({
     queryKey: ["workspace"],
     queryFn: () => request<WorkspaceState>("/api/workspace"),
+  });
+  const workspacesQuery = useQuery({
+    queryKey: ["workspaces"],
+    queryFn: () => request<MachineWorkspacesState>("/api/workspaces"),
   });
   const graphQuery = useQuery({
     queryKey: ["graph"],
@@ -329,13 +335,19 @@ function NetchatApp() {
   });
 
   const workspace = workspaceQuery.data;
+  const machineWorkspaces = workspacesQuery.data;
   const persistedSnapshot = graphQuery.data;
   const snapshot = activeStreamedTurn?.optimisticSnapshot ?? persistedSnapshot;
   const uiConfig = uiConfigQuery.data;
   const agentOptions = agentsQuery.data ?? [];
   const workspaceNets = workspace?.nets ?? [];
+  const knownWorkspaces = machineWorkspaces?.workspaces ?? [];
+  const activeWorkspaceId = machineWorkspaces?.activeWorkspaceId ?? workspace?.workspaceId ?? null;
+  const canPickWorkspaceFolder = machineWorkspaces?.canPickWorkspaceFolder ?? true;
   const activeNetId = workspace?.activeNetId ?? null;
   const activeNet = workspaceNets.find((net) => net.id === activeNetId) ?? null;
+  const activeWorkspaceSummary =
+    knownWorkspaces.find((candidate) => candidate.workspaceId === activeWorkspaceId) ?? null;
   const branchesById = useMemo(
     () => new Map((snapshot?.branches ?? []).map((branch) => [branch.id, branch])),
     [snapshot],
@@ -533,6 +545,7 @@ function NetchatApp() {
       setActivePathMessageId(null);
       clearBrowserSelection();
       await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onError: (error) => {
       logWeb("error", `Creating a new net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -555,9 +568,99 @@ function NetchatApp() {
       setActivePathMessageId(null);
       clearBrowserSelection();
       await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onError: (error) => {
       logWeb("error", `Switching nets failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const selectWorkspaceMutation = useMutation({
+    mutationFn: async (workspaceId: string) => {
+      logWeb("info", `Switching to workspace ${workspaceId}.`);
+      return request<WorkspaceState>(`/api/workspaces/${workspaceId}/select`, {
+        method: "POST",
+      });
+    },
+    onSuccess: async (nextWorkspace) => {
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setExpandedWorkspaceIds((current) =>
+        current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
+      );
+      setComposerValue("");
+      setSelectionDraft(null);
+      setExpandedBranchIds([]);
+      setSelectedMessageId(null);
+      setActivePathMessageId(null);
+      clearBrowserSelection();
+      await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onError: (error) => {
+      logWeb("error", `Switching workspaces failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const selectWorkspaceNetMutation = useMutation({
+    mutationFn: async (variables: { workspaceId: string; netId: string }) => {
+      logWeb("info", `Switching to workspace ${variables.workspaceId} net ${variables.netId}.`);
+      return request<WorkspaceState>(`/api/workspaces/${variables.workspaceId}/nets/${variables.netId}/select`, {
+        method: "POST",
+      });
+    },
+    onSuccess: async (nextWorkspace) => {
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setExpandedWorkspaceIds((current) =>
+        current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
+      );
+      setComposerValue("");
+      setSelectionDraft(null);
+      setExpandedBranchIds([]);
+      setSelectedMessageId(null);
+      setActivePathMessageId(null);
+      clearBrowserSelection();
+      await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onError: (error) => {
+      logWeb("error", `Switching workspace nets failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const openWorkspaceFolderMutation = useMutation({
+    mutationFn: async () => {
+      logWeb("info", "Opening the native workspace folder picker.");
+      const pickedFolder = await request<PickWorkspaceFolderResult>("/api/workspaces/pick-folder", {
+        method: "POST",
+      });
+      if (!pickedFolder.workingDirectory) {
+        return null;
+      }
+
+      return request<WorkspaceState>("/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({
+          workingDirectory: pickedFolder.workingDirectory,
+        }),
+      });
+    },
+    onSuccess: async (nextWorkspace) => {
+      if (!nextWorkspace) {
+        return;
+      }
+
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setExpandedWorkspaceIds((current) =>
+        current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
+      );
+      setComposerValue("");
+      setSelectionDraft(null);
+      setExpandedBranchIds([]);
+      setSelectedMessageId(null);
+      setActivePathMessageId(null);
+      clearBrowserSelection();
+      await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onError: (error) => {
+      logWeb("error", `Opening a workspace folder failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
   const renameNetMutation = useMutation({
@@ -568,11 +671,12 @@ function NetchatApp() {
         body: JSON.stringify(variables.input),
       });
     },
-    onSuccess: (nextWorkspace) => {
+    onSuccess: async (nextWorkspace) => {
       queryClient.setQueryData(["workspace"], nextWorkspace);
       setEditingNetId(null);
       setEditingNetTitle("");
       setOpenNetMenuId(null);
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onError: (error) => {
       logWeb("error", `Renaming a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -586,8 +690,9 @@ function NetchatApp() {
         body: JSON.stringify(variables.input),
       });
     },
-    onSuccess: (nextWorkspace) => {
+    onSuccess: async (nextWorkspace) => {
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onError: (error) => {
       logWeb("error", `Updating a net agent failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -617,6 +722,8 @@ function NetchatApp() {
         clearBrowserSelection();
         await queryClient.invalidateQueries({ queryKey: ["graph"] });
       }
+
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onError: (error) => {
       logWeb("error", `Deleting a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
@@ -760,6 +867,14 @@ function NetchatApp() {
         agentRuntimeKind: nextAgent.runtimeKind,
       },
     });
+  }
+
+  function toggleWorkspaceExpansion(workspaceId: string) {
+    setExpandedWorkspaceIds((current) =>
+      current.includes(workspaceId)
+        ? current.filter((candidate) => candidate !== workspaceId)
+        : [...current, workspaceId],
+    );
   }
 
   function requestNetDeletion(netId: string, title: string) {
@@ -908,6 +1023,25 @@ function NetchatApp() {
     lastAutoFitNetIdRef.current = null;
     lastViewportResetNetIdRef.current = null;
   }, [activeNetId]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    setExpandedWorkspaceIds((current) =>
+      current.includes(activeWorkspaceId) ? current : [activeWorkspaceId, ...current],
+    );
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (knownWorkspaces.length === 0) {
+      return;
+    }
+
+    const liveWorkspaceIds = new Set(knownWorkspaces.map((workspaceSummary) => workspaceSummary.workspaceId));
+    setExpandedWorkspaceIds((current) => current.filter((workspaceId) => liveWorkspaceIds.has(workspaceId)));
+  }, [knownWorkspaces]);
 
   useEffect(() => {
     if (!activeNetId || canvasSize.width <= 0 || canvasSize.height <= 0) {
@@ -1204,6 +1338,9 @@ function NetchatApp() {
   const isSwitchingNet =
     createNetMutation.isPending ||
     selectNetMutation.isPending ||
+    selectWorkspaceMutation.isPending ||
+    selectWorkspaceNetMutation.isPending ||
+    openWorkspaceFolderMutation.isPending ||
     renameNetMutation.isPending ||
     updateNetAgentMutation.isPending ||
     deleteNetMutation.isPending;
@@ -1491,7 +1628,10 @@ function NetchatApp() {
       ? activeStreamedAssistantErrorMessage ?? streamErrorMessage
       : streamErrorMessage;
   const netErrorMessage = formatErrorMessage(
-    createNetMutation.error ??
+    openWorkspaceFolderMutation.error ??
+      selectWorkspaceMutation.error ??
+      selectWorkspaceNetMutation.error ??
+      createNetMutation.error ??
       selectNetMutation.error ??
       renameNetMutation.error ??
       updateNetAgentMutation.error ??
@@ -1506,16 +1646,45 @@ function NetchatApp() {
     activeNetAgentValue || defaultNewNetAgent?.runtimeId || agentOptions[0]?.runtimeId || "";
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)]">
-      <div ref={canvasHostRef} className="relative flex-1 overflow-hidden">
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)] lg:flex-row">
+      <aside className="relative z-20 flex w-full max-h-[48vh] shrink-0 flex-col overflow-hidden border-b border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(244,241,234,0.96)_100%)] lg:h-screen lg:max-h-none lg:w-[368px] lg:border-b-0 lg:border-r">
+        <div className="border-b border-[var(--text-main)] px-5 py-5">
+          <div className="editorial-meta text-[rgba(26,26,26,0.48)]">Machine-local browser</div>
+          <div className="mt-3 flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="font-[var(--font-display)] text-[31px] leading-[1.04] tracking-[-0.03em]">Workspaces</div>
+              <p className="mt-2 max-w-[28ch] text-[13px] leading-6 text-[rgba(26,26,26,0.62)]">
+                Browse every local net, switch folders, and keep the canvas focused on one active workspace.
+              </p>
+            </div>
+            <div className="shrink-0 border border-[var(--text-main)] bg-white px-3 py-2 text-right shadow-[6px_6px_0_rgba(26,26,26,0.06)]">
+              <div className="editorial-meta text-[rgba(26,26,26,0.42)]">Tracked</div>
+              <div className="mt-1 text-[18px] font-medium leading-none">{knownWorkspaces.length || 1}</div>
+            </div>
+          </div>
+        </div>
 
-        <div className="pointer-events-none absolute right-6 top-6 z-20 flex flex-col items-end gap-3">
-          <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-            <div className="border-b border-[var(--node-border)] px-5 py-4">
-              <div className="flex items-start justify-between gap-4 text-[15px] font-medium leading-6">
-                <div className="flex min-w-0 items-center gap-2 text-[var(--text-main)]">
-                  <span>{activeAgentLabel}</span>
+        <div className="flex-1 overflow-y-auto">
+          <section className="border-b border-[var(--node-border)] px-4 py-4">
+            <div className="editorial-meta text-[rgba(26,26,26,0.46)]">Current net</div>
+            <div className="mt-3 border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.06)]">
+              <div className="border-b border-[var(--node-border)] px-4 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="editorial-meta text-[rgba(26,26,26,0.46)]">{workspaceName}</div>
+                    <div className="mt-2 break-words text-[23px] font-medium leading-8 text-[var(--text-main)]">
+                      {activeNet?.title ?? "Loading..."}
+                    </div>
+                  </div>
+                  <div className="shrink-0 border border-[var(--node-border)] bg-[rgba(244,241,234,0.72)] px-2.5 py-2 text-right">
+                    <div className="editorial-meta text-[rgba(26,26,26,0.42)]">Nets</div>
+                    <div className="mt-1 text-[15px] font-medium leading-none">
+                      {activeWorkspaceSummary?.nets.length ?? workspaceNets.length}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex items-center gap-2 text-[14px] leading-6 text-[rgba(26,26,26,0.74)]">
                   <span
                     className={cn(
                       "inline-flex h-2.5 w-2.5 rounded-full border border-[rgba(26,26,26,0.16)]",
@@ -1527,199 +1696,319 @@ function NetchatApp() {
                     )}
                     title={connectionStatus.label}
                   />
+                  <span>{activeAgentLabel}</span>
+                  <span className="opacity-35">/</span>
+                  <span>{connectionStatus.label}</span>
                 </div>
+
                 <div
-                  className="max-w-[128px] truncate text-right text-[rgba(26,26,26,0.66)]"
+                  className="mt-3 border-t border-[var(--node-border)] pt-3 font-mono text-[12px] leading-5 text-[rgba(26,26,26,0.5)]"
                   title={workingDirectoryPath}
                 >
-                  {workspaceName}
+                  {truncateMiddle(workingDirectoryPath, 54)}
                 </div>
               </div>
 
-              <div className="mt-5 text-center text-[22px] font-medium leading-8 text-[var(--text-main)]">
-                {activeNet?.title ?? "Loading..."}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
-              <button
-                type="button"
-                className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
-                disabled={workspaceQuery.isLoading}
-                onClick={() => {
-                  setOpenNetMenuId(null);
-                  setShowNetHistory((open) => !open);
-                }}
-              >
-                {showNetHistory ? "Hide history" : "History nets"}
-              </button>
-              <button
-                type="button"
-                className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
-                disabled={isSwitchingNet || workspaceQuery.isLoading}
-                onClick={handleCreateNet}
-              >
-                {createNetMutation.isPending ? "Creating..." : "New net"}
-              </button>
-            </div>
-
-            {netErrorMessage ? (
-              <div className="border-t border-rose-200 bg-rose-50 px-5 py-4 text-sm leading-6 text-rose-700">
-                {netErrorMessage}
-              </div>
-            ) : null}
-          </div>
-
-          {showNetHistory ? (
-            <div className="pointer-events-auto w-[min(320px,calc(100vw-3rem))] border border-[var(--text-main)] bg-white shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-              <div className="border-b border-[var(--node-border)] px-5 py-4 text-[17px] font-medium text-[var(--text-main)]">
-                History nets
-              </div>
-
-              <div className="max-h-[360px] overflow-y-auto">
-                {workspaceQuery.isLoading ? (
-                  <div className="px-5 py-5 text-[16px] leading-7 text-[rgba(26,26,26,0.62)]">
-                    Loading workspace nets...
-                  </div>
-                ) : workspaceNets.length ? (
-                  workspaceNets.map((net) => {
-                    const isActiveNet = net.id === activeNetId;
-                    const isEditingNet = editingNetId === net.id;
-                    const isMenuOpen = openNetMenuId === net.id;
-                    const isRenamingNet = renameNetMutation.isPending && renameNetMutation.variables?.netId === net.id;
-                    const isDeletingNet = deleteNetMutation.isPending && deleteNetMutation.variables === net.id;
-                    const latestMessageLabel = formatLatestMessageTime(net.latestMessageAt);
-                    return (
-                      <div
-                        key={net.id}
-                        className={cn(
-                          "border-b border-[var(--node-border)] px-5 py-4 transition-colors last:border-b-0",
-                          isActiveNet ? "bg-[var(--block-slate)] text-white" : "bg-white hover:bg-[var(--bg-cream)]",
-                        )}
+              <div className="border-b border-[var(--node-border)] px-4 py-4">
+                <div className="editorial-meta text-[rgba(26,26,26,0.46)]">Agent</div>
+                <div className="relative mt-2">
+                  <select
+                    className="h-11 w-full appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.7)] pl-3 pr-10 text-[14px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
+                    disabled={workspaceQuery.isLoading || isSwitchingNet || isUpdatingActiveNetAgent || agentOptions.length === 0}
+                    value={displayedAgentSelectValue}
+                    onChange={(event) => updateActiveNetAgent(event.target.value)}
+                  >
+                    {agentOptions.map((agent) => (
+                      <option
+                        key={agent.runtimeId}
+                        disabled={!agent.installed}
+                        value={agent.runtimeId}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            {isEditingNet ? (
-                              <div className="space-y-3">
-                                <Input
-                                  autoFocus
-                                  className="h-11 rounded-none border-[var(--text-main)] px-3 text-[17px] font-medium shadow-none focus:border-[var(--text-main)]"
-                                  disabled={isRenamingNet}
-                                  maxLength={120}
-                                  value={editingNetTitle}
-                                  onChange={(event) => setEditingNetTitle(event.target.value)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                      event.preventDefault();
-                                      submitNetRename(net.id, net.title);
-                                    }
+                        {buildAgentOptionLabel(agent)}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[rgba(26,26,26,0.54)]" />
+                </div>
+              </div>
 
-                                    if (event.key === "Escape") {
-                                      event.preventDefault();
-                                      cancelNetRename();
-                                    }
-                                  }}
-                                />
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[14px] font-medium text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
-                                    disabled={isRenamingNet || editingNetTitle.trim().length === 0}
-                                    onClick={() => submitNetRename(net.id, net.title)}
-                                  >
-                                    {isRenamingNet ? "Saving..." : "Save"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="border border-[var(--node-border)] bg-white px-3 py-2 text-[14px] font-medium text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
-                                    disabled={isRenamingNet}
-                                    onClick={cancelNetRename}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                className="block w-full text-left disabled:cursor-not-allowed"
-                                disabled={isSwitchingNet || isActiveNet}
-                                onClick={() => selectNetMutation.mutate(net.id)}
-                              >
-                                <div className={cn("truncate text-[17px] font-medium leading-7", isActiveNet ? "text-white" : "text-[var(--text-main)]")}>
-                                  {net.title}
-                                </div>
-                                <div
-                                  className={cn(
-                                    "mt-1 text-[14px] leading-6",
-                                    isActiveNet ? "text-white/64" : "text-[rgba(26,26,26,0.56)]",
-                                  )}
-                                >
-                                  <span>{net.agentRuntimeLabel ?? "Agent not set"}</span>
-                                  <span className="mx-1.5 opacity-50">•</span>
-                                  <span>{latestMessageLabel ?? "No messages yet"}</span>
-                                </div>
-                              </button>
+              <div className="px-4 py-4">
+                <button
+                  type="button"
+                  className="flex h-11 w-full items-center justify-center gap-2 border border-[var(--text-main)] bg-[var(--text-main)] px-4 text-[14px] font-medium text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                  disabled={isSwitchingNet || workspaceQuery.isLoading}
+                  onClick={handleCreateNet}
+                >
+                  {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                  <span>{createNetMutation.isPending ? "Creating net..." : "New net"}</span>
+                </button>
+              </div>
+
+              {netErrorMessage ? (
+                <div className="border-t border-rose-200 bg-rose-50 px-4 py-4 text-sm leading-6 text-rose-700">
+                  {netErrorMessage}
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="px-4 py-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="editorial-meta text-[rgba(26,26,26,0.46)]">Workspaces</div>
+                <div className="mt-1 text-[13px] leading-6 text-[rgba(26,26,26,0.58)]">Grouped local nets on this machine.</div>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.34)]"
+                disabled={isSwitchingNet || !canPickWorkspaceFolder}
+                title="Open folder as workspace"
+                onClick={() => openWorkspaceFolderMutation.mutate()}
+              >
+                {openWorkspaceFolderMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {workspacesQuery.isLoading ? (
+                <div className="border border-[var(--node-border)] bg-white px-4 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
+                  Loading local workspaces...
+                </div>
+              ) : knownWorkspaces.length ? (
+                knownWorkspaces.map((workspaceSummary) => {
+                  const formattedWorkspacePath = formatWorkingDirectoryPath(workspaceSummary.workingDirectory);
+                  const workspaceDisplayName = resolveWorkspaceName(formattedWorkspacePath);
+                  const isActiveWorkspace = workspaceSummary.workspaceId === activeWorkspaceId;
+                  const isWorkspaceExpanded = expandedWorkspaceIds.includes(workspaceSummary.workspaceId);
+                  const workspaceLatestMessageLabel = formatLatestMessageTime(workspaceSummary.latestMessageAt);
+
+                  return (
+                    <div
+                      key={workspaceSummary.workspaceId}
+                      className={cn(
+                        "border transition-colors",
+                        isActiveWorkspace
+                          ? "border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.06)]"
+                          : "border-[var(--node-border)] bg-[rgba(255,255,255,0.78)]",
+                      )}
+                    >
+                      <div className="flex items-stretch">
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex shrink-0 items-start px-3 py-4 transition-colors",
+                            isActiveWorkspace ? "bg-white" : "hover:bg-[rgba(244,241,234,0.82)]",
+                          )}
+                          aria-label={`${isWorkspaceExpanded ? "Collapse" : "Expand"} ${workspaceDisplayName}`}
+                          onClick={() => toggleWorkspaceExpansion(workspaceSummary.workspaceId)}
+                        >
+                          <ChevronRight
+                            className={cn(
+                              "mt-0.5 size-4 shrink-0 text-[rgba(26,26,26,0.5)] transition-transform",
+                              isWorkspaceExpanded ? "rotate-90" : "",
                             )}
-                          </div>
-
-                          {isEditingNet ? null : (
-                            <div
-                              ref={isMenuOpen ? openNetMenuRef : null}
-                              className="relative shrink-0"
-                              data-net-actions-root
-                            >
-                              <button
-                                type="button"
-                                className={cn(
-                                  "inline-flex h-9 w-9 items-center justify-center border transition-colors disabled:cursor-not-allowed",
-                                  isActiveNet
-                                    ? "border-white/18 bg-white/8 text-white hover:bg-white/14 disabled:text-white/36"
-                                    : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.66)] hover:bg-[var(--bg-cream)] disabled:text-[rgba(26,26,26,0.32)]",
-                                )}
-                                disabled={isSwitchingNet}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setOpenNetMenuId((current) => (current === net.id ? null : net.id));
-                                }}
-                              >
-                                <MoreHorizontal className="size-4" />
-                              </button>
-                              {isMenuOpen ? (
-                                <div className="absolute right-0 top-full z-30 mt-2 w-36 border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
-                                  <button
-                                    type="button"
-                                    className="block w-full border-b border-[var(--node-border)] px-4 py-3 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
-                                    disabled={isSwitchingNet || isDeletingNet}
-                                    onClick={() => beginNetRename(net.id, net.title)}
-                                  >
-                                    Rename
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="block w-full px-4 py-3 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
-                                    disabled={isSwitchingNet || isDeletingNet}
-                                    onClick={() => requestNetDeletion(net.id, net.title)}
-                                  >
-                                    {isDeletingNet ? "Deleting..." : "Delete"}
-                                  </button>
-                                </div>
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex min-w-0 flex-1 items-start justify-between gap-3 py-4 pr-4 text-left transition-colors disabled:cursor-default",
+                            isActiveWorkspace ? "bg-white" : "hover:bg-[rgba(244,241,234,0.82)]",
+                          )}
+                          disabled={isSwitchingNet || isActiveWorkspace}
+                          onClick={() => selectWorkspaceMutation.mutate(workspaceSummary.workspaceId)}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-[17px] font-medium leading-7 text-[var(--text-main)]">
+                                {workspaceDisplayName}
+                              </span>
+                              {isActiveWorkspace ? (
+                                <span className="editorial-meta border border-[var(--text-main)] bg-[var(--block-slate)] px-2 py-1 text-white">
+                                  Active
+                                </span>
                               ) : null}
                             </div>
-                          )}
-                        </div>
+                            <div
+                              className="mt-1 font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.46)]"
+                              title={formattedWorkspacePath}
+                            >
+                              {truncateMiddle(formattedWorkspacePath, 46)}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="editorial-meta text-[rgba(26,26,26,0.42)]">{workspaceSummary.nets.length} nets</div>
+                            <div className="mt-1 text-[12px] leading-5 text-[rgba(26,26,26,0.54)]">
+                              {workspaceLatestMessageLabel ?? "No messages yet"}
+                            </div>
+                          </div>
+                        </button>
                       </div>
-                    );
-                  })
-                ) : (
-                  <div className="px-5 py-5 text-[16px] leading-7 text-[rgba(26,26,26,0.62)]">
-                    This workspace does not have any saved nets yet.
-                  </div>
-                )}
-              </div>
+
+                      {isWorkspaceExpanded ? (
+                        <div className="border-t border-[var(--node-border)] bg-[rgba(244,241,234,0.56)] px-4 py-3">
+                          <div className="ml-4 space-y-2 border-l border-[var(--line-color)] pl-3">
+                            {workspaceSummary.nets.map((net) => {
+                              const isActiveNet = isActiveWorkspace && net.id === activeNetId;
+                              const isEditingNet = isActiveWorkspace && editingNetId === net.id;
+                              const isMenuOpen = isActiveWorkspace && openNetMenuId === net.id;
+                              const isRenamingNet = renameNetMutation.isPending && renameNetMutation.variables?.netId === net.id;
+                              const isDeletingNet = deleteNetMutation.isPending && deleteNetMutation.variables === net.id;
+                              const latestMessageLabel = formatLatestMessageTime(net.latestMessageAt);
+
+                              return (
+                                <div
+                                  key={`${workspaceSummary.workspaceId}:${net.id}`}
+                                  className={cn(
+                                    "border px-3 py-3 transition-colors",
+                                    isActiveNet
+                                      ? "border-[var(--block-slate)] bg-[var(--block-slate)] text-white"
+                                      : "border-[var(--node-border)] bg-white hover:bg-[var(--bg-cream)]",
+                                  )}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                      {isEditingNet ? (
+                                        <div className="space-y-3">
+                                          <Input
+                                            autoFocus
+                                            className="h-11 rounded-none border-[var(--text-main)] px-3 text-[17px] font-medium shadow-none focus:border-[var(--text-main)]"
+                                            disabled={isRenamingNet}
+                                            maxLength={120}
+                                            value={editingNetTitle}
+                                            onChange={(event) => setEditingNetTitle(event.target.value)}
+                                            onKeyDown={(event) => {
+                                              if (event.key === "Enter") {
+                                                event.preventDefault();
+                                                submitNetRename(net.id, net.title);
+                                              }
+
+                                              if (event.key === "Escape") {
+                                                event.preventDefault();
+                                                cancelNetRename();
+                                              }
+                                            }}
+                                          />
+                                          <div className="flex items-center gap-2">
+                                            <button
+                                              type="button"
+                                              className="border border-[var(--text-main)] bg-[var(--text-main)] px-3 py-2 text-[14px] font-medium text-white transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                                              disabled={isRenamingNet || editingNetTitle.trim().length === 0}
+                                              onClick={() => submitNetRename(net.id, net.title)}
+                                            >
+                                              {isRenamingNet ? "Saving..." : "Save"}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="border border-[var(--node-border)] bg-white px-3 py-2 text-[14px] font-medium text-[rgba(26,26,26,0.72)] transition-colors hover:bg-[var(--bg-cream)]"
+                                              disabled={isRenamingNet}
+                                              onClick={cancelNetRename}
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="block w-full text-left disabled:cursor-not-allowed"
+                                          disabled={isSwitchingNet || isActiveNet}
+                                          onClick={() =>
+                                            isActiveWorkspace
+                                              ? selectNetMutation.mutate(net.id)
+                                              : selectWorkspaceNetMutation.mutate({
+                                                  workspaceId: workspaceSummary.workspaceId,
+                                                  netId: net.id,
+                                                })
+                                          }
+                                        >
+                                          <div
+                                            className={cn(
+                                              "truncate text-[16px] font-medium leading-7",
+                                              isActiveNet ? "text-white" : "text-[var(--text-main)]",
+                                            )}
+                                          >
+                                            {net.title}
+                                          </div>
+                                          <div
+                                            className={cn(
+                                              "mt-1 text-[13px] leading-6",
+                                              isActiveNet ? "text-white/68" : "text-[rgba(26,26,26,0.56)]",
+                                            )}
+                                          >
+                                            <span>{net.agentRuntimeLabel ?? "Agent not set"}</span>
+                                            <span className="mx-1.5 opacity-50">/</span>
+                                            <span>{latestMessageLabel ?? "No messages yet"}</span>
+                                          </div>
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    {isEditingNet || !isActiveWorkspace ? null : (
+                                      <div
+                                        ref={isMenuOpen ? openNetMenuRef : null}
+                                        className="relative shrink-0"
+                                        data-net-actions-root
+                                      >
+                                        <button
+                                          type="button"
+                                          className={cn(
+                                            "inline-flex h-9 w-9 items-center justify-center border transition-colors disabled:cursor-not-allowed",
+                                            isActiveNet
+                                              ? "border-white/18 bg-white/8 text-white hover:bg-white/14 disabled:text-white/36"
+                                              : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.66)] hover:bg-[var(--bg-cream)] disabled:text-[rgba(26,26,26,0.32)]",
+                                          )}
+                                          disabled={isSwitchingNet}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setOpenNetMenuId((current) => (current === net.id ? null : net.id));
+                                          }}
+                                        >
+                                          <MoreHorizontal className="size-4" />
+                                        </button>
+                                        {isMenuOpen ? (
+                                          <div className="absolute right-0 top-full z-30 mt-2 w-36 border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
+                                            <button
+                                              type="button"
+                                              className="block w-full border-b border-[var(--node-border)] px-4 py-3 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
+                                              disabled={isSwitchingNet || isDeletingNet}
+                                              onClick={() => beginNetRename(net.id, net.title)}
+                                            >
+                                              Rename
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="block w-full px-4 py-3 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
+                                              disabled={isSwitchingNet || isDeletingNet}
+                                              onClick={() => requestNetDeletion(net.id, net.title)}
+                                            >
+                                              {isDeletingNet ? "Deleting..." : "Delete"}
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="border border-[var(--node-border)] bg-white px-4 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
+                  No local workspaces have been discovered yet.
+                </div>
+              )}
             </div>
-          ) : null}
+          </section>
         </div>
+      </aside>
+      <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
 
         <ReactFlow
           className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
@@ -1853,7 +2142,7 @@ function NetchatApp() {
                 <div className="border-b border-white/24 px-6 py-4">
                   <div className="text-[14px] font-medium leading-6 text-white/72">User</div>
                   <div className="mt-2 break-words text-[17px] italic leading-9 text-white/82">
-                    {`“${truncate(selectionForSelectedMessage.selectedText, 160)}”`}
+                    {`"${truncate(selectionForSelectedMessage.selectedText, 160)}"`}
                   </div>
                 </div>
               ) : null}
@@ -3904,27 +4193,6 @@ function resolveWorkspaceName(value: string) {
   const parts = normalized.split("/");
   return parts.at(-1) || value;
 }
-
-/*
-function truncate(value: string, maxLength: number) {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
-
-function truncateMiddle(value: string, maxLength: number) {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  const leading = Math.ceil((maxLength - 1) / 2);
-  const trailing = Math.floor((maxLength - 1) / 2);
-  return `${value.slice(0, leading)}…${value.slice(value.length - trailing)}`;
-}
-
-*/
 
 function truncate(value: string, maxLength: number) {
   if (value.length <= maxLength) {

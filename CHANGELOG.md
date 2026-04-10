@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-10
+
+- Moved net and workspace management out of the top-right header into a persistent left sidebar, adding machine-local workspace discovery, grouped nets, collapsible workspace sections, and a current-net summary that keeps the canvas focused on one active workspace.
+- Added native folder-picker workspace opening plus cross-workspace net switching on the sidebar, so existing local folders can be registered and revisited without starting the app from that directory.
+- Passed the active workspace working directory through server and daemon turn payloads, so Claude/Codex/Droid jobs now execute against the selected workspace path instead of the controller's launch directory.
+
 ## 2026-04-09
 
 - Added a repo-local `check-postmortem` skill plus a postmortem indexing script, so agents fixing stubborn bugs can quickly scan historical bug reports by `title` and `summary` before opening the full write-up.

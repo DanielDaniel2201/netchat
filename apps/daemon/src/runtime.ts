@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -303,6 +303,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
       );
     }
 
+    const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
     const args = this.buildCliArgs(input);
     const startedAtMs = Date.now();
     const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
@@ -310,7 +311,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
 
     logRuntime(
       "info",
-      `Starting ${kind} via Claude CLI (cwd=${this.cwd}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+      `Starting ${kind} via Claude CLI (cwd=${workingDirectory}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
     );
 
     let stdout = "";
@@ -319,7 +320,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
       const liveState = createStreamState();
       const result = await this.executeCli(args, (line) => {
         this.handleStreamLine(line, liveState, options?.onEvent);
-      });
+      }, workingDirectory);
       stdout = result.stdout;
       stderr = result.stderr;
     } catch (error) {
@@ -327,6 +328,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
         kind,
         startedAtMs,
         resumeHandle,
+        workingDirectory,
       });
     }
 
@@ -345,7 +347,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
     }
 
     const outputText =
-      parsed.result?.trim() || this.readAssistantMessageFromTranscript(sessionId) || stdout.trim();
+      parsed.result?.trim() || this.readAssistantMessageFromTranscript(sessionId, workingDirectory) || stdout.trim();
     if (!outputText) {
       throw new Error("Claude CLI completed, but no assistant message was available in stdout or transcript.");
     }
@@ -390,6 +392,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
   private executeCli(
     args: string[],
     onStdoutLine?: (line: string) => void,
+    workingDirectory = this.cwd,
   ): Promise<{ stdout: string; stderr: string }> {
     if (!this.binaryPath) {
       throw new Error("Claude binary path is required.");
@@ -400,8 +403,8 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
 
     return new Promise((resolve, reject) => {
       const child = spawn(invocation.command, invocation.args, {
-        cwd: this.cwd,
-        env: createRuntimeProcessEnv(this.cwd),
+        cwd: workingDirectory,
+        env: createRuntimeProcessEnv(workingDirectory),
         windowsHide: true,
       });
       child.stdin.end();
@@ -850,6 +853,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
       kind: "root-turn" | "branch-create" | "branch-turn";
       startedAtMs: number;
       resumeHandle?: string;
+      workingDirectory: string;
     },
   ) {
     const duration = formatDuration(Date.now() - context.startedAtMs);
@@ -868,7 +872,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
             ? `Claude CLI emitted ${execError.activityCount ?? 0} stdout/stderr chunk(s) before going idle, so this was not a final-answer-only timeout.`
             : "Claude CLI did not emit any stdout/stderr activity before the inactivity timeout expired.",
           `The daemon now tracks streamed CLI activity instead of waiting only for a final answer.`,
-          `Try running \`${this.binaryPath} -p --verbose --output-format stream-json "Reply with exactly: ping"\` manually from ${this.cwd} to verify the local Claude Code runtime.`,
+          `Try running \`${this.binaryPath} -p --verbose --output-format stream-json "Reply with exactly: ping"\` manually from ${context.workingDirectory} to verify the local Claude Code runtime.`,
         ].join(" ")
       : [
           `Claude CLI failed during ${context.kind} after ${duration}.`,
@@ -886,8 +890,8 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
     return new Error(message);
   }
 
-  private readAssistantMessageFromTranscript(sessionId: string): string {
-    const transcriptPath = this.resolveTranscriptPath(sessionId);
+  private readAssistantMessageFromTranscript(sessionId: string, workingDirectory: string): string {
+    const transcriptPath = this.resolveTranscriptPath(sessionId, workingDirectory);
     if (!transcriptPath || !existsSync(transcriptPath)) {
       return "";
     }
@@ -922,14 +926,14 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
     return latestMessage;
   }
 
-  private resolveTranscriptPath(sessionId: string): string | null {
+  private resolveTranscriptPath(sessionId: string, workingDirectory: string): string | null {
     const projectsRoot = path.join(os.homedir(), ".claude", "projects");
-    const directPath = path.join(projectsRoot, sanitizeProjectPath(this.cwd), `${sessionId}.jsonl`);
+    const directPath = path.join(projectsRoot, sanitizeProjectPath(workingDirectory), `${sessionId}.jsonl`);
     if (existsSync(directPath)) {
       return directPath;
     }
 
-    const projectDir = path.join(projectsRoot, sanitizeProjectPath(this.cwd));
+    const projectDir = path.join(projectsRoot, sanitizeProjectPath(workingDirectory));
     if (!existsSync(projectDir)) {
       return null;
     }
@@ -989,6 +993,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
       );
     }
 
+    const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
     const args = this.buildCliArgs(input);
     const startedAtMs = Date.now();
     const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
@@ -996,7 +1001,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
 
     logRuntime(
       "info",
-      `Starting ${kind} via Codex CLI (cwd=${this.cwd}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+      `Starting ${kind} via Codex CLI (cwd=${workingDirectory}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
     );
 
     let stdout = "";
@@ -1005,7 +1010,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
       const liveState = createCodexStreamState();
       const result = await this.executeCli(args, (line) => {
         this.handleStreamLine(line, liveState, options?.onEvent);
-      });
+      }, workingDirectory);
       stdout = result.stdout;
       stderr = result.stderr;
     } catch (error) {
@@ -1013,6 +1018,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
         kind,
         startedAtMs,
         resumeHandle,
+        workingDirectory,
       });
     }
 
@@ -1033,6 +1039,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
 
   private buildCliArgs(input: AgentTurnInput) {
     const args = ["exec"];
+    const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
 
     if (input.session.mode === "resume") {
       args.push("resume");
@@ -1067,13 +1074,14 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
       return args;
     }
 
-    args.push("--cd", this.cwd, input.prompt);
+    args.push("--cd", workingDirectory, input.prompt);
     return args;
   }
 
   private executeCli(
     args: string[],
     onStdoutLine?: (line: string) => void,
+    workingDirectory = this.cwd,
   ): Promise<{ stdout: string; stderr: string }> {
     if (!this.binaryPath) {
       throw new Error("Codex binary path is required.");
@@ -1084,8 +1092,8 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
 
     return new Promise((resolve, reject) => {
       const child = spawn(invocation.command, invocation.args, {
-        cwd: this.cwd,
-        env: createRuntimeProcessEnv(this.cwd),
+        cwd: workingDirectory,
+        env: createRuntimeProcessEnv(workingDirectory),
         windowsHide: true,
       });
       child.stdin.end();
@@ -1390,6 +1398,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
       kind: "root-turn" | "branch-create" | "branch-turn";
       startedAtMs: number;
       resumeHandle?: string;
+      workingDirectory: string;
     },
   ) {
     const duration = formatDuration(Date.now() - context.startedAtMs);
@@ -1407,7 +1416,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
           execError.hadActivity
             ? `Codex CLI emitted ${execError.activityCount ?? 0} stdout/stderr chunk(s) before going idle.`
             : "Codex CLI did not emit any stdout/stderr activity before the inactivity timeout expired.",
-          `Try running \`${this.binaryPath} exec --json --cd "${this.cwd}" "Reply with exactly: ping"\` manually to verify the local Codex runtime.`,
+          `Try running \`${this.binaryPath} exec --json --cd "${context.workingDirectory}" "Reply with exactly: ping"\` manually to verify the local Codex runtime.`,
         ].join(" ")
       : [
           `Codex CLI failed during ${context.kind} after ${duration}.`,
@@ -1487,6 +1496,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
       );
     }
 
+    const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
     const args = this.buildCliArgs(input);
     const startedAtMs = Date.now();
     const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
@@ -1494,7 +1504,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
 
     logRuntime(
       "info",
-      `Starting ${kind} via Droid CLI (cwd=${this.cwd}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+      `Starting ${kind} via Droid CLI (cwd=${workingDirectory}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
     );
 
     let stdout = "";
@@ -1503,7 +1513,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
       const liveState = createDroidStreamState();
       const result = await this.executeCli(args, (line) => {
         this.handleStreamLine(line, liveState, options?.onEvent);
-      });
+      }, workingDirectory);
       stdout = result.stdout;
       stderr = result.stderr;
     } catch (error) {
@@ -1511,6 +1521,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
         kind,
         startedAtMs,
         resumeHandle,
+        workingDirectory,
       });
     }
 
@@ -1530,7 +1541,8 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
   }
 
   private buildCliArgs(input: AgentTurnInput) {
-    const args = ["exec", "--output-format", "stream-json", "--cwd", this.cwd];
+    const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
+    const args = ["exec", "--output-format", "stream-json", "--cwd", workingDirectory];
 
     if (this.skipPermissionsUnsafe) {
       args.push("--skip-permissions-unsafe");
@@ -1565,6 +1577,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
   private executeCli(
     args: string[],
     onStdoutLine?: (line: string) => void,
+    workingDirectory = this.cwd,
   ): Promise<{ stdout: string; stderr: string }> {
     if (!this.binaryPath) {
       throw new Error("Droid binary path is required.");
@@ -1575,8 +1588,8 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
 
     return new Promise((resolve, reject) => {
       const child = spawn(invocation.command, invocation.args, {
-        cwd: this.cwd,
-        env: createRuntimeProcessEnv(this.cwd),
+        cwd: workingDirectory,
+        env: createRuntimeProcessEnv(workingDirectory),
         windowsHide: true,
       });
       child.stdin.end();
@@ -1875,6 +1888,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
       kind: "root-turn" | "branch-create" | "branch-turn";
       startedAtMs: number;
       resumeHandle?: string;
+      workingDirectory: string;
     },
   ) {
     const duration = formatDuration(Date.now() - context.startedAtMs);
@@ -1892,7 +1906,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
           execError.hadActivity
             ? `Droid CLI emitted ${execError.activityCount ?? 0} stdout/stderr chunk(s) before going idle.`
             : "Droid CLI did not emit any stdout/stderr activity before the inactivity timeout expired.",
-          `Try running \`${this.binaryPath} exec --output-format stream-json --cwd "${this.cwd}" "Reply with exactly: ping"\` manually to verify the local Droid runtime.`,
+          `Try running \`${this.binaryPath} exec --output-format stream-json --cwd "${context.workingDirectory}" "Reply with exactly: ping"\` manually to verify the local Droid runtime.`,
         ].join(" ")
       : [
           `Droid CLI failed during ${context.kind} after ${duration}.`,
@@ -1951,6 +1965,7 @@ class MockRuntimeAdapter implements AgentRuntimeAdapter {
     input: AgentTurnInput,
     options?: AgentRuntimeExecutionOptions,
   ): Promise<AgentTurnResult> {
+    const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
     const session = this.ensureSession(input.session.mode === "resume" ? input.session.handle : null);
     session.turns.push(input.prompt);
 
@@ -1976,6 +1991,7 @@ class MockRuntimeAdapter implements AgentRuntimeAdapter {
           : [
               "Mock runtime",
               `Handle: ${session.id}`,
+              `Workspace: ${workingDirectory}`,
               "",
               `You asked: ${input.prompt}`,
               "",
@@ -2107,6 +2123,20 @@ function createRuntimeDescriptor(runtimeKind: AgentRuntimeKind): AgentRuntimeDes
     runtimeLabel: resolveRuntimeLabel(runtimeKind),
     runtimeId: readStringEnv("NETCHAT_RUNTIME_ID") ?? `${runtimeKind}_local`,
   };
+}
+
+function resolveTurnWorkingDirectory(input: AgentTurnInput, fallbackWorkingDirectory: string) {
+  const requestedWorkingDirectory = input.workingDirectory?.trim();
+  if (!requestedWorkingDirectory) {
+    return fallbackWorkingDirectory;
+  }
+
+  const resolvedWorkingDirectory = path.resolve(requestedWorkingDirectory);
+  if (!existsSync(resolvedWorkingDirectory) || !statSync(resolvedWorkingDirectory).isDirectory()) {
+    throw new Error(`The requested working directory is unavailable: ${requestedWorkingDirectory}`);
+  }
+
+  return resolvedWorkingDirectory;
 }
 
 function createRuntimeProcessEnv(workingDirectory: string): NodeJS.ProcessEnv {

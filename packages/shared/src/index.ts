@@ -62,6 +62,25 @@ export type WorkspaceState = {
   nets: WorkspaceNetSummary[];
 };
 
+export type WorkspaceBrowserSummary = {
+  workspaceId: string;
+  workingDirectory: string;
+  activeNetId: string;
+  nets: WorkspaceNetSummary[];
+  latestMessageAt: string | null;
+  lastOpenedAt: string | null;
+};
+
+export type MachineWorkspacesState = {
+  activeWorkspaceId: string;
+  workspaces: WorkspaceBrowserSummary[];
+  canPickWorkspaceFolder: boolean;
+};
+
+export type PickWorkspaceFolderResult = {
+  workingDirectory: string | null;
+};
+
 export type UiConfig = {
   showSessionIds: boolean;
 };
@@ -219,6 +238,7 @@ export type AgentTurnMetadata = {
 export type AgentTurnInput = {
   prompt: string;
   session: AgentTurnSession;
+  workingDirectory?: string | null;
   metadata?: AgentTurnMetadata;
 };
 
@@ -410,6 +430,12 @@ export const updateNetInputSchema = z
   });
 
 export type UpdateNetInput = z.infer<typeof updateNetInputSchema>;
+
+export const openWorkspaceInputSchema = z.object({
+  workingDirectory: z.string().trim().min(1),
+});
+
+export type OpenWorkspaceInput = z.infer<typeof openWorkspaceInputSchema>;
 
 export type AgentTurnResult = {
   handle: string;
