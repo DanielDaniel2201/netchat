@@ -33,6 +33,12 @@ type WorkspaceManifest = {
   nets: WorkspaceNetRecord[];
 };
 
+type WorkspaceStoreOptions = {
+  workingDirectory?: string;
+  ensureLaunchNet?: boolean;
+  useConfiguredInitialDatabasePath?: boolean;
+};
+
 export class WorkspaceStore {
   private readonly workingDirectory: string;
   private readonly workspaceDataDirectory: string;
@@ -43,20 +49,27 @@ export class WorkspaceStore {
   private manifest: WorkspaceManifest;
   private activeStore: GraphStore;
 
-  constructor() {
-    this.workingDirectory = resolveWorkspaceWorkingDirectory();
+  constructor(options: WorkspaceStoreOptions = {}) {
+    this.workingDirectory = normalizeWorkingDirectory(options.workingDirectory ?? resolveWorkspaceWorkingDirectory());
     this.workspaceId = createWorkspaceStorageKey(this.workingDirectory);
     this.workspaceDataDirectory = resolveWorkspaceDataDirectory(this.workingDirectory);
     this.manifestPath = path.join(this.workspaceDataDirectory, "workspace.json");
     this.netsDirectory = path.join(this.workspaceDataDirectory, "nets");
-    this.configuredInitialDatabasePath = resolveConfiguredInitialDatabasePath();
+    this.configuredInitialDatabasePath =
+      options.useConfiguredInitialDatabasePath === false ? null : resolveConfiguredInitialDatabasePath();
 
     mkdirSync(this.workspaceDataDirectory, { recursive: true });
     mkdirSync(this.netsDirectory, { recursive: true });
 
     this.manifest = this.loadManifest();
-    this.manifest = this.ensureLaunchNet(this.manifest);
+    if (options.ensureLaunchNet ?? true) {
+      this.manifest = this.ensureLaunchNet(this.manifest);
+    }
     this.activeStore = new GraphStore(this.getActiveNetRecord().databasePath);
+  }
+
+  dispose() {
+    this.activeStore.dispose();
   }
 
   getWorkspaceState(): WorkspaceState {
@@ -548,11 +561,11 @@ export class WorkspaceStore {
   }
 }
 
-function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {
+export function isAgentRuntimeKind(value: unknown): value is AgentRuntimeKind {
   return value === "claude" || value === "codex" || value === "droid" || value === "opencode" || value === "mock";
 }
 
-function resolveWorkspaceWorkingDirectory() {
+export function resolveWorkspaceWorkingDirectory() {
   const configuredPath =
     process.env.NETCHAT_RUNTIME_CWD?.trim() ||
     process.env.NETCHAT_WORKSPACE_DIR?.trim() ||
@@ -562,13 +575,8 @@ function resolveWorkspaceWorkingDirectory() {
   return normalizeWorkingDirectory(configuredPath || process.cwd());
 }
 
-function resolveWorkspaceDataDirectory(workingDirectory: string) {
-  const configuredPath = process.env.NETCHAT_APP_DATA_DIR?.trim();
-  if (configuredPath) {
-    return path.resolve(configuredPath);
-  }
-
-  return path.join(os.homedir(), ".netchat", "workspaces", createWorkspaceStorageKey(workingDirectory));
+export function resolveWorkspaceDataDirectory(workingDirectory: string) {
+  return path.join(resolveWorkspaceRegistryRootDirectory(), createWorkspaceStorageKey(workingDirectory));
 }
 
 function resolveConfiguredInitialDatabasePath() {
@@ -576,11 +584,33 @@ function resolveConfiguredInitialDatabasePath() {
   return configuredPath ? path.resolve(configuredPath) : null;
 }
 
-function normalizeWorkingDirectory(value: string) {
+export function resolveWorkspaceRegistryRootDirectory() {
+  const configuredRoot = process.env.NETCHAT_WORKSPACES_ROOT?.trim();
+  if (configuredRoot) {
+    return path.resolve(configuredRoot);
+  }
+
+  const configuredAppDataDirectory = process.env.NETCHAT_APP_DATA_DIR?.trim();
+  if (configuredAppDataDirectory) {
+    const resolvedAppDataDirectory = path.resolve(configuredAppDataDirectory);
+    if (
+      existsSync(path.join(resolvedAppDataDirectory, "workspace.json")) ||
+      isHashedWorkspaceDirectory(resolvedAppDataDirectory)
+    ) {
+      return path.dirname(resolvedAppDataDirectory);
+    }
+
+    return resolvedAppDataDirectory;
+  }
+
+  return path.join(os.homedir(), ".netchat", "workspaces");
+}
+
+export function normalizeWorkingDirectory(value: string) {
   return path.resolve(value).replace(/\\/g, "/");
 }
 
-function createWorkspaceStorageKey(workingDirectory: string) {
+export function createWorkspaceStorageKey(workingDirectory: string) {
   const normalized =
     process.platform === "win32" ? workingDirectory.toLowerCase() : workingDirectory;
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
@@ -625,7 +655,7 @@ function formatNetTimestamp(value: string) {
   return `${year}-${month}-${day} ${hour}:${minute}`;
 }
 
-function compareNetSummaryActivity(left: WorkspaceNetSummary, right: WorkspaceNetSummary) {
+export function compareNetSummaryActivity(left: WorkspaceNetSummary, right: WorkspaceNetSummary) {
   const activityDelta = compareIsoTimestamps(
     right.latestMessageAt ?? right.createdAt,
     left.latestMessageAt ?? left.createdAt,
@@ -655,4 +685,10 @@ function isManagedWorkspaceNetPath(databasePath: string, netsDirectory: string) 
 function normalizeComparablePath(value: string) {
   const resolved = path.resolve(value);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isHashedWorkspaceDirectory(value: string) {
+  const parentDirectoryName = path.basename(path.dirname(value));
+  const directoryName = path.basename(value);
+  return parentDirectoryName === "workspaces" && /^[0-9a-f]{16}$/i.test(directoryName);
 }

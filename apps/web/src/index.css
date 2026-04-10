@@ -51,7 +51,7 @@ body {
   background-color: var(--bg-cream);
   font-family: var(--font-body);
   font-weight: 450;
-  font-size: 18px;
+  font-size: 16px;
   overscroll-behavior: none;
 }
 
@@ -67,7 +67,7 @@ textarea {
 }
 
 .editorial-meta {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.02em;
 }

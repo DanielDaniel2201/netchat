@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-10
+
+- Stopped workspace rows from auto-switching the active net when expanded, defaulted workspace ordering to newest-created first with client-side drag reordering, folded net timestamps and menus into a tighter single-line row, and made the collapsed sidebar collapse all the way down to just the three action buttons.
+- Turned workspace rows into the expand target, replaced the separate right-side toggle button with a passive arrow indicator, and added workspace deletion from a trash icon that removes only netchat's local workspace data.
+- Flattened the sidebar's workspace and net rows and moved each workspace expand toggle to the far right, so the left rail reads more like a compact list than stacked cards.
+- Reduced sidebar chrome to a single `NetChat` title, removed redundant workspace metadata, and switched net subtitles to compact relative ages like `43m` and `4d` so the left rail stays focused on names and recency.
+- Fixed workspace net action menus being clipped inside single-net sections by letting the active workspace card overflow above its container, so `Delete` remains reachable from the three-dot menu.
+- Shrunk the canvas minimap preview to two-thirds of its previous width and height, reducing the bottom-right thumbnail footprint without changing its drag or viewport behavior.
+- Rebalanced the app's typography, bubble widths, side gutters, and composer sizing so the canvas now feels correct at normal browser page zoom (`100%`) instead of only looking comfortable after zooming the browser out.
+- Simplified the left net sidebar into a collapsible navigation rail, removing the oversized current-net summary and sidebar agent picker so workspace and net switching stay focused on navigation instead of duplicated runtime chrome.
+- Tightened branch reveal and fallback canvas framing zoom caps, so expanding selection branches no longer snaps the React Flow viewport into an overly close camera on wider layouts.
+- Estimated the initial canvas camera from the actual desktop canvas width and skipped the sidebar's first-paint width transition, so opening the app no longer depends on a transient full-window measurement before the sidebar settles.
+- Moved net and workspace management out of the top-right header into a persistent left sidebar, adding machine-local workspace discovery, grouped nets, collapsible workspace sections, and a current-net summary that keeps the canvas focused on one active workspace.
+- Added native folder-picker workspace opening plus cross-workspace net switching on the sidebar, so existing local folders can be registered and revisited without starting the app from that directory.
+- Passed the active workspace working directory through server and daemon turn payloads, so Claude/Codex/Droid jobs now execute against the selected workspace path instead of the controller's launch directory.
+
 ## 2026-04-09
 
 - Added a repo-local `check-postmortem` skill plus a postmortem indexing script, so agents fixing stubborn bugs can quickly scan historical bug reports by `title` and `summary` before opening the full write-up.

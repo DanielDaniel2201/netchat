@@ -18,7 +18,10 @@ import {
   CreateNetInput,
   CreateRootTurnInput,
   GraphSnapshot,
+  MachineWorkspacesState,
   MessageNode,
+  OpenWorkspaceInput,
+  PickWorkspaceFolderResult,
   UpdateNetInput,
   ServerDiagnostics,
   TurnStreamEvent,
@@ -37,6 +40,7 @@ import {
   createBranchInputSchema,
   createBranchTurnInputSchema,
   createRootTurnInputSchema,
+  openWorkspaceInputSchema,
   describeBranchCreation,
   finalizeAssistantState,
   makeId,
@@ -48,7 +52,8 @@ import {
 import { ServerDiagnosticsStore } from "./diagnostics.js";
 import { MachineStore } from "./machine-store.js";
 import { loadLocalEnv } from "./load-env.js";
-import { WorkspaceStore } from "./workspace-store.js";
+import { WorkspaceManagerStore } from "./workspace-manager.js";
+import { pickWorkspaceFolder } from "./workspace-picker.js";
 import { registerLocalWebUi } from "./web-ui.js";
 
 loadLocalEnv();
@@ -56,7 +61,7 @@ loadLocalEnv();
 const app = Fastify({
   logger: false,
 });
-const store = new WorkspaceStore();
+const store = new WorkspaceManagerStore();
 const machines = new MachineStore();
 const diagnostics = new ServerDiagnosticsStore({
   jobTimeoutMs: null,
@@ -80,6 +85,74 @@ app.get("/health", async () => ({
 }));
 
 app.get("/api/workspace", async (): Promise<WorkspaceState> => store.getWorkspaceState());
+
+app.get("/api/workspaces", async (): Promise<MachineWorkspacesState> => store.getWorkspacesState());
+
+app.post("/api/workspaces", async (request, reply) => {
+  const input = openWorkspaceInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  try {
+    const workspace = store.openWorkspace(input.data as OpenWorkspaceInput);
+    diagnostics.log("info", `Opened workspace ${workspace.workspaceId} from ${workspace.workingDirectory}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Opening a workspace failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/workspaces/pick-folder", async (request, reply): Promise<PickWorkspaceFolderResult | void> => {
+  try {
+    return {
+      workingDirectory: await pickWorkspaceFolder(),
+    };
+  } catch (error) {
+    diagnostics.log("warn", `Opening the native workspace folder picker failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/workspaces/:workspaceId/select", async (request, reply) => {
+  const workspaceId = (request.params as { workspaceId: string }).workspaceId;
+
+  try {
+    const workspace = store.selectWorkspace(workspaceId);
+    diagnostics.log("info", `Switched to workspace ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Switching to workspace ${workspaceId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.delete("/api/workspaces/:workspaceId", async (request, reply) => {
+  const workspaceId = (request.params as { workspaceId: string }).workspaceId;
+
+  try {
+    const workspace = store.deleteWorkspace(workspaceId);
+    diagnostics.log("info", `Deleted workspace ${workspaceId}. Active workspace is now ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Deleting workspace ${workspaceId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/workspaces/:workspaceId/nets/:netId/select", async (request, reply) => {
+  const { workspaceId, netId } = request.params as { workspaceId: string; netId: string };
+
+  try {
+    const workspace = store.selectWorkspaceNet(workspaceId, netId);
+    diagnostics.log("info", `Switched to workspace ${workspace.workspaceId} net ${netId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Switching to workspace ${workspaceId} net ${netId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
 
 app.get("/api/graph", async () => store.getSnapshot());
 
@@ -254,6 +327,7 @@ app.post("/api/root-turn/stream", async (request, reply) => {
     return reply.status(400).send({ error: input.error.flatten() });
   }
 
+  const activeWorkspace = store.getWorkspaceState();
   const baseSnapshot = store.getSnapshot();
   const rootBranch = baseSnapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   const activeNet = store.getActiveNetSummary();
@@ -274,6 +348,7 @@ app.post("/api/root-turn/stream", async (request, reply) => {
       kind: "root-turn",
       payload: {
         prompt: runtimePrompt,
+        workingDirectory: activeWorkspace.workingDirectory,
         session: rootBranch?.sessionId
           ? {
               mode: "resume",
@@ -347,6 +422,7 @@ app.post("/api/branches/stream", async (request, reply) => {
   }
 
   try {
+    const activeWorkspace = store.getWorkspaceState();
     const activeNet = store.getActiveNetSummary();
     const machine = machines.resolveMachine({
       preferredMachineId: sourceMessage.machineId ?? null,
@@ -382,6 +458,7 @@ app.post("/api/branches/stream", async (request, reply) => {
       kind: "branch-create",
       payload: {
         prompt: branchPrompt,
+        workingDirectory: activeWorkspace.workingDirectory,
         session: {
           mode: "new",
         },
@@ -446,6 +523,7 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
     : input.data.prompt;
 
   try {
+    const activeWorkspace = store.getWorkspaceState();
     const activeNet = store.getActiveNetSummary();
     const machine = machines.resolveMachine({
       preferredMachineId: branch.machineId ?? null,
@@ -475,6 +553,7 @@ app.post("/api/branches/:branchId/turns/stream", async (request, reply) => {
       kind: "branch-turn",
       payload: {
         prompt: runtimePrompt,
+        workingDirectory: activeWorkspace.workingDirectory,
         session: {
           mode: "resume",
           handle: branch.sessionId,
@@ -529,6 +608,7 @@ app.post("/api/root-turn", async (request, reply) => {
     return reply.status(400).send({ error: input.error.flatten() });
   }
 
+  const activeWorkspace = store.getWorkspaceState();
   const snapshot = store.getSnapshot();
   const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   const activeNet = store.getActiveNetSummary();
@@ -551,6 +631,7 @@ app.post("/api/root-turn", async (request, reply) => {
       kind: "root-turn",
       payload: {
         prompt: runtimePrompt,
+        workingDirectory: activeWorkspace.workingDirectory,
         session: rootBranch?.sessionId
           ? {
               mode: "resume",
@@ -592,6 +673,7 @@ app.post("/api/branches", async (request, reply) => {
   }
 
   try {
+    const activeWorkspace = store.getWorkspaceState();
     const activeNet = store.getActiveNetSummary();
     const machine = machines.resolveMachine({
       preferredMachineId: sourceMessage.machineId ?? null,
@@ -619,6 +701,7 @@ app.post("/api/branches", async (request, reply) => {
       kind: "branch-create",
       payload: {
         prompt: branchPrompt,
+        workingDirectory: activeWorkspace.workingDirectory,
         session: {
           mode: "new",
         },
@@ -659,6 +742,7 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
     : input.data.prompt;
 
   try {
+    const activeWorkspace = store.getWorkspaceState();
     const activeNet = store.getActiveNetSummary();
     const machine = machines.resolveMachine({
       preferredMachineId: branch.machineId ?? null,
@@ -679,6 +763,7 @@ app.post("/api/branches/:branchId/turns", async (request, reply) => {
       kind: "branch-turn",
       payload: {
         prompt: runtimePrompt,
+        workingDirectory: activeWorkspace.workingDirectory,
         session: {
           mode: "resume",
           handle: branch.sessionId,
