@@ -66,6 +66,7 @@ export type WorkspaceBrowserSummary = {
   workspaceId: string;
   workingDirectory: string;
   activeNetId: string;
+  createdAt: string;
   nets: WorkspaceNetSummary[];
   latestMessageAt: string | null;
   lastOpenedAt: string | null;

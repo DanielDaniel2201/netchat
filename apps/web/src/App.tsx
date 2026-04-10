@@ -25,6 +25,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Trash2,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
@@ -75,6 +76,7 @@ const branchRevealMaxZoom = 0.82;
 const autoFitMaxZoom = 0.86;
 const initialRootTurnVerticalCenterRatio = 0.25;
 const sidebarCollapsedStorageKey = "netchat.sidebar.collapsed";
+const workspaceOrderStorageKey = "netchat.workspace.order";
 const desktopCanvasLayoutBreakpoint = 1024;
 const expandedSidebarWidth = 288;
 const collapsedSidebarWidth = 80;
@@ -324,6 +326,7 @@ function NetchatApp() {
   const [openNetMenuId, setOpenNetMenuId] = useState<string | null>(null);
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<string[]>([]);
+  const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
   const clearLiveAssistantStates = useLiveAssistantStateStore((state) => state.clearStates);
@@ -361,6 +364,58 @@ function NetchatApp() {
   const agentOptions = agentsQuery.data ?? [];
   const workspaceNets = workspace?.nets ?? [];
   const knownWorkspaces = machineWorkspaces?.workspaces ?? [];
+  const defaultWorkspaceOrder = useMemo(
+    () =>
+      [...knownWorkspaces]
+        .sort((left, right) => {
+          const creationDelta = right.createdAt.localeCompare(left.createdAt);
+          if (creationDelta !== 0) {
+            return creationDelta;
+          }
+
+          return left.workingDirectory.localeCompare(right.workingDirectory);
+        })
+        .map((workspaceSummary) => workspaceSummary.workspaceId),
+    [knownWorkspaces],
+  );
+  const orderedWorkspaces = useMemo(() => {
+    const storedOrder = readStringArrayFromLocalStorage(workspaceOrderStorageKey);
+    if (storedOrder.length === 0) {
+      return [...knownWorkspaces].sort((left, right) => {
+        const creationDelta = right.createdAt.localeCompare(left.createdAt);
+        if (creationDelta !== 0) {
+          return creationDelta;
+        }
+
+        return left.workingDirectory.localeCompare(right.workingDirectory);
+      });
+    }
+
+    const orderIndex = new Map(storedOrder.map((workspaceId, index) => [workspaceId, index]));
+    return [...knownWorkspaces].sort((left, right) => {
+      const leftIndex = orderIndex.get(left.workspaceId);
+      const rightIndex = orderIndex.get(right.workspaceId);
+
+      if (leftIndex !== undefined && rightIndex !== undefined) {
+        return leftIndex - rightIndex;
+      }
+
+      if (leftIndex !== undefined) {
+        return -1;
+      }
+
+      if (rightIndex !== undefined) {
+        return 1;
+      }
+
+      const creationDelta = right.createdAt.localeCompare(left.createdAt);
+      if (creationDelta !== 0) {
+        return creationDelta;
+      }
+
+      return left.workingDirectory.localeCompare(right.workingDirectory);
+    });
+  }, [knownWorkspaces]);
   const activeWorkspaceId = machineWorkspaces?.activeWorkspaceId ?? workspace?.workspaceId ?? null;
   const canPickWorkspaceFolder = machineWorkspaces?.canPickWorkspaceFolder ?? true;
   const activeNetId = workspace?.activeNetId ?? null;
@@ -680,6 +735,39 @@ function NetchatApp() {
       logWeb("error", `Opening a workspace folder failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
+  const deleteWorkspaceMutation = useMutation({
+    mutationFn: async (workspaceId: string) => {
+      logWeb("info", `Deleting workspace ${workspaceId}.`);
+      return request<WorkspaceState>(`/api/workspaces/${workspaceId}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: async (nextWorkspace, deletedWorkspaceId) => {
+      const activeWorkspaceChanged = nextWorkspace.workspaceId !== activeWorkspaceId;
+      queryClient.setQueryData(["workspace"], nextWorkspace);
+      setExpandedWorkspaceIds((current) => current.filter((workspaceId) => workspaceId !== deletedWorkspaceId));
+      setExpandedWorkspaceIds((current) =>
+        current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
+      );
+      setOpenNetMenuId(null);
+      setPendingNetDeletion(null);
+
+      if (activeWorkspaceChanged) {
+        setComposerValue("");
+        setSelectionDraft(null);
+        setExpandedBranchIds([]);
+        setSelectedMessageId(null);
+        setActivePathMessageId(null);
+        clearBrowserSelection();
+        await queryClient.invalidateQueries({ queryKey: ["graph"] });
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onError: (error) => {
+      logWeb("error", `Deleting a workspace failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
   const renameNetMutation = useMutation({
     mutationFn: async (variables: { netId: string; input: UpdateNetInput }) => {
       logWeb("info", `Updating net ${variables.netId}.`);
@@ -894,6 +982,40 @@ function NetchatApp() {
     );
   }
 
+  function handleWorkspaceItemClick(workspaceId: string) {
+    setOpenNetMenuId(null);
+    toggleWorkspaceExpansion(workspaceId);
+  }
+
+  function requestWorkspaceDeletion(workspaceId: string, workspaceName: string) {
+    if (deleteWorkspaceMutation.isPending) {
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete workspace "${workspaceName}" from netchat? This removes its local netchat data only.`);
+    if (!confirmed) {
+      return;
+    }
+
+    deleteWorkspaceMutation.mutate(workspaceId);
+  }
+
+  function moveWorkspaceBefore(sourceWorkspaceId: string, targetWorkspaceId: string) {
+    if (sourceWorkspaceId === targetWorkspaceId) {
+      return;
+    }
+
+    const currentOrder = orderedWorkspaces.map((workspaceSummary) => workspaceSummary.workspaceId);
+    const nextOrder = currentOrder.filter((workspaceId) => workspaceId !== sourceWorkspaceId);
+    const targetIndex = nextOrder.indexOf(targetWorkspaceId);
+    if (targetIndex === -1) {
+      return;
+    }
+
+    nextOrder.splice(targetIndex, 0, sourceWorkspaceId);
+    writeStringArrayToLocalStorage(workspaceOrderStorageKey, nextOrder);
+  }
+
   function requestNetDeletion(netId: string, title: string) {
     setOpenNetMenuId(null);
     setPendingNetDeletion({ id: netId, title });
@@ -1059,6 +1181,19 @@ function NetchatApp() {
     const liveWorkspaceIds = new Set(knownWorkspaces.map((workspaceSummary) => workspaceSummary.workspaceId));
     setExpandedWorkspaceIds((current) => current.filter((workspaceId) => liveWorkspaceIds.has(workspaceId)));
   }, [knownWorkspaces]);
+
+  useEffect(() => {
+    const storedOrder = readStringArrayFromLocalStorage(workspaceOrderStorageKey);
+    const liveWorkspaceIds = new Set(defaultWorkspaceOrder);
+    const nextOrder = [
+      ...storedOrder.filter((workspaceId) => liveWorkspaceIds.has(workspaceId)),
+      ...defaultWorkspaceOrder.filter((workspaceId) => !storedOrder.includes(workspaceId)),
+    ];
+
+    if (!stringArraysEqual(storedOrder, nextOrder)) {
+      writeStringArrayToLocalStorage(workspaceOrderStorageKey, nextOrder);
+    }
+  }, [defaultWorkspaceOrder]);
 
   useEffect(() => {
     writeBooleanToLocalStorage(sidebarCollapsedStorageKey, isSidebarCollapsed);
@@ -1369,6 +1504,7 @@ function NetchatApp() {
     selectWorkspaceMutation.isPending ||
     selectWorkspaceNetMutation.isPending ||
     openWorkspaceFolderMutation.isPending ||
+    deleteWorkspaceMutation.isPending ||
     renameNetMutation.isPending ||
     updateNetAgentMutation.isPending ||
     deleteNetMutation.isPending;
@@ -1646,6 +1782,7 @@ function NetchatApp() {
       : streamErrorMessage;
   const netErrorMessage = formatErrorMessage(
     openWorkspaceFolderMutation.error ??
+      deleteWorkspaceMutation.error ??
       selectWorkspaceMutation.error ??
       selectWorkspaceNetMutation.error ??
       createNetMutation.error ??
@@ -1666,12 +1803,18 @@ function NetchatApp() {
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)] lg:flex-row">
       <aside
         className={cn(
-          "relative z-20 flex w-full shrink-0 flex-col overflow-hidden border-b border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(244,241,234,0.96)_100%)] lg:h-screen lg:max-h-none lg:border-b-0 lg:border-r",
+          "relative z-20 flex w-full shrink-0 flex-col overflow-hidden border-b border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(244,241,234,0.96)_100%)] lg:max-h-none",
           isSidebarTransitionReady ? "transition-[max-height,width] duration-300 ease-out" : "",
-          isSidebarCollapsed ? "max-h-[80px] lg:w-[80px]" : "max-h-[48vh] lg:w-[288px]",
+          isSidebarCollapsed
+            ? "max-h-[80px] border-b-0 bg-transparent lg:h-auto lg:w-auto lg:self-start lg:border-r-0"
+            : "max-h-[48vh] lg:h-screen lg:w-[288px] lg:border-b-0 lg:border-r",
         )}
       >
-        <div className={cn("border-b border-[var(--text-main)]", isSidebarCollapsed ? "px-3 py-3" : "px-4 py-4")}>
+        <div
+          className={cn(
+            isSidebarCollapsed ? "border-0 bg-transparent px-3 py-3" : "border-b border-[var(--text-main)] px-4 py-4",
+          )}
+        >
           <div
             className={cn(
               "flex gap-3",
@@ -1726,54 +1869,113 @@ function NetchatApp() {
         </div>
 
         {isSidebarCollapsed ? (
-          <div className="hidden flex-1 lg:block" />
+          null
         ) : (
           <div className="flex-1 overflow-y-auto px-3 py-3">
             {workspacesQuery.isLoading ? (
               <div className="border border-[var(--node-border)] bg-white px-4 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
                 Loading local workspaces...
               </div>
-            ) : knownWorkspaces.length ? (
-              knownWorkspaces.map((workspaceSummary) => {
+            ) : orderedWorkspaces.length ? (
+              orderedWorkspaces.map((workspaceSummary) => {
                 const formattedWorkspacePath = formatWorkingDirectoryPath(workspaceSummary.workingDirectory);
                 const workspaceDisplayName = resolveWorkspaceName(formattedWorkspacePath);
                 const isActiveWorkspace = workspaceSummary.workspaceId === activeWorkspaceId;
                 const isWorkspaceExpanded = expandedWorkspaceIds.includes(workspaceSummary.workspaceId);
                 const hasOpenNetMenu = isActiveWorkspace && workspaceSummary.nets.some((net) => openNetMenuId === net.id);
+                const isDeletingWorkspace =
+                  deleteWorkspaceMutation.isPending && deleteWorkspaceMutation.variables === workspaceSummary.workspaceId;
+                const canDeleteWorkspace = orderedWorkspaces.length > 1 && !isDeletingWorkspace;
 
                 return (
                   <section
                     key={workspaceSummary.workspaceId}
+                    draggable={!isSwitchingNet}
                     className={cn(
                       "relative border bg-[rgba(255,255,255,0.86)] transition-[border-color,box-shadow,background-color] duration-200",
                       isActiveWorkspace
                         ? "border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.06)]"
                         : "border-[var(--node-border)] hover:border-[rgba(26,26,26,0.34)]",
+                      draggedWorkspaceId === workspaceSummary.workspaceId ? "opacity-55" : "",
                       hasOpenNetMenu ? "z-30 overflow-visible" : "overflow-hidden",
                     )}
+                    onDragStart={(event) => {
+                      if (isSwitchingNet) {
+                        event.preventDefault();
+                        return;
+                      }
+
+                      setDraggedWorkspaceId(workspaceSummary.workspaceId);
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", workspaceSummary.workspaceId);
+                    }}
+                    onDragOver={(event) => {
+                      if (!draggedWorkspaceId || draggedWorkspaceId === workspaceSummary.workspaceId) {
+                        return;
+                      }
+
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceWorkspaceId = draggedWorkspaceId ?? event.dataTransfer.getData("text/plain");
+                      if (!sourceWorkspaceId || sourceWorkspaceId === workspaceSummary.workspaceId) {
+                        setDraggedWorkspaceId(null);
+                        return;
+                      }
+
+                      moveWorkspaceBefore(sourceWorkspaceId, workspaceSummary.workspaceId);
+                      setDraggedWorkspaceId(null);
+                    }}
+                    onDragEnd={() => setDraggedWorkspaceId(null)}
                   >
-                    <div className="flex items-stretch">
+                    <div
+                      role="button"
+                      tabIndex={isSwitchingNet ? -1 : 0}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-2.5 transition-colors",
+                        isActiveWorkspace ? "bg-white" : "hover:bg-[rgba(244,241,234,0.32)]",
+                        isSwitchingNet ? "cursor-default" : "cursor-pointer",
+                      )}
+                      aria-expanded={isWorkspaceExpanded}
+                      aria-label={`${isWorkspaceExpanded ? "Collapse" : "Expand"} ${workspaceDisplayName}`}
+                      onClick={() => {
+                        if (isSwitchingNet) {
+                          return;
+                        }
+
+                        handleWorkspaceItemClick(workspaceSummary.workspaceId);
+                      }}
+                      onKeyDown={(event) => {
+                        if (isSwitchingNet) {
+                          return;
+                        }
+
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleWorkspaceItemClick(workspaceSummary.workspaceId);
+                        }
+                      }}
+                    >
+                      <div className="min-w-0 flex-1 truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">
+                        {workspaceDisplayName}
+                      </div>
                       <button
                         type="button"
-                        className={cn(
-                          "flex min-w-0 flex-1 items-center px-3 py-2.5 text-left transition-colors disabled:cursor-default",
-                          isActiveWorkspace ? "bg-white" : "hover:bg-[rgba(244,241,234,0.32)]",
-                        )}
-                        disabled={isSwitchingNet || isActiveWorkspace}
-                        onClick={() => selectWorkspaceMutation.mutate(workspaceSummary.workspaceId)}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-[rgba(26,26,26,0.46)] transition-colors hover:text-rose-600 disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.22)]"
+                        disabled={!canDeleteWorkspace || isSwitchingNet}
+                        title={orderedWorkspaces.length > 1 ? `Delete ${workspaceDisplayName}` : "The last workspace cannot be deleted"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          requestWorkspaceDeletion(workspaceSummary.workspaceId, workspaceDisplayName);
+                        }}
                       >
-                        <div className="truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">
-                          {workspaceDisplayName}
-                        </div>
+                        {isDeletingWorkspace ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
                       </button>
-                      <button
-                        type="button"
-                        className="flex shrink-0 items-center justify-center border-l border-[var(--node-border)] bg-[rgba(244,241,234,0.46)] px-2.5 text-[rgba(26,26,26,0.54)] transition-colors hover:bg-[rgba(244,241,234,0.78)]"
-                        aria-label={`${isWorkspaceExpanded ? "Collapse" : "Expand"} ${workspaceDisplayName}`}
-                        onClick={() => toggleWorkspaceExpansion(workspaceSummary.workspaceId)}
-                      >
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center text-[rgba(26,26,26,0.54)]">
                         <ChevronRight className={cn("size-4 transition-transform", isWorkspaceExpanded ? "rotate-90" : "")} />
-                      </button>
+                      </div>
                     </div>
 
                     {isWorkspaceExpanded ? (
@@ -1832,88 +2034,117 @@ function NetchatApp() {
                                       </div>
                                     </div>
                                   ) : (
-                                    <button
-                                      type="button"
+                                    <div
+                                      role="button"
+                                      tabIndex={isSwitchingNet || isActiveNet ? -1 : 0}
                                       className={cn(
-                                        "block w-full border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed",
+                                        "flex w-full items-center gap-2 border px-3 py-2.5 text-left transition-colors",
                                         isActiveNet
                                           ? "border-[var(--text-main)] bg-[var(--block-slate)] text-white"
                                           : "border-[var(--node-border)] bg-white hover:bg-[var(--bg-cream)]",
+                                        isSwitchingNet || isActiveNet ? "cursor-default" : "cursor-pointer",
                                       )}
-                                      disabled={isSwitchingNet || isActiveNet}
-                                      onClick={() =>
-                                        isActiveWorkspace
-                                          ? selectNetMutation.mutate(net.id)
-                                          : selectWorkspaceNetMutation.mutate({
-                                              workspaceId: workspaceSummary.workspaceId,
-                                              netId: net.id,
-                                            })
-                                      }
-                                    >
-                                      <div
-                                        className={cn(
-                                          "truncate text-[14px] font-medium leading-5",
-                                          isActiveNet ? "text-white" : "text-[var(--text-main)]",
-                                        )}
-                                      >
-                                        {netTitle}
-                                      </div>
-                                      <div
-                                        className={cn(
-                                          "mt-0.5 text-[11px] leading-4",
-                                          isActiveNet ? "text-white/68" : "text-[rgba(26,26,26,0.54)]",
-                                        )}
-                                      >
-                                        {latestMessageLabel}
-                                      </div>
-                                    </button>
-                                  )}
-                                </div>
+                                      onClick={() => {
+                                        if (isSwitchingNet || isActiveNet) {
+                                          return;
+                                        }
 
-                                {isEditingNet || !isActiveWorkspace ? null : (
-                                  <div
-                                    ref={isMenuOpen ? openNetMenuRef : null}
-                                    className="relative shrink-0"
-                                    data-net-actions-root
-                                  >
-                                    <button
-                                      type="button"
-                                      className={cn(
-                                        "inline-flex h-8 w-8 items-center justify-center border transition-colors disabled:cursor-not-allowed",
-                                        isActiveNet
-                                          ? "border-white/18 bg-white/8 text-white hover:bg-white/14 disabled:text-white/36"
-                                          : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.66)] hover:bg-[var(--bg-cream)] disabled:text-[rgba(26,26,26,0.32)]",
-                                      )}
-                                      disabled={isSwitchingNet}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        setOpenNetMenuId((current) => (current === net.id ? null : net.id));
+                                        if (isActiveWorkspace) {
+                                          selectNetMutation.mutate(net.id);
+                                          return;
+                                        }
+
+                                        selectWorkspaceNetMutation.mutate({
+                                          workspaceId: workspaceSummary.workspaceId,
+                                          netId: net.id,
+                                        });
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (isSwitchingNet || isActiveNet) {
+                                          return;
+                                        }
+
+                                        if (event.key === "Enter" || event.key === " ") {
+                                          event.preventDefault();
+                                          if (isActiveWorkspace) {
+                                            selectNetMutation.mutate(net.id);
+                                            return;
+                                          }
+
+                                          selectWorkspaceNetMutation.mutate({
+                                            workspaceId: workspaceSummary.workspaceId,
+                                            netId: net.id,
+                                          });
+                                        }
                                       }}
                                     >
-                                      <MoreHorizontal className="size-4" />
-                                    </button>
-                                    {isMenuOpen ? (
-                                      <div className="absolute right-0 top-full z-30 mt-2 w-36 border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
-                                        <button
-                                          type="button"
-                                          className="block w-full border-b border-[var(--node-border)] px-4 py-3 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
-                                          disabled={isSwitchingNet || isDeletingNet}
-                                          onClick={() => beginNetRename(net.id, netTitle)}
+                                      <div className="min-w-0 flex-1">
+                                        <div
+                                          className={cn(
+                                            "truncate text-[14px] font-medium leading-5",
+                                            isActiveNet ? "text-white" : "text-[var(--text-main)]",
+                                          )}
                                         >
-                                          Rename
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className="block w-full px-4 py-3 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
-                                          disabled={isSwitchingNet || isDeletingNet}
-                                          onClick={() => requestNetDeletion(net.id, netTitle)}
-                                        >
-                                          {isDeletingNet ? "Deleting..." : "Delete"}
-                                        </button>
+                                          {netTitle}
+                                        </div>
                                       </div>
-                                    ) : null}
-                                  </div>
-                                )}
+                                      <div className="flex shrink-0 items-center gap-1.5">
+                                        <div
+                                          className={cn(
+                                            "text-[11px] leading-4",
+                                            isActiveNet ? "text-white/68" : "text-[rgba(26,26,26,0.54)]",
+                                          )}
+                                        >
+                                          {latestMessageLabel}
+                                        </div>
+                                        {isActiveWorkspace ? (
+                                          <div
+                                            ref={isMenuOpen ? openNetMenuRef : null}
+                                            className="relative shrink-0"
+                                            data-net-actions-root
+                                          >
+                                            <button
+                                              type="button"
+                                              className={cn(
+                                                "inline-flex h-7 w-7 items-center justify-center rounded-sm transition-colors disabled:cursor-not-allowed",
+                                                isActiveNet
+                                                  ? "text-white hover:bg-white/12 disabled:text-white/36"
+                                                  : "text-[rgba(26,26,26,0.66)] hover:bg-[rgba(26,26,26,0.05)] disabled:text-[rgba(26,26,26,0.32)]",
+                                              )}
+                                              disabled={isSwitchingNet}
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                setOpenNetMenuId((current) => (current === net.id ? null : net.id));
+                                              }}
+                                            >
+                                              <MoreHorizontal className="size-4" />
+                                            </button>
+                                            {isMenuOpen ? (
+                                              <div className="absolute right-0 top-full z-30 mt-1.5 w-max min-w-0 border border-[var(--text-main)] bg-white shadow-[6px_6px_0_rgba(26,26,26,0.08)]">
+                                                <button
+                                                  type="button"
+                                                  className="block w-full whitespace-nowrap border-b border-[var(--node-border)] px-3 py-2 text-left text-[14px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.32)]"
+                                                  disabled={isSwitchingNet || isDeletingNet}
+                                                  onClick={() => beginNetRename(net.id, netTitle)}
+                                                >
+                                                  Rename
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className="block w-full whitespace-nowrap px-3 py-2 text-left text-[14px] font-medium text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-300"
+                                                  disabled={isSwitchingNet || isDeletingNet}
+                                                  onClick={() => requestNetDeletion(net.id, netTitle)}
+                                                >
+                                                  {isDeletingNet ? "Deleting..." : "Delete"}
+                                                </button>
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
@@ -3715,6 +3946,44 @@ function writeBooleanToLocalStorage(key: string, value: boolean) {
   } catch {
     // Ignore storage write failures and keep the in-memory UI state.
   }
+}
+
+function readStringArrayFromLocalStorage(key: string) {
+  if (typeof window === "undefined") {
+    return [] as string[];
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(key);
+    if (!storedValue) {
+      return [] as string[];
+    }
+
+    const parsed = JSON.parse(storedValue) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [] as string[];
+  }
+}
+
+function writeStringArrayToLocalStorage(key: string, value: string[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage write failures and keep the in-memory UI state.
+  }
+}
+
+function stringArraysEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value === right[index]);
 }
 
 function buildBranchRevealViewport(input: {

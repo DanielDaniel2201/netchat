@@ -128,6 +128,19 @@ app.post("/api/workspaces/:workspaceId/select", async (request, reply) => {
   }
 });
 
+app.delete("/api/workspaces/:workspaceId", async (request, reply) => {
+  const workspaceId = (request.params as { workspaceId: string }).workspaceId;
+
+  try {
+    const workspace = store.deleteWorkspace(workspaceId);
+    diagnostics.log("info", `Deleted workspace ${workspaceId}. Active workspace is now ${workspace.workspaceId}.`);
+    return workspace;
+  } catch (error) {
+    diagnostics.log("warn", `Deleting workspace ${workspaceId} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
 app.post("/api/workspaces/:workspaceId/nets/:netId/select", async (request, reply) => {
   const { workspaceId, netId } = request.params as { workspaceId: string; netId: string };
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -25,6 +25,7 @@ import {
   createWorkspaceStorageKey,
   isAgentRuntimeKind,
   normalizeWorkingDirectory,
+  resolveWorkspaceDataDirectory,
   resolveWorkspaceRegistryRootDirectory,
   resolveWorkspaceWorkingDirectory,
   WorkspaceStore,
@@ -69,7 +70,7 @@ export class WorkspaceManagerStore {
     const activeWorkspaceId = this.getWorkspaceState().workspaceId;
     return {
       activeWorkspaceId,
-      workspaces: this.listWorkspaceSummaries(activeWorkspaceId),
+      workspaces: this.listWorkspaceSummaries(),
       canPickWorkspaceFolder: canPickWorkspaceFolder(),
     };
   }
@@ -136,6 +137,35 @@ export class WorkspaceManagerStore {
 
   deleteNet(netId: string): WorkspaceState {
     return this.activeStore.deleteNet(netId);
+  }
+
+  deleteWorkspace(workspaceId: string): WorkspaceState {
+    const targetWorkspace = this.listWorkspaceSummaries().find((candidate) => candidate.workspaceId === workspaceId) ?? null;
+    if (!targetWorkspace) {
+      throw new Error("The requested workspace does not exist.");
+    }
+
+    const remainingWorkspaces = this.listWorkspaceSummaries().filter((candidate) => candidate.workspaceId !== workspaceId);
+    if (remainingWorkspaces.length === 0) {
+      throw new Error("The last remaining workspace cannot be deleted.");
+    }
+
+    const deletingActiveWorkspace = this.getWorkspaceState().workspaceId === workspaceId;
+    if (deletingActiveWorkspace) {
+      const replacementWorkspace = remainingWorkspaces[0];
+      this.switchActiveStore(
+        new WorkspaceStore({
+          workingDirectory: replacementWorkspace.workingDirectory,
+          ensureLaunchNet: false,
+          useConfiguredInitialDatabasePath: false,
+        }),
+      );
+    }
+
+    const workspaceDataDirectory = resolveWorkspaceDataDirectory(targetWorkspace.workingDirectory);
+    rmSync(workspaceDataDirectory, { force: true, recursive: true });
+
+    return this.getWorkspaceState();
   }
 
   applyRootTurn(
@@ -207,7 +237,7 @@ export class WorkspaceManagerStore {
     previousStore.dispose();
   }
 
-  private listWorkspaceSummaries(activeWorkspaceId?: string) {
+  private listWorkspaceSummaries() {
     const workspaceRoot = resolveWorkspaceRegistryRootDirectory();
     const summariesById = new Map<string, WorkspaceBrowserSummary>();
 
@@ -227,10 +257,7 @@ export class WorkspaceManagerStore {
     const activeSummary = buildWorkspaceBrowserSummaryFromState(this.getWorkspaceState());
     summariesById.set(activeSummary.workspaceId, activeSummary);
 
-    const currentActiveWorkspaceId = activeWorkspaceId ?? activeSummary.workspaceId;
-    return Array.from(summariesById.values()).sort((left, right) =>
-      compareWorkspaceBrowserSummary(left, right, currentActiveWorkspaceId),
-    );
+    return Array.from(summariesById.values()).sort(compareWorkspaceBrowserSummary);
   }
 
   private assertOpenableWorkspaceDirectory(workingDirectory: string) {
@@ -286,6 +313,10 @@ function readWorkspaceBrowserSummary(workspaceDirectory: string): WorkspaceBrows
     workspaceId: createWorkspaceStorageKey(workingDirectoryValue),
     workingDirectory: workingDirectoryValue,
     activeNetId,
+    createdAt: netSummaries.reduce(
+      (earliest, net) => (net.createdAt.localeCompare(earliest) < 0 ? net.createdAt : earliest),
+      netSummaries[0].createdAt,
+    ),
     nets: netSummaries,
     latestMessageAt: netSummaries.reduce<string | null>(
       (latest, net) =>
@@ -362,6 +393,10 @@ function buildWorkspaceBrowserSummaryFromState(state: WorkspaceState): Workspace
     workspaceId: state.workspaceId,
     workingDirectory: state.workingDirectory,
     activeNetId: state.activeNetId,
+    createdAt: state.nets.reduce(
+      (earliest, net) => (net.createdAt.localeCompare(earliest) < 0 ? net.createdAt : earliest),
+      state.nets[0]?.createdAt ?? nowIso(),
+    ),
     nets: state.nets,
     latestMessageAt: state.nets.reduce<string | null>(
       (latest, net) =>
@@ -377,29 +412,13 @@ function buildWorkspaceBrowserSummaryFromState(state: WorkspaceState): Workspace
   };
 }
 
-function compareWorkspaceBrowserSummary(
-  left: WorkspaceBrowserSummary,
-  right: WorkspaceBrowserSummary,
-  activeWorkspaceId: string,
-) {
-  if (left.workspaceId === activeWorkspaceId && right.workspaceId !== activeWorkspaceId) {
-    return -1;
-  }
-
-  if (right.workspaceId === activeWorkspaceId && left.workspaceId !== activeWorkspaceId) {
-    return 1;
-  }
-
-  const activityDelta = getWorkspaceActivityTimestamp(right).localeCompare(getWorkspaceActivityTimestamp(left));
-  if (activityDelta !== 0) {
-    return activityDelta;
+function compareWorkspaceBrowserSummary(left: WorkspaceBrowserSummary, right: WorkspaceBrowserSummary) {
+  const creationDelta = right.createdAt.localeCompare(left.createdAt);
+  if (creationDelta !== 0) {
+    return creationDelta;
   }
 
   return left.workingDirectory.localeCompare(right.workingDirectory);
-}
-
-function getWorkspaceActivityTimestamp(summary: WorkspaceBrowserSummary) {
-  return summary.latestMessageAt ?? summary.lastOpenedAt ?? summary.nets[0]?.createdAt ?? "";
 }
 
 function createFallbackNetTitle(value: string) {
