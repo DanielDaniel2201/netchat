@@ -2481,7 +2481,7 @@ function NetchatApp() {
                     }
                   }}
                 />
-                <div className="pointer-events-none absolute bottom-4 left-0 max-w-[calc(100%-6rem)]">
+                <div className="pointer-events-none absolute bottom-0 left-0 flex h-11 max-w-[calc(100%-6rem)] items-center px-5">
                   <AgentRuntimeBadge
                     className="max-w-full"
                     iconWrapperClassName="size-5"

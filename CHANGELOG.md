@@ -2,6 +2,7 @@
 
 ## 2026-04-10
 
+- Snapped the in-net composer agent badge onto a flush bottom-left rail, so the badge now aligns with the composer frame instead of floating above the corner.
 - Matched workspace deletion to the existing net deletion modal, so destructive confirmation now uses the same inline dialog instead of a browser `confirm`.
 - Made sidebar collapse/expand animate through a real 80px rail and persisted workspace drag-reorder in React state, so the left rail now transitions smoothly and reordered workspaces update immediately.
 - Fixed the Windows folder picker to treat cancel as a normal no-op and stopped net agent changes from disabling unrelated sidebar buttons, so `Open folder as workspace` no longer throws on cancel or flashes during agent switches.
