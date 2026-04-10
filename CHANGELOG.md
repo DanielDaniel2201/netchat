@@ -2,6 +2,7 @@
 
 ## 2026-04-10
 
+- Flattened the sidebar's workspace and net rows and moved each workspace expand toggle to the far right, so the left rail reads more like a compact list than stacked cards.
 - Reduced sidebar chrome to a single `NetChat` title, removed redundant workspace metadata, and switched net subtitles to compact relative ages like `43m` and `4d` so the left rail stays focused on names and recency.
 - Fixed workspace net action menus being clipped inside single-net sections by letting the active workspace card overflow above its container, so `Delete` remains reachable from the three-dot menu.
 - Shrunk the canvas minimap preview to two-thirds of its previous width and height, reducing the bottom-right thumbnail footprint without changing its drag or viewport behavior.

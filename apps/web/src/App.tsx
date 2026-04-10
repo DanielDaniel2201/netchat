@@ -1755,16 +1755,8 @@ function NetchatApp() {
                     <div className="flex items-stretch">
                       <button
                         type="button"
-                        className="flex shrink-0 items-center justify-center border-r border-[var(--node-border)] bg-[rgba(244,241,234,0.46)] px-2.5 text-[rgba(26,26,26,0.54)] transition-colors hover:bg-[rgba(244,241,234,0.78)]"
-                        aria-label={`${isWorkspaceExpanded ? "Collapse" : "Expand"} ${workspaceDisplayName}`}
-                        onClick={() => toggleWorkspaceExpansion(workspaceSummary.workspaceId)}
-                      >
-                        <ChevronRight className={cn("size-4 transition-transform", isWorkspaceExpanded ? "rotate-90" : "")} />
-                      </button>
-                      <button
-                        type="button"
                         className={cn(
-                          "flex min-w-0 flex-1 items-center px-4 py-3 text-left transition-colors disabled:cursor-default",
+                          "flex min-w-0 flex-1 items-center px-3 py-2.5 text-left transition-colors disabled:cursor-default",
                           isActiveWorkspace ? "bg-white" : "hover:bg-[rgba(244,241,234,0.32)]",
                         )}
                         disabled={isSwitchingNet || isActiveWorkspace}
@@ -1774,11 +1766,19 @@ function NetchatApp() {
                           {workspaceDisplayName}
                         </div>
                       </button>
+                      <button
+                        type="button"
+                        className="flex shrink-0 items-center justify-center border-l border-[var(--node-border)] bg-[rgba(244,241,234,0.46)] px-2.5 text-[rgba(26,26,26,0.54)] transition-colors hover:bg-[rgba(244,241,234,0.78)]"
+                        aria-label={`${isWorkspaceExpanded ? "Collapse" : "Expand"} ${workspaceDisplayName}`}
+                        onClick={() => toggleWorkspaceExpansion(workspaceSummary.workspaceId)}
+                      >
+                        <ChevronRight className={cn("size-4 transition-transform", isWorkspaceExpanded ? "rotate-90" : "")} />
+                      </button>
                     </div>
 
                     {isWorkspaceExpanded ? (
-                      <div className="border-t border-[var(--node-border)] bg-[rgba(244,241,234,0.52)] px-3 py-3">
-                        <div className="space-y-1.5">
+                      <div className="border-t border-[var(--node-border)] bg-[rgba(244,241,234,0.52)] px-2.5 py-2.5">
+                        <div className="space-y-1">
                           {workspaceSummary.nets.map((net) => {
                             const isActiveNet = isActiveWorkspace && net.id === activeNetId;
                             const isEditingNet = isActiveWorkspace && editingNetId === net.id;
@@ -1789,7 +1789,7 @@ function NetchatApp() {
                             const netTitle = net.title || "Untitled net";
 
                             return (
-                              <div key={`${workspaceSummary.workspaceId}:${net.id}`} className="flex items-start gap-2">
+                              <div key={`${workspaceSummary.workspaceId}:${net.id}`} className="flex items-start gap-1.5">
                                 <div className="min-w-0 flex-1">
                                   {isEditingNet ? (
                                     <div className="space-y-3 border border-[var(--node-border)] bg-white px-3 py-3">
@@ -1835,7 +1835,7 @@ function NetchatApp() {
                                     <button
                                       type="button"
                                       className={cn(
-                                        "block w-full border px-3 py-3 text-left transition-colors disabled:cursor-not-allowed",
+                                        "block w-full border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed",
                                         isActiveNet
                                           ? "border-[var(--text-main)] bg-[var(--block-slate)] text-white"
                                           : "border-[var(--node-border)] bg-white hover:bg-[var(--bg-cream)]",
@@ -1852,7 +1852,7 @@ function NetchatApp() {
                                     >
                                       <div
                                         className={cn(
-                                          "truncate text-[14px] font-medium leading-6",
+                                          "truncate text-[14px] font-medium leading-5",
                                           isActiveNet ? "text-white" : "text-[var(--text-main)]",
                                         )}
                                       >
@@ -1860,7 +1860,7 @@ function NetchatApp() {
                                       </div>
                                       <div
                                         className={cn(
-                                          "mt-1 text-[11px] leading-5",
+                                          "mt-0.5 text-[11px] leading-4",
                                           isActiveNet ? "text-white/68" : "text-[rgba(26,26,26,0.54)]",
                                         )}
                                       >
@@ -1879,7 +1879,7 @@ function NetchatApp() {
                                     <button
                                       type="button"
                                       className={cn(
-                                        "inline-flex h-9 w-9 items-center justify-center border transition-colors disabled:cursor-not-allowed",
+                                        "inline-flex h-8 w-8 items-center justify-center border transition-colors disabled:cursor-not-allowed",
                                         isActiveNet
                                           ? "border-white/18 bg-white/8 text-white hover:bg-white/14 disabled:text-white/36"
                                           : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.66)] hover:bg-[var(--bg-cream)] disabled:text-[rgba(26,26,26,0.32)]",
