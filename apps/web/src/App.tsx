@@ -2318,7 +2318,7 @@ function NetchatApp() {
                     >
                       <AgentRuntimeBadge
                         className="min-w-0 flex-1"
-                        iconWrapperClassName="size-5 border-[rgba(26,26,26,0.12)]"
+                        iconWrapperClassName="size-5"
                         label={selectedAgentDisplay.label}
                         labelClassName="truncate"
                         runtimeKind={selectedAgentDisplay.runtimeKind}
@@ -2357,7 +2357,7 @@ function NetchatApp() {
                               >
                                 <AgentRuntimeBadge
                                   className="min-w-0 flex-1"
-                                  iconWrapperClassName="size-6 border-[rgba(26,26,26,0.12)]"
+                                  iconWrapperClassName="size-6"
                                   label={agent.runtimeLabel}
                                   labelClassName="truncate text-[13px] font-medium text-[var(--text-main)]"
                                   runtimeKind={agent.runtimeKind}
@@ -2434,7 +2434,7 @@ function NetchatApp() {
                   <div className="border border-white/24 bg-[rgba(255,255,255,0.14)] px-3 py-2 backdrop-blur-[1px]">
                     <AgentRuntimeBadge
                       className="max-w-full"
-                      iconWrapperClassName="size-5 border-white/18"
+                      iconWrapperClassName="size-5"
                       label={bubbleComposerAgentDisplay.label}
                       labelClassName="truncate text-[13px] font-medium text-white"
                       runtimeKind={bubbleComposerAgentDisplay.runtimeKind}
@@ -4170,7 +4170,7 @@ function AgentRuntimeBadge(props: {
       <span
         aria-hidden="true"
         className={cn(
-          "flex size-5 shrink-0 items-center justify-center overflow-hidden border border-[rgba(26,26,26,0.12)]",
+          "flex size-5 shrink-0 items-center justify-center overflow-hidden",
           iconTreatment.wrapperClassName,
           iconWrapperClassName,
         )}
@@ -4208,17 +4208,17 @@ function getAgentIconTreatment(runtimeKind: AgentRuntimeKind | null) {
     case "codex":
     case "droid":
       return {
-        wrapperClassName: "bg-[var(--text-main)]",
-        imageClassName: "brightness-0 invert",
+        wrapperClassName: "",
+        imageClassName: "brightness-0",
       };
     case "claude":
       return {
-        wrapperClassName: "bg-white",
-        imageClassName: "brightness-0",
+        wrapperClassName: "",
+        imageClassName: "",
       };
     default:
       return {
-        wrapperClassName: "bg-white",
+        wrapperClassName: "",
         imageClassName: "",
       };
   }
