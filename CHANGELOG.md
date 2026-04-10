@@ -2,6 +2,11 @@
 
 ## 2026-04-10
 
+- Shrunk the canvas minimap preview to two-thirds of its previous width and height, reducing the bottom-right thumbnail footprint without changing its drag or viewport behavior.
+- Rebalanced the app's typography, bubble widths, side gutters, and composer sizing so the canvas now feels correct at normal browser page zoom (`100%`) instead of only looking comfortable after zooming the browser out.
+- Simplified the left net sidebar into a collapsible navigation rail, removing the oversized current-net summary and sidebar agent picker so workspace and net switching stay focused on navigation instead of duplicated runtime chrome.
+- Tightened branch reveal and fallback canvas framing zoom caps, so expanding selection branches no longer snaps the React Flow viewport into an overly close camera on wider layouts.
+- Estimated the initial canvas camera from the actual desktop canvas width and skipped the sidebar's first-paint width transition, so opening the app no longer depends on a transient full-window measurement before the sidebar settles.
 - Moved net and workspace management out of the top-right header into a persistent left sidebar, adding machine-local workspace discovery, grouped nets, collapsible workspace sections, and a current-net summary that keeps the canvas focused on one active workspace.
 - Added native folder-picker workspace opening plus cross-workspace net switching on the sidebar, so existing local folders can be registered and revisited without starting the app from that directory.
 - Passed the active workspace working directory through server and daemon turn payloads, so Claude/Codex/Droid jobs now execute against the selected workspace path instead of the controller's launch directory.
