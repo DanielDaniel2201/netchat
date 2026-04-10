@@ -2,6 +2,7 @@
 
 ## 2026-04-10
 
+- Prepared the `0.0.5` patch release against `v0.0.4`, bundling the latest sidebar, workspace, and composer refinements into the next npm publish.
 - Removed the sidebar `NetChat` wordmark and moved the collapse toggle to the far-left edge of the control row, so the rail header is now just the action strip.
 - Narrowed user and assistant message bubbles to roughly two-thirds of the previous width and recalibrated line estimation, so canvas conversations read less like wall-to-wall strips and keep their measured layout stable.
 - Changed launch selection to reopen the net with the most recent user message instead of forcing a fresh empty `Untitled net`, so startup lands back in the latest active conversation by default.
