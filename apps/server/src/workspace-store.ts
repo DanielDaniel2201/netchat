@@ -19,7 +19,7 @@ import {
   resolveAgentRuntimeLabel,
 } from "@netchat/shared";
 
-import { GraphStore, readLatestMessageTimestamp } from "./store.js";
+import { GraphStore, readLatestMessageTimestamp, readLatestUserMessageTimestamp } from "./store.js";
 
 type WorkspaceNetRecord = Omit<WorkspaceNetSummary, "latestMessageAt" | "agentRuntimeLabel"> & {
   databasePath: string;
@@ -389,53 +389,72 @@ export class WorkspaceStore {
   }
 
   private ensureLaunchNet(manifest: WorkspaceManifest) {
-    const activeNet = manifest.nets.find((net) => net.id === manifest.activeNetId) ?? null;
-    if (activeNet && !this.netHasMessages(activeNet)) {
+    const launchNet = this.pickLaunchNetRecord(manifest);
+    if (!launchNet) {
       return manifest;
     }
 
-    const reusableEmptyNet = [...manifest.nets]
-      .filter((net) => net.id !== manifest.activeNetId && !this.netHasMessages(net))
-      .sort((left, right) => compareIsoTimestamps(right.createdAt, left.createdAt))[0];
-
-    if (reusableEmptyNet) {
-      const selectedAt = nowIso();
-      const nextManifest: WorkspaceManifest = {
-        ...manifest,
-        activeNetId: reusableEmptyNet.id,
-        nets: manifest.nets.map((net) =>
-          net.id === reusableEmptyNet.id
-            ? {
-                ...net,
-                lastOpenedAt: selectedAt,
-              }
-            : net,
-        ),
-      };
-      this.writeManifest(nextManifest);
-      return nextManifest;
+    if (launchNet.id === manifest.activeNetId) {
+      return manifest;
     }
 
-    const createdAt = nowIso();
-    const netId = makeNetId();
+    const selectedAt = nowIso();
     const nextManifest: WorkspaceManifest = {
       ...manifest,
-      activeNetId: netId,
-      nets: [
-        ...manifest.nets,
-        {
-          id: netId,
-          title: createDefaultNetTitle(createdAt),
-          agentRuntimeId: null,
-          agentRuntimeKind: null,
-          createdAt,
-          lastOpenedAt: createdAt,
-          databasePath: path.join(this.netsDirectory, `${netId}.db`),
-        },
-      ],
+      activeNetId: launchNet.id,
+      nets: manifest.nets.map((net) =>
+        net.id === launchNet.id
+          ? {
+              ...net,
+              lastOpenedAt: selectedAt,
+            }
+          : net,
+      ),
     };
     this.writeManifest(nextManifest);
     return nextManifest;
+  }
+
+  private pickLaunchNetRecord(manifest: WorkspaceManifest) {
+    const activeNet = manifest.nets.find((net) => net.id === manifest.activeNetId) ?? null;
+    const candidates = manifest.nets.map((net) => ({
+      record: net,
+      latestUserMessageAt: readLatestUserMessageTimestamp(net.databasePath),
+      latestMessageAt: readLatestMessageTimestamp(net.databasePath),
+    }));
+    const mostRecentUserNet = [...candidates]
+      .filter((candidate) => candidate.latestUserMessageAt)
+      .sort((left, right) =>
+        compareIsoTimestamps(
+          right.latestUserMessageAt ?? right.record.createdAt,
+          left.latestUserMessageAt ?? left.record.createdAt,
+        ) || compareIsoTimestamps(right.record.createdAt, left.record.createdAt),
+      )[0]?.record;
+
+    if (mostRecentUserNet) {
+      return mostRecentUserNet;
+    }
+
+    if (activeNet && !this.netHasMessages(activeNet)) {
+      return activeNet;
+    }
+
+    const mostRecentMessageNet = [...candidates]
+      .filter((candidate) => candidate.latestMessageAt)
+      .sort((left, right) =>
+        compareNetSummaryActivity(
+          {
+            ...this.toWorkspaceNetSummary(left.record),
+            latestMessageAt: left.latestMessageAt,
+          },
+          {
+            ...this.toWorkspaceNetSummary(right.record),
+            latestMessageAt: right.latestMessageAt,
+          },
+        ),
+      )[0]?.record;
+
+    return mostRecentMessageNet ?? activeNet ?? manifest.nets[0] ?? null;
   }
 
   private netHasMessages(net: WorkspaceNetRecord) {

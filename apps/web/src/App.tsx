@@ -64,14 +64,14 @@ import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/cn";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-const messageNodeWidth = 1480;
+const messageNodeWidth = Math.round((1480 * 2) / 3);
 const branchLaneWidth = 1860;
 const branchMessageGap = 96;
 const branchForkGap = 92;
 const bubbleComposerGap = 18;
 const bubbleComposerWidth = 760;
 const newNetComposerWidth = 840;
-const messageEstimateCharsPerLine = 104;
+const messageEstimateCharsPerLine = 70;
 const messageEstimateLineHeight = 34;
 const canvasMinZoom = 0.35;
 const canvasMaxZoom = 1.45;

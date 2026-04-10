@@ -646,18 +646,31 @@ export class GraphStore {
 }
 
 export function readLatestMessageTimestamp(databasePath: string) {
+  return readLatestMessageTimestampByRole(databasePath);
+}
+
+export function readLatestUserMessageTimestamp(databasePath: string) {
+  return readLatestMessageTimestampByRole(databasePath, "user");
+}
+
+function readLatestMessageTimestampByRole(databasePath: string, role?: MessageNode["role"]) {
   if (!existsSync(databasePath)) {
     return null;
   }
 
   const database = new DatabaseSync(databasePath);
   try {
-    const row = database
-      .prepare(
-        `SELECT MAX(created_at) AS latest_message_at
-         FROM messages`,
-      )
-      .get() as { latest_message_at: string | null } | undefined;
+    const statement = role
+      ? database.prepare(
+          `SELECT MAX(created_at) AS latest_message_at
+           FROM messages
+           WHERE role = ?`,
+        )
+      : database.prepare(
+          `SELECT MAX(created_at) AS latest_message_at
+           FROM messages`,
+        );
+    const row = (role ? statement.get(role) : statement.get()) as { latest_message_at: string | null } | undefined;
 
     return typeof row?.latest_message_at === "string" && row.latest_message_at.trim().length > 0
       ? row.latest_message_at

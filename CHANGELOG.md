@@ -2,6 +2,8 @@
 
 ## 2026-04-10
 
+- Narrowed user and assistant message bubbles to roughly two-thirds of the previous width and recalibrated line estimation, so canvas conversations read less like wall-to-wall strips and keep their measured layout stable.
+- Changed launch selection to reopen the net with the most recent user message instead of forcing a fresh empty `Untitled net`, so startup lands back in the latest active conversation by default.
 - Snapped the in-net composer agent badge onto a flush bottom-left rail, so the badge now aligns with the composer frame instead of floating above the corner.
 - Matched workspace deletion to the existing net deletion modal, so destructive confirmation now uses the same inline dialog instead of a browser `confirm`.
 - Made sidebar collapse/expand animate through a real 80px rail and persisted workspace drag-reorder in React state, so the left rail now transitions smoothly and reordered workspaces update immediately.
