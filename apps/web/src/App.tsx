@@ -1915,57 +1915,37 @@ function NetchatApp() {
             isSidebarCollapsed ? "border-0 bg-transparent px-3 py-3" : "border-b border-[var(--text-main)] px-4 py-4",
           )}
         >
-          <div
-            className={cn(
-              "flex gap-3",
-              isSidebarCollapsed ? "items-center justify-between lg:flex-col lg:items-center lg:justify-start" : "items-start justify-between",
-            )}
-          >
-            <div
-              className={cn(
-                "min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-out",
-                isSidebarCollapsed
-                  ? "max-w-0 opacity-0 -translate-y-1 lg:-translate-x-2 lg:translate-y-0"
-                  : "max-w-[180px] opacity-100 translate-y-0 lg:translate-x-0",
-              )}
+          <div className={cn("flex shrink-0 gap-2", isSidebarCollapsed ? "items-center lg:flex-col" : "items-center justify-start")}>
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
+              title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={() => setIsSidebarCollapsed((current) => !current)}
             >
-              <div className="font-[var(--font-display)] text-[24px] leading-none tracking-[-0.03em] text-[var(--text-main)]">
-                NetChat
-              </div>
-            </div>
-
-            <div className={cn("flex shrink-0 gap-2", isSidebarCollapsed ? "items-center lg:flex-col" : "items-center")}>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.34)]"
-                disabled={isSwitchingNet || !canPickWorkspaceFolder}
-                title="Open folder as workspace"
-                onClick={() => openWorkspaceFolderMutation.mutate()}
-              >
-                {openWorkspaceFolderMutation.isPending ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <FolderOpen className="size-4" />
-                )}
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-[var(--text-main)] text-white shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
-                disabled={isSwitchingNet || workspaceQuery.isLoading}
-                title="Create new net"
-                onClick={handleCreateNet}
-              >
-                {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
-                title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                onClick={() => setIsSidebarCollapsed((current) => !current)}
-              >
-                {isSidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-              </button>
-            </div>
+              {isSidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.34)]"
+              disabled={isSwitchingNet || !canPickWorkspaceFolder}
+              title="Open folder as workspace"
+              onClick={() => openWorkspaceFolderMutation.mutate()}
+            >
+              {openWorkspaceFolderMutation.isPending ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <FolderOpen className="size-4" />
+              )}
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-[var(--text-main)] text-white shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+              disabled={isSwitchingNet || workspaceQuery.isLoading}
+              title="Create new net"
+              onClick={handleCreateNet}
+            >
+              {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
+            </button>
           </div>
 
         </div>
