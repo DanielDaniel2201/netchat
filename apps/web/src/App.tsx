@@ -1678,28 +1678,10 @@ function NetchatApp() {
               isSidebarCollapsed ? "items-center justify-between lg:flex-col lg:items-center lg:justify-start" : "items-start justify-between",
             )}
           >
-            <div className={cn("flex min-w-0 items-start gap-3", isSidebarCollapsed && "lg:flex-col lg:items-center")}>
-              <div className="flex size-10 shrink-0 items-center justify-center border border-[var(--text-main)] bg-white font-[var(--font-display)] text-[22px] leading-none shadow-[6px_6px_0_rgba(26,26,26,0.06)]">
-                N
+            <div className={cn("min-w-0", isSidebarCollapsed && "lg:hidden")}>
+              <div className="font-[var(--font-display)] text-[24px] leading-none tracking-[-0.03em] text-[var(--text-main)]">
+                NetChat
               </div>
-
-              {isSidebarCollapsed ? (
-                <div className="min-w-0 lg:hidden">
-                  <div className="editorial-meta text-[rgba(26,26,26,0.46)]">Local nets</div>
-                  <div className="mt-1 font-[var(--font-display)] text-[20px] leading-none tracking-[-0.03em]">Nets</div>
-                </div>
-              ) : (
-                <div className="min-w-0">
-                  <div className="editorial-meta text-[rgba(26,26,26,0.46)]">Local nets</div>
-                  <div className="mt-1 font-[var(--font-display)] text-[25px] leading-[1.02] tracking-[-0.03em]">Nets</div>
-                  <div
-                    className="mt-3 font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.5)]"
-                    title={workingDirectoryPath}
-                  >
-                    {truncateMiddle(workingDirectoryPath, 42)}
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className={cn("flex shrink-0 gap-2", isSidebarCollapsed ? "items-center lg:flex-col" : "items-center")}>
@@ -1744,11 +1726,7 @@ function NetchatApp() {
         </div>
 
         {isSidebarCollapsed ? (
-          <div className="hidden flex-1 lg:flex lg:flex-col lg:items-center lg:justify-end lg:pb-4">
-            <div className="[writing-mode:vertical-rl] rotate-180 text-[10px] tracking-[0.24em] text-[rgba(26,26,26,0.42)]">
-              NETS
-            </div>
-          </div>
+          <div className="hidden flex-1 lg:block" />
         ) : (
           <div className="flex-1 overflow-y-auto px-3 py-3">
             {workspacesQuery.isLoading ? (
@@ -1761,15 +1739,17 @@ function NetchatApp() {
                 const workspaceDisplayName = resolveWorkspaceName(formattedWorkspacePath);
                 const isActiveWorkspace = workspaceSummary.workspaceId === activeWorkspaceId;
                 const isWorkspaceExpanded = expandedWorkspaceIds.includes(workspaceSummary.workspaceId);
+                const hasOpenNetMenu = isActiveWorkspace && workspaceSummary.nets.some((net) => openNetMenuId === net.id);
 
                 return (
                   <section
                     key={workspaceSummary.workspaceId}
                     className={cn(
-                      "overflow-hidden border bg-[rgba(255,255,255,0.86)] transition-[border-color,box-shadow,background-color] duration-200",
+                      "relative border bg-[rgba(255,255,255,0.86)] transition-[border-color,box-shadow,background-color] duration-200",
                       isActiveWorkspace
                         ? "border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.06)]"
                         : "border-[var(--node-border)] hover:border-[rgba(26,26,26,0.34)]",
+                      hasOpenNetMenu ? "z-30 overflow-visible" : "overflow-hidden",
                     )}
                   >
                     <div className="flex items-stretch">
@@ -1784,32 +1764,14 @@ function NetchatApp() {
                       <button
                         type="button"
                         className={cn(
-                          "flex min-w-0 flex-1 flex-col items-start gap-2 px-4 py-3 text-left transition-colors disabled:cursor-default",
+                          "flex min-w-0 flex-1 items-center px-4 py-3 text-left transition-colors disabled:cursor-default",
                           isActiveWorkspace ? "bg-white" : "hover:bg-[rgba(244,241,234,0.32)]",
                         )}
                         disabled={isSwitchingNet || isActiveWorkspace}
                         onClick={() => selectWorkspaceMutation.mutate(workspaceSummary.workspaceId)}
                       >
-                        <div className="flex w-full items-center justify-between gap-3">
-                          <span className="truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">
-                            {workspaceDisplayName}
-                          </span>
-                          <span
-                            className={cn(
-                              "shrink-0 border px-2 py-1 text-[10px] font-medium leading-none",
-                              isActiveWorkspace
-                                ? "border-[var(--text-main)] bg-[var(--bg-cream)] text-[var(--text-main)]"
-                                : "border-[var(--node-border)] text-[rgba(26,26,26,0.48)]",
-                            )}
-                          >
-                            {workspaceSummary.nets.length}
-                          </span>
-                        </div>
-                        <div
-                          className="w-full font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.46)]"
-                          title={formattedWorkspacePath}
-                        >
-                          {truncateMiddle(formattedWorkspacePath, 40)}
+                        <div className="truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">
+                          {workspaceDisplayName}
                         </div>
                       </button>
                     </div>
@@ -1823,7 +1785,7 @@ function NetchatApp() {
                             const isMenuOpen = isActiveWorkspace && openNetMenuId === net.id;
                             const isRenamingNet = renameNetMutation.isPending && renameNetMutation.variables?.netId === net.id;
                             const isDeletingNet = deleteNetMutation.isPending && deleteNetMutation.variables === net.id;
-                            const latestMessageLabel = formatLatestMessageTime(net.latestMessageAt);
+                            const latestMessageLabel = formatNetAgeLabel(net.latestMessageAt ?? net.createdAt);
                             const netTitle = net.title || "Untitled net";
 
                             return (
@@ -1902,7 +1864,7 @@ function NetchatApp() {
                                           isActiveNet ? "text-white/68" : "text-[rgba(26,26,26,0.54)]",
                                         )}
                                       >
-                                        {isActiveNet ? "Open now" : latestMessageLabel ?? "Empty net"}
+                                        {latestMessageLabel}
                                       </div>
                                     </button>
                                   )}
@@ -4123,26 +4085,30 @@ function createEmptyRootSnapshot(): GraphSnapshot {
   };
 }
 
-function formatNetTime(value: string) {
+function formatNetAgeLabel(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return "just now";
+    return "0m";
   }
 
-  return date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatLatestMessageTime(value: string | null) {
-  if (!value) {
-    return null;
+  const diffMs = Math.max(0, Date.now() - date.getTime());
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes < 60) {
+    return `${Math.max(0, diffMinutes)}m`;
   }
 
-  return formatNetTime(value);
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 30) {
+    return `${diffDays}d`;
+  }
+
+  const diffMonths = Math.floor(diffDays / 30);
+  return `${Math.max(1, diffMonths)}mo`;
 }
 
 function formatWorkingDirectoryPath(value: string | null) {

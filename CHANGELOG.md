@@ -2,6 +2,8 @@
 
 ## 2026-04-10
 
+- Reduced sidebar chrome to a single `NetChat` title, removed redundant workspace metadata, and switched net subtitles to compact relative ages like `43m` and `4d` so the left rail stays focused on names and recency.
+- Fixed workspace net action menus being clipped inside single-net sections by letting the active workspace card overflow above its container, so `Delete` remains reachable from the three-dot menu.
 - Shrunk the canvas minimap preview to two-thirds of its previous width and height, reducing the bottom-right thumbnail footprint without changing its drag or viewport behavior.
 - Rebalanced the app's typography, bubble widths, side gutters, and composer sizing so the canvas now feels correct at normal browser page zoom (`100%`) instead of only looking comfortable after zooming the browser out.
 - Simplified the left net sidebar into a collapsible navigation rail, removing the oversized current-net summary and sidebar agent picker so workspace and net switching stay focused on navigation instead of duplicated runtime chrome.
