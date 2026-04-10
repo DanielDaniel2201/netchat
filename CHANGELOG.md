@@ -2,6 +2,7 @@
 
 ## 2026-04-10
 
+- Replaced the new-net runtime `<select>` with an icon-based agent menu and added matching read-only agent badges to reply composers, so Claude/Codex/Droid selection now stays visually consistent across empty and active net flows.
 - Stopped workspace rows from auto-switching the active net when expanded, defaulted workspace ordering to newest-created first with client-side drag reordering, folded net timestamps and menus into a tighter single-line row, and made the collapsed sidebar collapse all the way down to just the three action buttons.
 - Turned workspace rows into the expand target, replaced the separate right-side toggle button with a passive arrow indicator, and added workspace deletion from a trash icon that removes only netchat's local workspace data.
 - Flattened the sidebar's workspace and net rows and moved each workspace expand toggle to the far right, so the left rail reads more like a compact list than stacked cards.

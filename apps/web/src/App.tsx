@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
+  AgentRuntimeKind,
   AgentRuntimeOption,
   AssistantStreamState,
   CreateBranchInput,
@@ -54,6 +55,9 @@ import {
 import remarkGfm from "remark-gfm";
 import { create } from "zustand";
 
+import claudeIconUrl from "./assets/claude.svg";
+import droidIconUrl from "./assets/droid.svg";
+import openaiIconUrl from "./assets/openai.svg";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
@@ -143,6 +147,17 @@ type PendingTurnMetadata = {
   branchId?: string;
   optimisticSnapshot: GraphSnapshot;
   assistantState: AssistantStreamState;
+};
+
+type AgentDisplayInfo = {
+  label: string;
+  runtimeKind: AgentRuntimeKind | null;
+};
+
+const agentRuntimeIconSources: Partial<Record<AgentRuntimeKind, string>> = {
+  claude: claudeIconUrl,
+  codex: openaiIconUrl,
+  droid: droidIconUrl,
 };
 
 type CanvasViewport = {
@@ -299,6 +314,7 @@ function NetchatApp() {
   const initialSidebarCollapsed = readBooleanFromLocalStorage(sidebarCollapsedStorageKey, false);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const agentDropdownRef = useRef<HTMLDivElement>(null);
   const openNetMenuRef = useRef<HTMLDivElement>(null);
   const lastAutoFitNetIdRef = useRef<string | null>(null);
   const lastViewportResetNetIdRef = useRef<string | null>(null);
@@ -324,6 +340,7 @@ function NetchatApp() {
   const [editingNetId, setEditingNetId] = useState<string | null>(null);
   const [editingNetTitle, setEditingNetTitle] = useState("");
   const [openNetMenuId, setOpenNetMenuId] = useState<string | null>(null);
+  const [isAgentDropdownOpen, setIsAgentDropdownOpen] = useState(false);
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<string[]>([]);
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
@@ -1438,6 +1455,35 @@ function NetchatApp() {
   }, [openNetMenuId]);
 
   useEffect(() => {
+    if (!isAgentDropdownOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof HTMLElement && agentDropdownRef.current?.contains(target)) {
+        return;
+      }
+
+      setIsAgentDropdownOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsAgentDropdownOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAgentDropdownOpen]);
+
+  useEffect(() => {
     if (!selectedMessage) {
       setComposerAnchor(null);
       return;
@@ -1512,6 +1558,12 @@ function NetchatApp() {
   const isOnNewNetScreen = !graphQuery.isLoading && !hasMessages;
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
+
+  useEffect(() => {
+    if (!isOnNewNetScreen && isAgentDropdownOpen) {
+      setIsAgentDropdownOpen(false);
+    }
+  }, [isAgentDropdownOpen, isOnNewNetScreen]);
 
   useEffect(() => {
     if (!isOnNewNetScreen) {
@@ -1798,6 +1850,19 @@ function NetchatApp() {
   const activeNetAgentValue = activeNet?.agentRuntimeId ?? "";
   const displayedAgentSelectValue =
     activeNetAgentValue || defaultNewNetAgent?.runtimeId || agentOptions[0]?.runtimeId || "";
+  const selectedAgentOption =
+    agentOptions.find((agent) => agent.runtimeId === displayedAgentSelectValue) ?? defaultNewNetAgent ?? null;
+  const selectedAgentDisplay: AgentDisplayInfo = {
+    label: selectedAgentOption?.runtimeLabel ?? activeAgentLabel,
+    runtimeKind: selectedAgentOption?.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
+  };
+  const bubbleComposerAgentDisplay: AgentDisplayInfo = {
+    label:
+      sendTargetAgent?.runtimeLabel ??
+      (sendTargetRuntimeKind ? resolveAgentRuntimeLabel(sendTargetRuntimeKind) : null) ??
+      activeAgentLabel,
+    runtimeKind: sendTargetAgent?.runtimeKind ?? sendTargetRuntimeKind ?? activeNet?.agentRuntimeKind ?? null,
+  };
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)] lg:flex-row">
@@ -2242,24 +2307,72 @@ function NetchatApp() {
                   >
                     {truncateMiddle(workingDirectoryPath, 64)}
                   </div>
-                  <div className="relative shrink-0">
-                    <select
-                      className="h-9 min-w-[172px] appearance-none rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] pl-3 pr-10 text-[13px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors focus:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
+                  <div ref={agentDropdownRef} className="relative shrink-0">
+                    <button
+                      aria-expanded={isAgentDropdownOpen}
+                      aria-haspopup="listbox"
+                      className="flex h-9 min-w-[188px] items-center gap-3 rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] px-3 text-left text-[13px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors hover:border-[var(--text-main)] focus-visible:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
                       disabled={workspaceQuery.isLoading || isSwitchingNet || isUpdatingActiveNetAgent || agentOptions.length === 0}
-                      value={displayedAgentSelectValue}
-                      onChange={(event) => updateActiveNetAgent(event.target.value)}
+                      type="button"
+                      onClick={() => setIsAgentDropdownOpen((current) => !current)}
                     >
-                      {agentOptions.map((agent) => (
-                        <option
-                          key={agent.runtimeId}
-                          disabled={!agent.installed}
-                          value={agent.runtimeId}
-                        >
-                          {buildAgentOptionLabel(agent)}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[rgba(26,26,26,0.54)]" />
+                      <AgentRuntimeBadge
+                        className="min-w-0 flex-1"
+                        iconWrapperClassName="size-5 border-[rgba(26,26,26,0.12)]"
+                        label={selectedAgentDisplay.label}
+                        labelClassName="truncate"
+                        runtimeKind={selectedAgentDisplay.runtimeKind}
+                      />
+                      <ChevronDown
+                        className={cn(
+                          "size-4 shrink-0 text-[rgba(26,26,26,0.54)] transition-transform",
+                          isAgentDropdownOpen ? "rotate-180" : "",
+                        )}
+                      />
+                    </button>
+
+                    {isAgentDropdownOpen ? (
+                      <div className="absolute left-0 top-full z-20 mt-2 w-[244px] border border-[var(--text-main)] bg-white p-1.5 shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+                        <div aria-label="Agent options" className="max-h-[240px] overflow-y-auto" role="listbox">
+                          {agentOptions.map((agent) => {
+                            const availabilityLabel = buildAgentAvailabilityLabel(agent);
+                            const isSelected = agent.runtimeId === displayedAgentSelectValue;
+
+                            return (
+                              <button
+                                key={agent.runtimeId}
+                                aria-selected={isSelected}
+                                className={cn(
+                                  "flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-left transition-colors",
+                                  isSelected ? "bg-[var(--bg-cream)]" : "bg-white hover:bg-[rgba(244,241,234,0.72)]",
+                                  !agent.installed ? "cursor-not-allowed opacity-45" : "",
+                                )}
+                                disabled={!agent.installed}
+                                role="option"
+                                type="button"
+                                onClick={() => {
+                                  setIsAgentDropdownOpen(false);
+                                  updateActiveNetAgent(agent.runtimeId);
+                                }}
+                              >
+                                <AgentRuntimeBadge
+                                  className="min-w-0 flex-1"
+                                  iconWrapperClassName="size-6 border-[rgba(26,26,26,0.12)]"
+                                  label={agent.runtimeLabel}
+                                  labelClassName="truncate text-[13px] font-medium text-[var(--text-main)]"
+                                  runtimeKind={agent.runtimeKind}
+                                />
+                                {availabilityLabel ? (
+                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.42)]">
+                                    {availabilityLabel}
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <Button
@@ -2303,7 +2416,7 @@ function NetchatApp() {
               <div className="relative px-5 py-4">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-4 !pr-18 text-[17px] font-medium leading-9 text-white shadow-none placeholder:font-normal placeholder:text-white/48 focus-visible:ring-0"
+                  className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[17px] font-medium leading-9 text-white shadow-none placeholder:font-normal placeholder:text-white/48 focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -2317,6 +2430,17 @@ function NetchatApp() {
                     }
                   }}
                 />
+                <div className="pointer-events-none absolute bottom-4 left-0 max-w-[calc(100%-6rem)]">
+                  <div className="border border-white/24 bg-[rgba(255,255,255,0.14)] px-3 py-2 backdrop-blur-[1px]">
+                    <AgentRuntimeBadge
+                      className="max-w-full"
+                      iconWrapperClassName="size-5 border-white/18"
+                      label={bubbleComposerAgentDisplay.label}
+                      labelClassName="truncate text-[13px] font-medium text-white"
+                      runtimeKind={bubbleComposerAgentDisplay.runtimeKind}
+                    />
+                  </div>
+                </div>
                 <Button
                   className="absolute bottom-0 right-0 h-11 w-11 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
                   disabled={sendDisabled}
@@ -4018,16 +4142,86 @@ function formatErrorMessage(error: unknown) {
   return "The request failed. Check the daemon/server logs for more detail.";
 }
 
-function buildAgentOptionLabel(agent: AgentRuntimeOption) {
+function buildAgentAvailabilityLabel(agent: AgentRuntimeOption) {
   if (!agent.installed) {
-    return `${agent.runtimeLabel} - not installed`;
+    return "Not installed";
   }
 
   if (agent.status !== "online") {
-    return `${agent.runtimeLabel} - offline`;
+    return "Offline";
   }
 
-  return agent.runtimeLabel;
+  return null;
+}
+
+function AgentRuntimeBadge(props: {
+  label: string;
+  runtimeKind: AgentRuntimeKind | null;
+  className?: string;
+  iconWrapperClassName?: string;
+  labelClassName?: string;
+}) {
+  const { label, runtimeKind, className, iconWrapperClassName, labelClassName } = props;
+  const iconSrc = runtimeKind ? agentRuntimeIconSources[runtimeKind] ?? null : null;
+  const iconTreatment = getAgentIconTreatment(runtimeKind);
+
+  return (
+    <span className={cn("inline-flex min-w-0 items-center gap-2.5", className)}>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center overflow-hidden border border-[rgba(26,26,26,0.12)]",
+          iconTreatment.wrapperClassName,
+          iconWrapperClassName,
+        )}
+      >
+        {iconSrc ? (
+          <img
+            alt=""
+            className={cn("h-[70%] w-[70%] object-contain", iconTreatment.imageClassName)}
+            draggable={false}
+            src={iconSrc}
+          />
+        ) : (
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--text-main)]">
+            {buildAgentBadgeMonogram(label)}
+          </span>
+        )}
+      </span>
+      <span className={cn("truncate", labelClassName)}>{label}</span>
+    </span>
+  );
+}
+
+function buildAgentBadgeMonogram(label: string) {
+  const words = label
+    .split(/[^a-zA-Z0-9]+/)
+    .filter((part) => part.length > 0)
+    .slice(0, 2);
+  const monogram = words.map((part) => part[0]?.toUpperCase() ?? "").join("");
+
+  return monogram || "?";
+}
+
+function getAgentIconTreatment(runtimeKind: AgentRuntimeKind | null) {
+  switch (runtimeKind) {
+    case "codex":
+    case "droid":
+      return {
+        wrapperClassName: "bg-[var(--text-main)]",
+        imageClassName: "brightness-0 invert",
+      };
+    case "claude":
+      return {
+        wrapperClassName: "bg-white",
+        imageClassName: "brightness-0",
+      };
+    default:
+      return {
+        wrapperClassName: "bg-white",
+        imageClassName: "",
+      };
+  }
 }
 
 function buildOptimisticRootStreamTurn(
