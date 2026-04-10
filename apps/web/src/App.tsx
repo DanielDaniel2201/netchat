@@ -328,6 +328,7 @@ function NetchatApp() {
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [isSidebarTransitionReady, setIsSidebarTransitionReady] = useState(false);
+  const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => readStringArrayFromLocalStorage(workspaceOrderStorageKey));
   const [viewport, setViewport] = useState<CanvasViewport>(
     () =>
       buildInitialRootTurnViewport({
@@ -342,6 +343,7 @@ function NetchatApp() {
   const [openNetMenuId, setOpenNetMenuId] = useState<string | null>(null);
   const [isAgentDropdownOpen, setIsAgentDropdownOpen] = useState(false);
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
+  const [pendingWorkspaceDeletion, setPendingWorkspaceDeletion] = useState<{ id: string; title: string } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<string[]>([]);
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
@@ -396,8 +398,7 @@ function NetchatApp() {
     [knownWorkspaces],
   );
   const orderedWorkspaces = useMemo(() => {
-    const storedOrder = readStringArrayFromLocalStorage(workspaceOrderStorageKey);
-    if (storedOrder.length === 0) {
+    if (workspaceOrder.length === 0) {
       return [...knownWorkspaces].sort((left, right) => {
         const creationDelta = right.createdAt.localeCompare(left.createdAt);
         if (creationDelta !== 0) {
@@ -408,7 +409,7 @@ function NetchatApp() {
       });
     }
 
-    const orderIndex = new Map(storedOrder.map((workspaceId, index) => [workspaceId, index]));
+    const orderIndex = new Map(workspaceOrder.map((workspaceId, index) => [workspaceId, index]));
     return [...knownWorkspaces].sort((left, right) => {
       const leftIndex = orderIndex.get(left.workspaceId);
       const rightIndex = orderIndex.get(right.workspaceId);
@@ -432,7 +433,7 @@ function NetchatApp() {
 
       return left.workingDirectory.localeCompare(right.workingDirectory);
     });
-  }, [knownWorkspaces]);
+  }, [knownWorkspaces, workspaceOrder]);
   const activeWorkspaceId = machineWorkspaces?.activeWorkspaceId ?? workspace?.workspaceId ?? null;
   const canPickWorkspaceFolder = machineWorkspaces?.canPickWorkspaceFolder ?? true;
   const activeNetId = workspace?.activeNetId ?? null;
@@ -736,6 +737,9 @@ function NetchatApp() {
       }
 
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setWorkspaceOrder((current) =>
+        current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
+      );
       setExpandedWorkspaceIds((current) =>
         current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
       );
@@ -762,12 +766,14 @@ function NetchatApp() {
     onSuccess: async (nextWorkspace, deletedWorkspaceId) => {
       const activeWorkspaceChanged = nextWorkspace.workspaceId !== activeWorkspaceId;
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setWorkspaceOrder((current) => current.filter((workspaceId) => workspaceId !== deletedWorkspaceId));
       setExpandedWorkspaceIds((current) => current.filter((workspaceId) => workspaceId !== deletedWorkspaceId));
       setExpandedWorkspaceIds((current) =>
         current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
       );
       setOpenNetMenuId(null);
       setPendingNetDeletion(null);
+      setPendingWorkspaceDeletion(null);
 
       if (activeWorkspaceChanged) {
         setComposerValue("");
@@ -1009,12 +1015,24 @@ function NetchatApp() {
       return;
     }
 
-    const confirmed = window.confirm(`Delete workspace "${workspaceName}" from netchat? This removes its local netchat data only.`);
-    if (!confirmed) {
+    setOpenNetMenuId(null);
+    setPendingWorkspaceDeletion({ id: workspaceId, title: workspaceName });
+  }
+
+  function cancelWorkspaceDeletion() {
+    if (deleteWorkspaceMutation.isPending) {
       return;
     }
 
-    deleteWorkspaceMutation.mutate(workspaceId);
+    setPendingWorkspaceDeletion(null);
+  }
+
+  function confirmWorkspaceDeletion() {
+    if (!pendingWorkspaceDeletion) {
+      return;
+    }
+
+    deleteWorkspaceMutation.mutate(pendingWorkspaceDeletion.id);
   }
 
   function moveWorkspaceBefore(sourceWorkspaceId: string, targetWorkspaceId: string) {
@@ -1030,6 +1048,7 @@ function NetchatApp() {
     }
 
     nextOrder.splice(targetIndex, 0, sourceWorkspaceId);
+    setWorkspaceOrder(nextOrder);
     writeStringArrayToLocalStorage(workspaceOrderStorageKey, nextOrder);
   }
 
@@ -1200,17 +1219,24 @@ function NetchatApp() {
   }, [knownWorkspaces]);
 
   useEffect(() => {
-    const storedOrder = readStringArrayFromLocalStorage(workspaceOrderStorageKey);
+    if (!machineWorkspaces) {
+      return;
+    }
+
     const liveWorkspaceIds = new Set(defaultWorkspaceOrder);
     const nextOrder = [
-      ...storedOrder.filter((workspaceId) => liveWorkspaceIds.has(workspaceId)),
-      ...defaultWorkspaceOrder.filter((workspaceId) => !storedOrder.includes(workspaceId)),
+      ...workspaceOrder.filter((workspaceId) => liveWorkspaceIds.has(workspaceId)),
+      ...defaultWorkspaceOrder.filter((workspaceId) => !workspaceOrder.includes(workspaceId)),
     ];
 
-    if (!stringArraysEqual(storedOrder, nextOrder)) {
-      writeStringArrayToLocalStorage(workspaceOrderStorageKey, nextOrder);
+    if (!stringArraysEqual(workspaceOrder, nextOrder)) {
+      setWorkspaceOrder(nextOrder);
     }
-  }, [defaultWorkspaceOrder]);
+  }, [defaultWorkspaceOrder, machineWorkspaces, workspaceOrder]);
+
+  useEffect(() => {
+    writeStringArrayToLocalStorage(workspaceOrderStorageKey, workspaceOrder);
+  }, [workspaceOrder]);
 
   useEffect(() => {
     writeBooleanToLocalStorage(sidebarCollapsedStorageKey, isSidebarCollapsed);
@@ -1426,6 +1452,12 @@ function NetchatApp() {
   }, [pendingNetDeletion, workspaceNets]);
 
   useEffect(() => {
+    if (pendingWorkspaceDeletion && !knownWorkspaces.some((workspaceSummary) => workspaceSummary.workspaceId === pendingWorkspaceDeletion.id)) {
+      setPendingWorkspaceDeletion(null);
+    }
+  }, [knownWorkspaces, pendingWorkspaceDeletion]);
+
+  useEffect(() => {
     if (!openNetMenuId) {
       return;
     }
@@ -1552,12 +1584,14 @@ function NetchatApp() {
     openWorkspaceFolderMutation.isPending ||
     deleteWorkspaceMutation.isPending ||
     renameNetMutation.isPending ||
-    updateNetAgentMutation.isPending ||
     deleteNetMutation.isPending;
+  const isUpdatingActiveNetAgent =
+    updateNetAgentMutation.isPending && updateNetAgentMutation.variables?.netId === activeNetId;
   const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
   const isOnNewNetScreen = !graphQuery.isLoading && !hasMessages;
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
-  const sendDisabled = composerValue.trim().length === 0 || isThinking || isSwitchingNet || !canSendOnActiveLane;
+  const sendDisabled =
+    composerValue.trim().length === 0 || isThinking || isSwitchingNet || isUpdatingActiveNetAgent || !canSendOnActiveLane;
 
   useEffect(() => {
     if (!isOnNewNetScreen && isAgentDropdownOpen) {
@@ -1844,9 +1878,10 @@ function NetchatApp() {
       deleteNetMutation.error,
   );
   const pendingDeletionNetId = pendingNetDeletion?.id ?? null;
-  const isConfirmingDeletion = deleteNetMutation.isPending && deleteNetMutation.variables === pendingDeletionNetId;
-  const isUpdatingActiveNetAgent =
-    updateNetAgentMutation.isPending && updateNetAgentMutation.variables?.netId === activeNetId;
+  const pendingDeletionWorkspaceId = pendingWorkspaceDeletion?.id ?? null;
+  const isConfirmingWorkspaceDeletion =
+    deleteWorkspaceMutation.isPending && deleteWorkspaceMutation.variables === pendingDeletionWorkspaceId;
+  const isConfirmingNetDeletion = deleteNetMutation.isPending && deleteNetMutation.variables === pendingDeletionNetId;
   const activeNetAgentValue = activeNet?.agentRuntimeId ?? "";
   const displayedAgentSelectValue =
     activeNetAgentValue || defaultNewNetAgent?.runtimeId || agentOptions[0]?.runtimeId || "";
@@ -1871,7 +1906,7 @@ function NetchatApp() {
           "relative z-20 flex w-full shrink-0 flex-col overflow-hidden border-b border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.9)_0%,rgba(244,241,234,0.96)_100%)] lg:max-h-none",
           isSidebarTransitionReady ? "transition-[max-height,width] duration-300 ease-out" : "",
           isSidebarCollapsed
-            ? "max-h-[80px] border-b-0 bg-transparent lg:h-auto lg:w-auto lg:self-start lg:border-r-0"
+            ? "max-h-[80px] border-b-0 bg-transparent lg:h-screen lg:w-[80px] lg:self-start lg:border-b-0 lg:border-r"
             : "max-h-[48vh] lg:h-screen lg:w-[288px] lg:border-b-0 lg:border-r",
         )}
       >
@@ -1886,7 +1921,14 @@ function NetchatApp() {
               isSidebarCollapsed ? "items-center justify-between lg:flex-col lg:items-center lg:justify-start" : "items-start justify-between",
             )}
           >
-            <div className={cn("min-w-0", isSidebarCollapsed && "lg:hidden")}>
+            <div
+              className={cn(
+                "min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-300 ease-out",
+                isSidebarCollapsed
+                  ? "max-w-0 opacity-0 -translate-y-1 lg:-translate-x-2 lg:translate-y-0"
+                  : "max-w-[180px] opacity-100 translate-y-0 lg:translate-x-0",
+              )}
+            >
               <div className="font-[var(--font-display)] text-[24px] leading-none tracking-[-0.03em] text-[var(--text-main)]">
                 NetChat
               </div>
@@ -1926,16 +1968,25 @@ function NetchatApp() {
             </div>
           </div>
 
-          {!isSidebarCollapsed && netErrorMessage ? (
-            <div className="mt-4 border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
-              {netErrorMessage}
-            </div>
-          ) : null}
         </div>
 
-        {isSidebarCollapsed ? (
-          null
-        ) : (
+        <div
+          aria-hidden={isSidebarCollapsed}
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-hidden transition-[max-height,opacity,transform] duration-300 ease-out",
+            isSidebarCollapsed
+              ? "pointer-events-none max-h-0 opacity-0 -translate-y-2 lg:-translate-x-2 lg:translate-y-0"
+              : "max-h-[calc(48vh-80px)] opacity-100 translate-y-0 lg:max-h-none lg:translate-x-0",
+          )}
+        >
+          {netErrorMessage ? (
+            <div className="mt-4 px-4">
+              <div className="border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+                {netErrorMessage}
+              </div>
+            </div>
+          ) : null}
+
           <div className="flex-1 overflow-y-auto px-3 py-3">
             {workspacesQuery.isLoading ? (
               <div className="border border-[var(--node-border)] bg-white px-4 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
@@ -2225,7 +2276,7 @@ function NetchatApp() {
               </div>
             )}
           </div>
-        )}
+        </div>
       </aside>
       <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
@@ -2396,7 +2447,7 @@ function NetchatApp() {
         {showBubbleComposer ? (
           <div className="pointer-events-none fixed inset-0 z-30">
             <form
-              className="pointer-events-auto fixed border border-[var(--text-main)] bg-[var(--block-ochre)] text-white shadow-[14px_14px_0_rgba(26,26,26,0.12)]"
+              className="pointer-events-auto fixed border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[14px_14px_0_rgba(26,26,26,0.08)]"
               style={{
                 left: composerAnchor?.left,
                 top: composerAnchor?.top,
@@ -2405,9 +2456,9 @@ function NetchatApp() {
               onSubmit={handleSubmit}
             >
               {selectionForSelectedMessage ? (
-                <div className="border-b border-white/24 px-5 py-4">
-                  <div className="text-[13px] font-medium leading-5 text-white/72">User</div>
-                  <div className="mt-2 break-words text-[15px] italic leading-7 text-white/82">
+                <div className="border-b border-[var(--node-border)] bg-[rgba(244,241,234,0.52)] px-5 py-4">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">User</div>
+                  <div className="mt-2 break-words text-[15px] italic leading-7 text-[rgba(26,26,26,0.78)]">
                     {`"${truncate(selectionForSelectedMessage.selectedText, 160)}"`}
                   </div>
                 </div>
@@ -2416,7 +2467,7 @@ function NetchatApp() {
               <div className="relative px-5 py-4">
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[17px] font-medium leading-9 text-white shadow-none placeholder:font-normal placeholder:text-white/48 focus-visible:ring-0"
+                  className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[17px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -2431,18 +2482,17 @@ function NetchatApp() {
                   }}
                 />
                 <div className="pointer-events-none absolute bottom-4 left-0 max-w-[calc(100%-6rem)]">
-                  <div className="border border-white/24 bg-[rgba(255,255,255,0.14)] px-3 py-2 backdrop-blur-[1px]">
-                    <AgentRuntimeBadge
-                      className="max-w-full"
-                      iconWrapperClassName="size-5"
-                      label={bubbleComposerAgentDisplay.label}
-                      labelClassName="truncate text-[13px] font-medium text-white"
-                      runtimeKind={bubbleComposerAgentDisplay.runtimeKind}
-                    />
-                  </div>
+                  <AgentRuntimeBadge
+                    className="max-w-full"
+                    iconWrapperClassName="size-5"
+                    label={bubbleComposerAgentDisplay.label}
+                    labelClassName="truncate text-[13px] font-medium text-[var(--text-main)]"
+                    monochrome
+                    runtimeKind={bubbleComposerAgentDisplay.runtimeKind}
+                  />
                 </div>
                 <Button
-                  className="absolute bottom-0 right-0 h-11 w-11 rounded-none border border-white bg-white px-0 text-[var(--block-ochre)] shadow-none hover:bg-[var(--bg-cream)] hover:text-[var(--block-slate)]"
+                  className="absolute bottom-0 right-0 h-11 w-11 rounded-none border border-[var(--text-main)] bg-[var(--text-main)] px-0 text-white shadow-none hover:bg-[var(--block-slate)]"
                   disabled={sendDisabled}
                   type="submit"
                 >
@@ -2451,7 +2501,7 @@ function NetchatApp() {
               </div>
 
               {composerErrorMessage ? (
-                <div className="border-t border-white/24 bg-[rgba(58,64,66,0.18)] px-6 py-4 text-sm leading-6 text-white">
+                <div className="border-t border-rose-200 bg-rose-50 px-6 py-4 text-sm leading-6 text-rose-700">
                   {composerErrorMessage}
                 </div>
               ) : null}
@@ -2459,44 +2509,84 @@ function NetchatApp() {
           </div>
         ) : null}
 
-        {pendingNetDeletion ? (
-          <div
-            className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center bg-[rgba(26,26,26,0.2)] px-6"
-            onClick={cancelNetDeletion}
-          >
-            <div
-              className="w-full max-w-[420px] border border-[var(--text-main)] bg-white shadow-[14px_14px_0_rgba(26,26,26,0.1)]"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="border-b border-[var(--node-border)] px-6 py-5">
-                <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">Delete net?</div>
-              </div>
-
-              <div className="px-6 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.76)]">
-                Delete "{pendingNetDeletion.title}" from history?
-              </div>
-
-              <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
-                <button
-                  type="button"
-                  className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
-                  disabled={isConfirmingDeletion}
-                  onClick={cancelNetDeletion}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="bg-rose-50 px-5 py-4 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:text-rose-300"
-                  disabled={isConfirmingDeletion}
-                  onClick={confirmNetDeletion}
-                >
-                  {isConfirmingDeletion ? "Deleting..." : "Delete"}
-                </button>
-              </div>
-            </div>
-          </div>
+        {pendingWorkspaceDeletion ? (
+          <DeleteConfirmationDialog
+            confirmLabel="Delete"
+            confirmPendingLabel="Deleting..."
+            description={`Delete "${pendingWorkspaceDeletion.title}" from netchat? This removes its local netchat data only.`}
+            isConfirming={isConfirmingWorkspaceDeletion}
+            title="Delete workspace?"
+            onCancel={cancelWorkspaceDeletion}
+            onConfirm={confirmWorkspaceDeletion}
+          />
         ) : null}
+
+        {pendingNetDeletion ? (
+          <DeleteConfirmationDialog
+            confirmLabel="Delete"
+            confirmPendingLabel="Deleting..."
+            description={`Delete "${pendingNetDeletion.title}" from history?`}
+            isConfirming={isConfirmingNetDeletion}
+            title="Delete net?"
+            onCancel={cancelNetDeletion}
+            onConfirm={confirmNetDeletion}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirmationDialog({
+  title,
+  description,
+  confirmLabel,
+  confirmPendingLabel,
+  isConfirming,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  confirmPendingLabel: string;
+  isConfirming: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center bg-[rgba(26,26,26,0.2)] px-6"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-[420px] border border-[var(--text-main)] bg-white shadow-[14px_14px_0_rgba(26,26,26,0.1)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-[var(--node-border)] px-6 py-5">
+          <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">{title}</div>
+        </div>
+
+        <div className="px-6 py-5 text-[15px] leading-7 text-[rgba(26,26,26,0.76)]">{description}</div>
+
+        <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
+          <button
+            type="button"
+            className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+            disabled={isConfirming}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="bg-rose-50 px-5 py-4 text-left text-[15px] font-medium text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:text-rose-300"
+            disabled={isConfirming}
+            onClick={onConfirm}
+          >
+            {isConfirming ? confirmPendingLabel : confirmLabel}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -4160,8 +4250,9 @@ function AgentRuntimeBadge(props: {
   className?: string;
   iconWrapperClassName?: string;
   labelClassName?: string;
+  monochrome?: boolean;
 }) {
-  const { label, runtimeKind, className, iconWrapperClassName, labelClassName } = props;
+  const { label, runtimeKind, className, iconWrapperClassName, labelClassName, monochrome = false } = props;
   const iconSrc = runtimeKind ? agentRuntimeIconSources[runtimeKind] ?? null : null;
   const iconTreatment = getAgentIconTreatment(runtimeKind);
 
@@ -4178,7 +4269,11 @@ function AgentRuntimeBadge(props: {
         {iconSrc ? (
           <img
             alt=""
-            className={cn("h-[70%] w-[70%] object-contain", iconTreatment.imageClassName)}
+            className={cn(
+              "h-[70%] w-[70%] object-contain",
+              iconTreatment.imageClassName,
+              monochrome ? "brightness-0 saturate-0" : "",
+            )}
             draggable={false}
             src={iconSrc}
           />

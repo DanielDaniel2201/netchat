@@ -2,6 +2,10 @@
 
 ## 2026-04-10
 
+- Matched workspace deletion to the existing net deletion modal, so destructive confirmation now uses the same inline dialog instead of a browser `confirm`.
+- Made sidebar collapse/expand animate through a real 80px rail and persisted workspace drag-reorder in React state, so the left rail now transitions smoothly and reordered workspaces update immediately.
+- Fixed the Windows folder picker to treat cancel as a normal no-op and stopped net agent changes from disabling unrelated sidebar buttons, so `Open folder as workspace` no longer throws on cancel or flashes during agent switches.
+- Restyled in-net reply composers onto the same light surface as the new-net composer and flattened the lower-left agent badge into monochrome inline text, so active-net prompt UI now matches the editorial canvas more closely.
 - Removed the badge box chrome around composer agent icons and switched Codex/Droid marks to dark-on-light rendering, so runtime icons now read as clean standalone glyphs instead of boxed logos.
 - Replaced the new-net runtime `<select>` with an icon-based agent menu and added matching read-only agent badges to reply composers, so Claude/Codex/Droid selection now stays visually consistent across empty and active net flows.
 - Stopped workspace rows from auto-switching the active net when expanded, defaulted workspace ordering to newest-created first with client-side drag reordering, folded net timestamps and menus into a tighter single-line row, and made the collapsed sidebar collapse all the way down to just the three action buttons.

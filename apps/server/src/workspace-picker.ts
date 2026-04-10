@@ -33,13 +33,21 @@ async function pickWorkspaceFolderOnWindows() {
     "Add-Type -AssemblyName System.Windows.Forms",
     "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
     "$dialog.Description = 'Open folder as workspace'",
-    "$dialog.UseDescriptionForTitle = $true",
     "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }",
   ].join("; ");
-  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-STA", "-Command", script], {
-    windowsHide: true,
-  });
-  return normalizeSelectedPath(stdout);
+
+  try {
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-STA", "-Command", script], {
+      windowsHide: true,
+    });
+    return normalizeSelectedPath(stdout);
+  } catch (error) {
+    if (isPickerCancellation(error)) {
+      return null;
+    }
+
+    throw new Error("The native Windows folder picker failed to open.");
+  }
 }
 
 async function pickWorkspaceFolderOnMac() {
