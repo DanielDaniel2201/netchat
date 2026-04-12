@@ -2,7 +2,7 @@
 
 ## 2026-04-12
 
-- Added a global `Word wrap` toggle in the file preview header and persisted its state across file switches, so long unbroken lines can be wrapped on demand without losing the setting when the next file opens.
+- Replaced the file preview word-wrap toggle with Markdown rendering for `.md` files while keeping the plain numbered, horizontally scrollable viewer for all other file types.
 - Made the explorer pane fully occupy the right-side workspace area whenever no file preview is open, so opening the explorer alone no longer leaves a blank reserved sheet beside it.
 - Added desktop drag splitters between `canvas | workspace panes` and `explorer | file preview`, with clamped widths and persisted pane sizing, so the right-side workspace tools now resize like an editor instead of staying on fixed widths.
 - Replaced per-line horizontal scrolling in the workspace file preview with a single pane-level bottom scrollbar, so long lines now behave like a real code viewer instead of spawning one scrollbar per row.
