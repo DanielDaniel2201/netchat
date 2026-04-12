@@ -19,8 +19,6 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronRight,
-  FileText,
-  Folder,
   FolderOpen,
   FolderPlus,
   LoaderCircle,
@@ -2487,7 +2485,6 @@ function NetchatApp() {
                 selectedFilePath={selectedWorkspaceFilePath}
                 workspaceDisplayName={workspaceDisplayName}
                 workspaceId={activeWorkspaceId}
-                workingDirectoryPath={workingDirectoryPath}
                 onClose={() => setIsWorkspaceExplorerOpen(false)}
                 onSelectFile={handleWorkspaceFileSelect}
                 onToggleDirectory={toggleWorkspaceExplorerDirectory}
@@ -2601,7 +2598,6 @@ function NetchatApp() {
 function WorkspaceExplorerPanel({
   workspaceId,
   workspaceDisplayName,
-  workingDirectoryPath,
   expandedDirectoryPaths,
   selectedFilePath,
   onToggleDirectory,
@@ -2610,7 +2606,6 @@ function WorkspaceExplorerPanel({
 }: {
   workspaceId: string | null;
   workspaceDisplayName: string;
-  workingDirectoryPath: string;
   expandedDirectoryPaths: string[];
   selectedFilePath: string | null;
   onToggleDirectory: (directoryPath: string) => void;
@@ -2619,14 +2614,8 @@ function WorkspaceExplorerPanel({
 }) {
   return (
     <aside className="flex w-[min(22rem,52vw)] min-w-[220px] max-w-[360px] shrink-0 flex-col border-l border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,241,234,0.98)_100%)] shadow-[-10px_0_0_rgba(26,26,26,0.04)] lg:w-[320px]">
-      <div className="flex items-start justify-between gap-3 border-b border-[var(--text-main)] px-4 py-4">
-        <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">Explorer</div>
-          <div className="mt-1 text-[16px] font-medium leading-6 text-[var(--text-main)]">{workspaceDisplayName}</div>
-          <div className="mt-1 truncate font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.54)]" title={workingDirectoryPath}>
-            {truncateMiddle(workingDirectoryPath, 44)}
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--text-main)] px-4 py-2.5">
+        <div className="min-w-0 truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{workspaceDisplayName}</div>
         <button
           type="button"
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.58)] transition-colors hover:border-[var(--text-main)] hover:text-[var(--text-main)]"
@@ -2637,38 +2626,20 @@ function WorkspaceExplorerPanel({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        <div className="border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.04)]">
-          <div className="border-b border-[var(--node-border)] px-3 py-3">
-            <div className="flex items-start gap-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-[rgba(244,241,234,0.72)] text-[var(--text-main)]">
-                <FolderOpen className="size-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{workspaceDisplayName}</div>
-                <div className="mt-0.5 truncate font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.54)]" title={workingDirectoryPath}>
-                  {truncateMiddle(workingDirectoryPath, 48)}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="px-2 py-2">
-            {workspaceId ? (
-              <WorkspaceExplorerDirectoryEntries
-                depth={0}
-                directoryPath=""
-                expandedDirectoryPaths={expandedDirectoryPaths}
-                selectedFilePath={selectedFilePath}
-                workspaceId={workspaceId}
-                onSelectFile={onSelectFile}
-                onToggleDirectory={onToggleDirectory}
-              />
-            ) : (
-              <div className="px-3 py-5 text-[13px] leading-6 text-[rgba(26,26,26,0.56)]">Workspace files are unavailable right now.</div>
-            )}
-          </div>
-        </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        {workspaceId ? (
+          <WorkspaceExplorerDirectoryEntries
+            depth={0}
+            directoryPath=""
+            expandedDirectoryPaths={expandedDirectoryPaths}
+            selectedFilePath={selectedFilePath}
+            workspaceId={workspaceId}
+            onSelectFile={onSelectFile}
+            onToggleDirectory={onToggleDirectory}
+          />
+        ) : (
+          <div className="px-3 py-5 text-[13px] leading-6 text-[rgba(26,26,26,0.56)]">Workspace files are unavailable right now.</div>
+        )}
       </div>
     </aside>
   );
@@ -2737,7 +2708,7 @@ function WorkspaceExplorerDirectoryEntries({
             key={entry.path}
             type="button"
             className={cn(
-              "flex w-full items-center gap-2 border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+              "flex w-full items-center border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
               selectedFilePath === entry.path
                 ? "border-[var(--text-main)] bg-[var(--bg-cream)]"
                 : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.48)]",
@@ -2746,9 +2717,6 @@ function WorkspaceExplorerDirectoryEntries({
             title={entry.path}
             onClick={() => onSelectFile(entry.path)}
           >
-            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[rgba(26,26,26,0.36)]">
-              <FileText className="size-3.5" />
-            </span>
             <span className="min-w-0 truncate">{entry.name}</span>
           </button>
         ),
@@ -2781,7 +2749,7 @@ function WorkspaceExplorerDirectoryNode({
       <button
         type="button"
         className={cn(
-          "flex w-full items-center gap-2 border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+          "flex w-full items-center gap-1 border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
           isExpanded
             ? "bg-[rgba(244,241,234,0.58)]"
             : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.4)]",
@@ -2791,7 +2759,6 @@ function WorkspaceExplorerDirectoryNode({
         onClick={() => onToggleDirectory(entry.path)}
       >
         <ChevronRight className={cn("size-3.5 shrink-0 text-[rgba(26,26,26,0.42)] transition-transform", isExpanded ? "rotate-90" : "")} />
-        {isExpanded ? <FolderOpen className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
         <span className="min-w-0 truncate">{entry.name}</span>
       </button>
 
@@ -2824,17 +2791,12 @@ function WorkspaceFilePreviewPanel({
   onClose: () => void;
 }) {
   const fileName = file?.name ?? filePath.split("/").at(-1) ?? filePath;
+  const fileLines = useMemo(() => splitWorkspaceFileContentLines(file?.content ?? ""), [file?.content]);
 
   return (
     <aside className="flex min-w-0 flex-1 flex-col border-l border-[var(--text-main)] bg-white shadow-[-10px_0_0_rgba(26,26,26,0.04)] lg:w-[min(34rem,42vw)]">
-      <div className="flex items-start justify-between gap-3 border-b border-[var(--text-main)] px-5 py-4">
-        <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">File</div>
-          <div className="mt-1 truncate text-[16px] font-medium leading-6 text-[var(--text-main)]">{fileName}</div>
-          <div className="mt-1 truncate font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.54)]" title={filePath}>
-            {truncateMiddle(filePath, 60)}
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--text-main)] px-4 py-2.5">
+        <div className="min-w-0 truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{fileName}</div>
         <button
           type="button"
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.58)] transition-colors hover:border-[var(--text-main)] hover:text-[var(--text-main)]"
@@ -2864,18 +2826,18 @@ function WorkspaceFilePreviewPanel({
         ) : file.content.length === 0 ? (
           <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">This file is empty.</div>
         ) : (
-          <pre className="min-h-full min-w-full whitespace-pre px-5 py-4 font-mono text-[12px] leading-6 text-[var(--text-main)]">
-            {file.content}
-          </pre>
+          <div className="min-h-full min-w-full px-0 py-0 font-mono text-[12px] leading-6 text-[var(--text-main)]">
+            {fileLines.map((line, index) => (
+              <div key={index} className="grid grid-cols-[4.5rem,minmax(0,1fr)]">
+                <div className="select-none border-r border-[rgba(26,26,26,0.08)] bg-[rgba(26,26,26,0.035)] px-3 py-0 text-right text-[rgba(26,26,26,0.36)]">
+                  {index + 1}
+                </div>
+                <div className="overflow-x-auto px-4 py-0 whitespace-pre">{line || " "}</div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
-
-      {file && !file.isBinary ? (
-        <div className="flex items-center justify-between gap-3 border-t border-[var(--node-border)] bg-white px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">
-          <span>{formatWorkspaceFileSize(file.size)}</span>
-          <span>{file.truncated ? "Preview truncated at 256 KB" : "Full preview"}</span>
-        </div>
-      ) : null}
     </aside>
   );
 }
@@ -5065,6 +5027,14 @@ function formatWorkspaceFileSize(size: number) {
   }
 
   return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function splitWorkspaceFileContentLines(content: string) {
+  if (!content) {
+    return [];
+  }
+
+  return content.replace(/\r\n/g, "\n").split("\n");
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

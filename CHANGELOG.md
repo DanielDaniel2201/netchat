@@ -2,6 +2,8 @@
 
 ## 2026-04-12
 
+- Trimmed the new workspace explorer and file preview headers down to just the active folder or file name and removed the extra root-summary chrome, so the right-side panels read as much thinner, cleaner utility panes.
+- Added line numbers to workspace file previews, so browsing source files from the canvas now has lightweight editor-style orientation without extra metadata bars.
 - Replaced the sidebar `Open folder as workspace` and `New net` glyphs with `folder-plus` and `pencil` actions, so adding a workspace and starting a fresh net read as distinct creation flows.
 - Added active-workspace explorer APIs plus a right-side file tree and file preview panel toggled from the canvas, so the main view can now expand into `canvas + explorer + file content` like a lightweight editor workspace.
 - Raised Codex's default daemon inactivity timeout from the shared `60s` fallback to a dedicated `5m` window and added per-runtime timeout env overrides, so long-running `codex exec --json` turns are no longer misclassified as stalled while Claude and Droid keep their shorter defaults.
