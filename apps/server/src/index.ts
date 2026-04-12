@@ -26,6 +26,8 @@ import {
   ServerDiagnostics,
   TurnStreamEvent,
   UiConfig,
+  WorkspaceDirectoryListing,
+  WorkspaceFileContent,
   WorkspaceState,
   buildGraphEdges,
   buildPrefixReplayPrompt,
@@ -87,6 +89,28 @@ app.get("/health", async () => ({
 app.get("/api/workspace", async (): Promise<WorkspaceState> => store.getWorkspaceState());
 
 app.get("/api/workspaces", async (): Promise<MachineWorkspacesState> => store.getWorkspacesState());
+
+app.get("/api/workspace/explorer", async (request, reply): Promise<WorkspaceDirectoryListing | void> => {
+  const directoryPath = typeof (request.query as { path?: unknown }).path === "string" ? (request.query as { path?: string }).path ?? "" : "";
+
+  try {
+    return store.getWorkspaceDirectoryListing(directoryPath);
+  } catch (error) {
+    diagnostics.log("warn", `Reading workspace directory ${directoryPath || "."} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.get("/api/workspace/file", async (request, reply): Promise<WorkspaceFileContent | void> => {
+  const filePath = typeof (request.query as { path?: unknown }).path === "string" ? (request.query as { path?: string }).path ?? "" : "";
+
+  try {
+    return store.getWorkspaceFileContent(filePath);
+  } catch (error) {
+    diagnostics.log("warn", `Reading workspace file ${filePath || "."} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
 
 app.post("/api/workspaces", async (request, reply) => {
   const input = openWorkspaceInputSchema.safeParse(request.body);

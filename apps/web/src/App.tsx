@@ -19,13 +19,17 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronRight,
+  FileText,
+  Folder,
   FolderOpen,
+  FolderPlus,
   LoaderCircle,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
-  Plus,
+  Pencil,
   Trash2,
+  X,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
@@ -42,6 +46,9 @@ import {
   PickWorkspaceFolderResult,
   TurnStreamEvent,
   UiConfig,
+  WorkspaceDirectoryListing,
+  WorkspaceExplorerEntry,
+  WorkspaceFileContent,
   UpdateNetInput,
   WorkspaceState,
   buildGraphEdges,
@@ -344,6 +351,9 @@ function NetchatApp() {
   const [isAgentDropdownOpen, setIsAgentDropdownOpen] = useState(false);
   const [pendingNetDeletion, setPendingNetDeletion] = useState<{ id: string; title: string } | null>(null);
   const [pendingWorkspaceDeletion, setPendingWorkspaceDeletion] = useState<{ id: string; title: string } | null>(null);
+  const [isWorkspaceExplorerOpen, setIsWorkspaceExplorerOpen] = useState(false);
+  const [expandedExplorerDirectoryPaths, setExpandedExplorerDirectoryPaths] = useState<string[]>([""]);
+  const [selectedWorkspaceFilePath, setSelectedWorkspaceFilePath] = useState<string | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<string[]>([]);
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
@@ -436,6 +446,12 @@ function NetchatApp() {
   }, [knownWorkspaces, workspaceOrder]);
   const activeWorkspaceId = machineWorkspaces?.activeWorkspaceId ?? workspace?.workspaceId ?? null;
   const canPickWorkspaceFolder = machineWorkspaces?.canPickWorkspaceFolder ?? true;
+  const workspaceFileQuery = useQuery({
+    queryKey: ["workspace-file", activeWorkspaceId, selectedWorkspaceFilePath],
+    queryFn: () =>
+      request<WorkspaceFileContent>(`/api/workspace/file${buildWorkspacePathQueryString(selectedWorkspaceFilePath ?? "")}`),
+    enabled: Boolean(isWorkspaceExplorerOpen && activeWorkspaceId && selectedWorkspaceFilePath),
+  });
   const activeNetId = workspace?.activeNetId ?? null;
   const activeNet = workspaceNets.find((net) => net.id === activeNetId) ?? null;
   const branchesById = useMemo(
@@ -1052,6 +1068,19 @@ function NetchatApp() {
     writeStringArrayToLocalStorage(workspaceOrderStorageKey, nextOrder);
   }
 
+  function toggleWorkspaceExplorerDirectory(directoryPath: string) {
+    setExpandedExplorerDirectoryPaths((current) =>
+      current.includes(directoryPath)
+        ? current.filter((candidate) => candidate !== directoryPath)
+        : [...current, directoryPath],
+    );
+  }
+
+  function handleWorkspaceFileSelect(filePath: string) {
+    setIsWorkspaceExplorerOpen(true);
+    setSelectedWorkspaceFilePath(filePath);
+  }
+
   function requestNetDeletion(netId: string, title: string) {
     setOpenNetMenuId(null);
     setPendingNetDeletion({ id: netId, title });
@@ -1207,6 +1236,11 @@ function NetchatApp() {
     setExpandedWorkspaceIds((current) =>
       current.includes(activeWorkspaceId) ? current : [activeWorkspaceId, ...current],
     );
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    setExpandedExplorerDirectoryPaths([""]);
+    setSelectedWorkspaceFilePath(null);
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -1852,6 +1886,8 @@ function NetchatApp() {
   );
   const workingDirectoryValue = workspace?.workingDirectory ?? null;
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
+  const workspaceDisplayName = resolveWorkspaceName(workingDirectoryPath);
+  const selectedWorkspaceFile = workspaceFileQuery.data ?? null;
   const composerPlaceholder =
     !selectedMessage && !activeNet?.agentRuntimeId
       ? "Pick an agent below, then start the first turn..."
@@ -1928,13 +1964,13 @@ function NetchatApp() {
               type="button"
               className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.34)]"
               disabled={isSwitchingNet || !canPickWorkspaceFolder}
-              title="Open folder as workspace"
+              title="Add workspace"
               onClick={() => openWorkspaceFolderMutation.mutate()}
             >
               {openWorkspaceFolderMutation.isPending ? (
                 <LoaderCircle className="size-4 animate-spin" />
               ) : (
-                <FolderOpen className="size-4" />
+                <FolderPlus className="size-4" />
               )}
             </button>
             <button
@@ -1944,7 +1980,7 @@ function NetchatApp() {
               title="Create new net"
               onClick={handleCreateNet}
             >
-              {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
+              {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
             </button>
           </div>
 
@@ -2258,41 +2294,59 @@ function NetchatApp() {
           </div>
         </div>
       </aside>
-      <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div className="flex h-full min-w-0">
+          <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
+            <div className="absolute right-4 top-4 z-20">
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex h-10 w-10 items-center justify-center border border-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors",
+                  isWorkspaceExplorerOpen
+                    ? "bg-[var(--text-main)] text-white hover:bg-[var(--block-slate)]"
+                    : "bg-white text-[var(--text-main)] hover:bg-[var(--bg-cream)]",
+                )}
+                disabled={workspaceQuery.isLoading || !workspace?.workingDirectory}
+                title={isWorkspaceExplorerOpen ? "Hide workspace explorer" : "Show workspace explorer"}
+                onClick={() => setIsWorkspaceExplorerOpen((current) => !current)}
+              >
+                <FolderOpen className="size-4" />
+              </button>
+            </div>
 
-        <ReactFlow
-          className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
-          nodes={graph.nodes}
-          edges={graph.edges}
-          viewport={viewport}
-          onViewportChange={handleViewportChange}
-          onNodeClick={(_event, node) => {
-            const selectedText = window.getSelection()?.toString().trim();
-            const message = (node.data as MessageNodeData | undefined)?.message;
-            if (message?.role === "assistant" && !selectedText) {
-              pickMessage(node.id);
-            }
-          }}
-          nodeTypes={nodeTypes}
-          minZoom={canvasMinZoom}
-          maxZoom={canvasMaxZoom}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          onPaneClick={() => {
-            activateMessagePath(null);
-            setSelectedMessageId(null);
-            setSelectionDraft(null);
-            clearBrowserSelection();
-          }}
-          panOnDrag={!isOnNewNetScreen}
-          zoomOnScroll={!isOnNewNetScreen}
-          zoomOnPinch={!isOnNewNetScreen}
-          zoomOnDoubleClick={false}
-        >
-          <Background gap={96} size={1} color="var(--line-color)" />
-        </ReactFlow>
+            <ReactFlow
+              className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
+              nodes={graph.nodes}
+              edges={graph.edges}
+              viewport={viewport}
+              onViewportChange={handleViewportChange}
+              onNodeClick={(_event, node) => {
+                const selectedText = window.getSelection()?.toString().trim();
+                const message = (node.data as MessageNodeData | undefined)?.message;
+                if (message?.role === "assistant" && !selectedText) {
+                  pickMessage(node.id);
+                }
+              }}
+              nodeTypes={nodeTypes}
+              minZoom={canvasMinZoom}
+              maxZoom={canvasMaxZoom}
+              nodesDraggable={false}
+              nodesConnectable={false}
+              elementsSelectable={false}
+              onPaneClick={() => {
+                activateMessagePath(null);
+                setSelectedMessageId(null);
+                setSelectionDraft(null);
+                clearBrowserSelection();
+              }}
+              panOnDrag={!isOnNewNetScreen}
+              zoomOnScroll={!isOnNewNetScreen}
+              zoomOnPinch={!isOnNewNetScreen}
+              zoomOnDoubleClick={false}
+            >
+              <Background gap={96} size={1} color="var(--line-color)" />
+            </ReactFlow>
 
         {graph.nodes.length > 0 ? (
           <CanvasThumbnail
@@ -2424,6 +2478,33 @@ function NetchatApp() {
           </div>
         ) : null}
 
+          </div>
+
+          {isWorkspaceExplorerOpen ? (
+            <div className="absolute inset-y-0 right-0 z-20 flex w-full justify-end bg-transparent lg:static lg:z-0 lg:w-auto lg:shrink-0">
+              <WorkspaceExplorerPanel
+                expandedDirectoryPaths={expandedExplorerDirectoryPaths}
+                selectedFilePath={selectedWorkspaceFilePath}
+                workspaceDisplayName={workspaceDisplayName}
+                workspaceId={activeWorkspaceId}
+                workingDirectoryPath={workingDirectoryPath}
+                onClose={() => setIsWorkspaceExplorerOpen(false)}
+                onSelectFile={handleWorkspaceFileSelect}
+                onToggleDirectory={toggleWorkspaceExplorerDirectory}
+              />
+              {selectedWorkspaceFilePath ? (
+                <WorkspaceFilePreviewPanel
+                  file={selectedWorkspaceFile}
+                  filePath={selectedWorkspaceFilePath}
+                  isLoading={workspaceFileQuery.isLoading || workspaceFileQuery.isFetching}
+                  errorMessage={formatErrorMessage(workspaceFileQuery.error)}
+                  onClose={() => setSelectedWorkspaceFilePath(null)}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
         {showBubbleComposer ? (
           <div className="pointer-events-none fixed inset-0 z-30">
             <form
@@ -2514,6 +2595,288 @@ function NetchatApp() {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function WorkspaceExplorerPanel({
+  workspaceId,
+  workspaceDisplayName,
+  workingDirectoryPath,
+  expandedDirectoryPaths,
+  selectedFilePath,
+  onToggleDirectory,
+  onSelectFile,
+  onClose,
+}: {
+  workspaceId: string | null;
+  workspaceDisplayName: string;
+  workingDirectoryPath: string;
+  expandedDirectoryPaths: string[];
+  selectedFilePath: string | null;
+  onToggleDirectory: (directoryPath: string) => void;
+  onSelectFile: (filePath: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <aside className="flex w-[min(22rem,52vw)] min-w-[220px] max-w-[360px] shrink-0 flex-col border-l border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,241,234,0.98)_100%)] shadow-[-10px_0_0_rgba(26,26,26,0.04)] lg:w-[320px]">
+      <div className="flex items-start justify-between gap-3 border-b border-[var(--text-main)] px-4 py-4">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">Explorer</div>
+          <div className="mt-1 text-[16px] font-medium leading-6 text-[var(--text-main)]">{workspaceDisplayName}</div>
+          <div className="mt-1 truncate font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.54)]" title={workingDirectoryPath}>
+            {truncateMiddle(workingDirectoryPath, 44)}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.58)] transition-colors hover:border-[var(--text-main)] hover:text-[var(--text-main)]"
+          title="Hide workspace explorer"
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div className="border border-[var(--text-main)] bg-white shadow-[8px_8px_0_rgba(26,26,26,0.04)]">
+          <div className="border-b border-[var(--node-border)] px-3 py-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-[rgba(244,241,234,0.72)] text-[var(--text-main)]">
+                <FolderOpen className="size-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{workspaceDisplayName}</div>
+                <div className="mt-0.5 truncate font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.54)]" title={workingDirectoryPath}>
+                  {truncateMiddle(workingDirectoryPath, 48)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="px-2 py-2">
+            {workspaceId ? (
+              <WorkspaceExplorerDirectoryEntries
+                depth={0}
+                directoryPath=""
+                expandedDirectoryPaths={expandedDirectoryPaths}
+                selectedFilePath={selectedFilePath}
+                workspaceId={workspaceId}
+                onSelectFile={onSelectFile}
+                onToggleDirectory={onToggleDirectory}
+              />
+            ) : (
+              <div className="px-3 py-5 text-[13px] leading-6 text-[rgba(26,26,26,0.56)]">Workspace files are unavailable right now.</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function WorkspaceExplorerDirectoryEntries({
+  workspaceId,
+  directoryPath,
+  depth,
+  expandedDirectoryPaths,
+  selectedFilePath,
+  onToggleDirectory,
+  onSelectFile,
+}: {
+  workspaceId: string;
+  directoryPath: string;
+  depth: number;
+  expandedDirectoryPaths: string[];
+  selectedFilePath: string | null;
+  onToggleDirectory: (directoryPath: string) => void;
+  onSelectFile: (filePath: string) => void;
+}) {
+  const directoryQuery = useQuery({
+    queryKey: ["workspace-explorer", workspaceId, directoryPath],
+    queryFn: () => request<WorkspaceDirectoryListing>(`/api/workspace/explorer${buildWorkspacePathQueryString(directoryPath)}`),
+    staleTime: 30_000,
+  });
+
+  if (directoryQuery.isLoading) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 text-[12px] leading-5 text-[rgba(26,26,26,0.5)]">
+        <LoaderCircle className="size-3.5 animate-spin" />
+        Loading files...
+      </div>
+    );
+  }
+
+  if (directoryQuery.error) {
+    return (
+      <div className="px-3 py-3 text-[12px] leading-5 text-rose-700">
+        {formatErrorMessage(directoryQuery.error) ?? "Workspace files could not be read."}
+      </div>
+    );
+  }
+
+  if (!directoryQuery.data || directoryQuery.data.entries.length === 0) {
+    return <div className="px-3 py-2 text-[12px] leading-5 text-[rgba(26,26,26,0.44)]">Empty folder.</div>;
+  }
+
+  return (
+    <div className="flex flex-col">
+      {directoryQuery.data.entries.map((entry) =>
+        entry.kind === "directory" ? (
+          <WorkspaceExplorerDirectoryNode
+            key={entry.path}
+            depth={depth}
+            entry={entry}
+            expandedDirectoryPaths={expandedDirectoryPaths}
+            selectedFilePath={selectedFilePath}
+            workspaceId={workspaceId}
+            onSelectFile={onSelectFile}
+            onToggleDirectory={onToggleDirectory}
+          />
+        ) : (
+          <button
+            key={entry.path}
+            type="button"
+            className={cn(
+              "flex w-full items-center gap-2 border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+              selectedFilePath === entry.path
+                ? "border-[var(--text-main)] bg-[var(--bg-cream)]"
+                : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.48)]",
+            )}
+            style={{ paddingLeft: `${depth * 16 + 12}px` }}
+            title={entry.path}
+            onClick={() => onSelectFile(entry.path)}
+          >
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[rgba(26,26,26,0.36)]">
+              <FileText className="size-3.5" />
+            </span>
+            <span className="min-w-0 truncate">{entry.name}</span>
+          </button>
+        ),
+      )}
+    </div>
+  );
+}
+
+function WorkspaceExplorerDirectoryNode({
+  workspaceId,
+  entry,
+  depth,
+  expandedDirectoryPaths,
+  selectedFilePath,
+  onToggleDirectory,
+  onSelectFile,
+}: {
+  workspaceId: string;
+  entry: WorkspaceExplorerEntry;
+  depth: number;
+  expandedDirectoryPaths: string[];
+  selectedFilePath: string | null;
+  onToggleDirectory: (directoryPath: string) => void;
+  onSelectFile: (filePath: string) => void;
+}) {
+  const isExpanded = expandedDirectoryPaths.includes(entry.path);
+
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        className={cn(
+          "flex w-full items-center gap-2 border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+          isExpanded
+            ? "bg-[rgba(244,241,234,0.58)]"
+            : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.4)]",
+        )}
+        style={{ paddingLeft: `${depth * 16 + 12}px` }}
+        title={entry.path}
+        onClick={() => onToggleDirectory(entry.path)}
+      >
+        <ChevronRight className={cn("size-3.5 shrink-0 text-[rgba(26,26,26,0.42)] transition-transform", isExpanded ? "rotate-90" : "")} />
+        {isExpanded ? <FolderOpen className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}
+        <span className="min-w-0 truncate">{entry.name}</span>
+      </button>
+
+      {isExpanded ? (
+        <WorkspaceExplorerDirectoryEntries
+          depth={depth + 1}
+          directoryPath={entry.path}
+          expandedDirectoryPaths={expandedDirectoryPaths}
+          selectedFilePath={selectedFilePath}
+          workspaceId={workspaceId}
+          onSelectFile={onSelectFile}
+          onToggleDirectory={onToggleDirectory}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function WorkspaceFilePreviewPanel({
+  filePath,
+  file,
+  isLoading,
+  errorMessage,
+  onClose,
+}: {
+  filePath: string;
+  file: WorkspaceFileContent | null;
+  isLoading: boolean;
+  errorMessage: string | null;
+  onClose: () => void;
+}) {
+  const fileName = file?.name ?? filePath.split("/").at(-1) ?? filePath;
+
+  return (
+    <aside className="flex min-w-0 flex-1 flex-col border-l border-[var(--text-main)] bg-white shadow-[-10px_0_0_rgba(26,26,26,0.04)] lg:w-[min(34rem,42vw)]">
+      <div className="flex items-start justify-between gap-3 border-b border-[var(--text-main)] px-5 py-4">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">File</div>
+          <div className="mt-1 truncate text-[16px] font-medium leading-6 text-[var(--text-main)]">{fileName}</div>
+          <div className="mt-1 truncate font-mono text-[11px] leading-5 text-[rgba(26,26,26,0.54)]" title={filePath}>
+            {truncateMiddle(filePath, 60)}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.58)] transition-colors hover:border-[var(--text-main)] hover:text-[var(--text-main)]"
+          title="Close file preview"
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto bg-[rgba(244,241,234,0.3)]">
+        {isLoading ? (
+          <div className="flex h-full min-h-[220px] items-center justify-center px-6 py-8 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">
+            <div className="flex items-center gap-3">
+              <LoaderCircle className="size-4 animate-spin" />
+              Loading file contents...
+            </div>
+          </div>
+        ) : errorMessage ? (
+          <div className="px-6 py-6 text-[13px] leading-6 text-rose-700">{errorMessage}</div>
+        ) : !file ? (
+          <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">Pick a file to inspect it here.</div>
+        ) : file.isBinary ? (
+          <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.62)]">
+            This file looks binary, so the preview is disabled. Size: {formatWorkspaceFileSize(file.size)}.
+          </div>
+        ) : file.content.length === 0 ? (
+          <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">This file is empty.</div>
+        ) : (
+          <pre className="min-h-full min-w-full whitespace-pre px-5 py-4 font-mono text-[12px] leading-6 text-[var(--text-main)]">
+            {file.content}
+          </pre>
+        )}
+      </div>
+
+      {file && !file.isBinary ? (
+        <div className="flex items-center justify-between gap-3 border-t border-[var(--node-border)] bg-white px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">
+          <span>{formatWorkspaceFileSize(file.size)}</span>
+          <span>{file.truncated ? "Preview truncated at 256 KB" : "Full preview"}</span>
+        </div>
+      ) : null}
+    </aside>
   );
 }
 
@@ -4680,6 +5043,28 @@ function truncateMiddle(value: string, maxLength: number) {
   const leading = Math.ceil((maxLength - 3) / 2);
   const trailing = Math.floor((maxLength - 3) / 2);
   return `${value.slice(0, leading)}...${value.slice(value.length - trailing)}`;
+}
+
+function buildWorkspacePathQueryString(path: string) {
+  const params = new URLSearchParams();
+  if (path) {
+    params.set("path", path);
+  }
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function formatWorkspaceFileSize(size: number) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

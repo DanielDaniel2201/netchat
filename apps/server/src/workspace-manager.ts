@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -12,7 +12,10 @@ import {
   MessageNode,
   OpenWorkspaceInput,
   UpdateNetInput,
+  WorkspaceDirectoryListing,
   WorkspaceBrowserSummary,
+  WorkspaceExplorerEntry,
+  WorkspaceFileContent,
   WorkspaceNetSummary,
   WorkspaceState,
   nowIso,
@@ -50,6 +53,8 @@ type WorkspaceNetRecordSnapshot = {
   databasePath?: unknown;
 };
 
+const workspaceFilePreviewByteLimit = 256 * 1024;
+
 export class WorkspaceManagerStore {
   private activeStore: WorkspaceStore;
 
@@ -77,6 +82,62 @@ export class WorkspaceManagerStore {
 
   getSnapshot(): GraphSnapshot {
     return this.activeStore.getSnapshot();
+  }
+
+  getWorkspaceDirectoryListing(directoryPath: string): WorkspaceDirectoryListing {
+    const workspaceRootPath = this.activeStore.getWorkspaceState().workingDirectory;
+    const resolvedTarget = resolveWorkspaceTargetPath(workspaceRootPath, directoryPath);
+    const targetStats = statSync(resolvedTarget.absolutePath);
+    if (!targetStats.isDirectory()) {
+      throw new Error("The requested workspace path is not a directory.");
+    }
+
+    const entries: WorkspaceExplorerEntry[] = [];
+    for (const entry of readdirSync(resolvedTarget.absolutePath, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+
+      const entryKind = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : null;
+      if (!entryKind) {
+        continue;
+      }
+
+      const entryPath = resolvedTarget.relativePath ? `${resolvedTarget.relativePath}/${entry.name}` : entry.name;
+      entries.push({
+        path: entryPath,
+        name: entry.name,
+        kind: entryKind,
+      });
+    }
+
+    entries.sort(compareWorkspaceExplorerEntries);
+
+    return {
+      directoryPath: resolvedTarget.relativePath,
+      entries,
+    };
+  }
+
+  getWorkspaceFileContent(filePath: string): WorkspaceFileContent {
+    const workspaceRootPath = this.activeStore.getWorkspaceState().workingDirectory;
+    const resolvedTarget = resolveWorkspaceTargetPath(workspaceRootPath, filePath);
+    const targetStats = statSync(resolvedTarget.absolutePath);
+    if (!targetStats.isFile()) {
+      throw new Error("The requested workspace path is not a file.");
+    }
+
+    const previewBuffer = readWorkspaceFilePreview(resolvedTarget.absolutePath, targetStats.size);
+    const isBinary = isProbablyBinaryContent(previewBuffer);
+
+    return {
+      path: resolvedTarget.relativePath,
+      name: resolvedTarget.relativePath ? path.basename(resolvedTarget.relativePath) : path.basename(resolvedTarget.absolutePath),
+      size: targetStats.size,
+      isBinary,
+      truncated: targetStats.size > workspaceFilePreviewByteLimit,
+      content: isBinary ? "" : previewBuffer.toString("utf8"),
+    };
   }
 
   getActiveNetSummary() {
@@ -419,6 +480,101 @@ function compareWorkspaceBrowserSummary(left: WorkspaceBrowserSummary, right: Wo
   }
 
   return left.workingDirectory.localeCompare(right.workingDirectory);
+}
+
+function resolveWorkspaceTargetPath(workspaceRootPath: string, candidatePath: string) {
+  const workspaceRootAbsolutePath = path.resolve(workspaceRootPath);
+  const workspaceRootRealPath = realpathSync(workspaceRootAbsolutePath);
+  const relativePath = normalizeWorkspaceRelativePath(candidatePath);
+  const absolutePath = relativePath ? path.resolve(workspaceRootAbsolutePath, relativePath) : workspaceRootAbsolutePath;
+
+  if (!isWorkspaceDescendantPath(workspaceRootAbsolutePath, absolutePath)) {
+    throw new Error("The requested workspace path is outside the active workspace.");
+  }
+
+  const absoluteRealPath = realpathSync(absolutePath);
+  if (!isWorkspaceDescendantPath(workspaceRootRealPath, absoluteRealPath)) {
+    throw new Error("The requested workspace path is outside the active workspace.");
+  }
+
+  return {
+    relativePath,
+    absolutePath,
+  };
+}
+
+function normalizeWorkspaceRelativePath(value: string) {
+  const normalized = value.replace(/\\/g, "/");
+  if (!normalized || normalized === ".") {
+    return "";
+  }
+
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("The requested workspace path is invalid.");
+  }
+
+  return segments.join("/");
+}
+
+function isWorkspaceDescendantPath(rootPath: string, targetPath: string) {
+  const normalizedRootPath = normalizeComparablePath(rootPath);
+  const normalizedTargetPath = normalizeComparablePath(targetPath);
+  return normalizedTargetPath === normalizedRootPath || normalizedTargetPath.startsWith(`${normalizedRootPath}${path.sep}`);
+}
+
+function normalizeComparablePath(value: string) {
+  const resolvedPath = path.resolve(value);
+  return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+}
+
+function compareWorkspaceExplorerEntries(left: WorkspaceExplorerEntry, right: WorkspaceExplorerEntry) {
+  if (left.kind !== right.kind) {
+    return left.kind === "directory" ? -1 : 1;
+  }
+
+  return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+}
+
+function readWorkspaceFilePreview(filePath: string, fileSize: number) {
+  const bytesToRead = Math.min(fileSize, workspaceFilePreviewByteLimit);
+  const previewBuffer = Buffer.alloc(bytesToRead);
+  const fileHandle = openSync(filePath, "r");
+
+  try {
+    if (bytesToRead > 0) {
+      readSync(fileHandle, previewBuffer, 0, bytesToRead, 0);
+    }
+  } finally {
+    closeSync(fileHandle);
+  }
+
+  return previewBuffer;
+}
+
+function isProbablyBinaryContent(buffer: Buffer) {
+  if (buffer.length === 0) {
+    return false;
+  }
+
+  const sample = buffer.subarray(0, Math.min(buffer.length, 8000));
+  let suspiciousByteCount = 0;
+
+  for (const byte of sample) {
+    if (byte === 0) {
+      return true;
+    }
+
+    if (byte === 9 || byte === 10 || byte === 13) {
+      continue;
+    }
+
+    if ((byte >= 1 && byte <= 8) || (byte >= 14 && byte <= 31) || byte === 127) {
+      suspiciousByteCount += 1;
+    }
+  }
+
+  return suspiciousByteCount / sample.length > 0.1;
 }
 
 function createFallbackNetTitle(value: string) {

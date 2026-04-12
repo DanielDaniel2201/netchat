@@ -82,6 +82,26 @@ export type PickWorkspaceFolderResult = {
   workingDirectory: string | null;
 };
 
+export type WorkspaceExplorerEntry = {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+};
+
+export type WorkspaceDirectoryListing = {
+  directoryPath: string;
+  entries: WorkspaceExplorerEntry[];
+};
+
+export type WorkspaceFileContent = {
+  path: string;
+  name: string;
+  size: number;
+  isBinary: boolean;
+  truncated: boolean;
+  content: string;
+};
+
 export type UiConfig = {
   showSessionIds: boolean;
 };
