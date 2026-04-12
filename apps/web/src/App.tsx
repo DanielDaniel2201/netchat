@@ -97,6 +97,7 @@ const sidebarCollapsedStorageKey = "netchat.sidebar.collapsed";
 const workspaceOrderStorageKey = "netchat.workspace.order";
 const workspacePanelsWidthStorageKey = "netchat.workspace.panels.width";
 const workspaceExplorerWidthStorageKey = "netchat.workspace.explorer.width";
+const workspaceFileWordWrapStorageKey = "netchat.workspace.file.word_wrap";
 const desktopCanvasLayoutBreakpoint = 1024;
 const expandedSidebarWidth = 288;
 const collapsedSidebarWidth = 80;
@@ -373,6 +374,9 @@ function NetchatApp() {
   );
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(() =>
     readNumberFromLocalStorage(workspaceExplorerWidthStorageKey, desktopWorkspaceExplorerDefaultWidth),
+  );
+  const [isWorkspaceFileWordWrapEnabled, setIsWorkspaceFileWordWrapEnabled] = useState(() =>
+    readBooleanFromLocalStorage(workspaceFileWordWrapStorageKey, false),
   );
   const [workspacePaneDragState, setWorkspacePaneDragState] = useState<WorkspacePaneDragState | null>(null);
   const [viewport, setViewport] = useState<CanvasViewport>(
@@ -1363,6 +1367,10 @@ function NetchatApp() {
   useEffect(() => {
     writeBooleanToLocalStorage(sidebarCollapsedStorageKey, isSidebarCollapsed);
   }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    writeBooleanToLocalStorage(workspaceFileWordWrapStorageKey, isWorkspaceFileWordWrapEnabled);
+  }, [isWorkspaceFileWordWrapEnabled]);
 
   useEffect(() => {
     writeNumberToLocalStorage(workspacePanelsWidthStorageKey, workspacePanelsWidth);
@@ -2727,10 +2735,12 @@ function NetchatApp() {
                       style={isDesktopWorkspacePanels ? { width: `${workspacePaneLayout.fileWidth}px` } : undefined}
                     >
                       <WorkspaceFilePreviewPanel
+                        isWordWrapEnabled={isWorkspaceFileWordWrapEnabled}
                         file={selectedWorkspaceFile}
                         filePath={selectedWorkspaceFilePath}
                         isLoading={workspaceFileQuery.isLoading || workspaceFileQuery.isFetching}
                         errorMessage={formatErrorMessage(workspaceFileQuery.error)}
+                        onToggleWordWrap={() => setIsWorkspaceFileWordWrapEnabled((current) => !current)}
                         onClose={() => setSelectedWorkspaceFilePath(null)}
                       />
                     </div>
@@ -3046,14 +3056,18 @@ function WorkspaceExplorerDirectoryNode({
 function WorkspaceFilePreviewPanel({
   filePath,
   file,
+  isWordWrapEnabled,
   isLoading,
   errorMessage,
+  onToggleWordWrap,
   onClose,
 }: {
   filePath: string;
   file: WorkspaceFileContent | null;
+  isWordWrapEnabled: boolean;
   isLoading: boolean;
   errorMessage: string | null;
+  onToggleWordWrap: () => void;
   onClose: () => void;
 }) {
   const fileName = file?.name ?? filePath.split("/").at(-1) ?? filePath;
@@ -3063,14 +3077,30 @@ function WorkspaceFilePreviewPanel({
     <aside className="flex h-full w-full min-w-0 flex-col border-l border-[var(--text-main)] bg-white shadow-[-10px_0_0_rgba(26,26,26,0.04)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--text-main)] px-4 py-2.5">
         <div className="min-w-0 truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{fileName}</div>
-        <button
-          type="button"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.58)] transition-colors hover:border-[var(--text-main)] hover:text-[var(--text-main)]"
-          title="Close file preview"
-          onClick={onClose}
-        >
-          <X className="size-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            aria-pressed={isWordWrapEnabled}
+            type="button"
+            className={cn(
+              "inline-flex h-8 items-center justify-center border px-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors",
+              isWordWrapEnabled
+                ? "border-[var(--text-main)] bg-[var(--text-main)] text-white hover:bg-[var(--block-slate)]"
+                : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.62)] hover:border-[var(--text-main)] hover:text-[var(--text-main)]",
+            )}
+            title={isWordWrapEnabled ? "Disable word wrap" : "Enable word wrap"}
+            onClick={onToggleWordWrap}
+          >
+            Word wrap
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center border border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.58)] transition-colors hover:border-[var(--text-main)] hover:text-[var(--text-main)]"
+            title="Close file preview"
+            onClick={onClose}
+          >
+            <X className="size-4" />
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-[rgba(244,241,234,0.3)]">
@@ -3092,13 +3122,31 @@ function WorkspaceFilePreviewPanel({
         ) : file.content.length === 0 ? (
           <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">This file is empty.</div>
         ) : (
-          <div className="min-h-full w-max min-w-full px-0 py-0 font-mono text-[12px] leading-6 text-[var(--text-main)]">
+          <div
+            className={cn(
+              "min-h-full px-0 py-0 font-mono text-[12px] leading-6 text-[var(--text-main)]",
+              isWordWrapEnabled ? "min-w-full" : "w-max min-w-full",
+            )}
+          >
             {fileLines.map((line, index) => (
-              <div key={index} className="grid w-max min-w-full grid-cols-[4.5rem,max-content]">
+              <div
+                key={index}
+                className={cn(
+                  "grid min-w-full",
+                  isWordWrapEnabled ? "grid-cols-[4.5rem,minmax(0,1fr)]" : "w-max grid-cols-[4.5rem,max-content]",
+                )}
+              >
                 <div className="select-none border-r border-[rgba(26,26,26,0.08)] bg-[rgba(26,26,26,0.035)] px-3 py-0 text-right tabular-nums text-[rgba(26,26,26,0.36)]">
                   {index + 1}
                 </div>
-                <div className="px-4 py-0 whitespace-pre">{line || " "}</div>
+                <div
+                  className={cn(
+                    "px-4 py-0",
+                    isWordWrapEnabled ? "min-w-0 whitespace-pre-wrap break-all" : "whitespace-pre",
+                  )}
+                >
+                  {line || " "}
+                </div>
               </div>
             ))}
           </div>
