@@ -2826,13 +2826,13 @@ function WorkspaceFilePreviewPanel({
         ) : file.content.length === 0 ? (
           <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">This file is empty.</div>
         ) : (
-          <div className="min-h-full min-w-full px-0 py-0 font-mono text-[12px] leading-6 text-[var(--text-main)]">
+          <div className="min-h-full w-max min-w-full px-0 py-0 font-mono text-[12px] leading-6 text-[var(--text-main)]">
             {fileLines.map((line, index) => (
-              <div key={index} className="grid grid-cols-[4.5rem,minmax(0,1fr)]">
-                <div className="select-none border-r border-[rgba(26,26,26,0.08)] bg-[rgba(26,26,26,0.035)] px-3 py-0 text-right text-[rgba(26,26,26,0.36)]">
+              <div key={index} className="grid w-max min-w-full grid-cols-[4.5rem,max-content]">
+                <div className="select-none border-r border-[rgba(26,26,26,0.08)] bg-[rgba(26,26,26,0.035)] px-3 py-0 text-right tabular-nums text-[rgba(26,26,26,0.36)]">
                   {index + 1}
                 </div>
-                <div className="overflow-x-auto px-4 py-0 whitespace-pre">{line || " "}</div>
+                <div className="px-4 py-0 whitespace-pre">{line || " "}</div>
               </div>
             ))}
           </div>

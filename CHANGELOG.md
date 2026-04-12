@@ -2,6 +2,7 @@
 
 ## 2026-04-12
 
+- Replaced per-line horizontal scrolling in the workspace file preview with a single pane-level bottom scrollbar, so long lines now behave like a real code viewer instead of spawning one scrollbar per row.
 - Trimmed the new workspace explorer and file preview headers down to just the active folder or file name and removed the extra root-summary chrome, so the right-side panels read as much thinner, cleaner utility panes.
 - Added line numbers to workspace file previews, so browsing source files from the canvas now has lightweight editor-style orientation without extra metadata bars.
 - Replaced the sidebar `Open folder as workspace` and `New net` glyphs with `folder-plus` and `pencil` actions, so adding a workspace and starting a fresh net read as distinct creation flows.
