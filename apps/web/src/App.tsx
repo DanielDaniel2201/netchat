@@ -2693,7 +2693,13 @@ function NetchatApp() {
 
                 <div
                   className={cn("min-w-0 shrink-0", !isDesktopWorkspacePanels ? "w-[min(22rem,52vw)] max-w-[360px]" : "")}
-                  style={isDesktopWorkspacePanels ? { width: `${workspacePaneLayout.explorerWidth}px` } : undefined}
+                  style={
+                    isDesktopWorkspacePanels
+                      ? {
+                          width: `${hasWorkspaceFilePreview ? workspacePaneLayout.explorerWidth : workspacePaneLayout.totalWidth}px`,
+                        }
+                      : undefined
+                  }
                 >
                   <WorkspaceExplorerPanel
                     expandedDirectoryPaths={expandedExplorerDirectoryPaths}
