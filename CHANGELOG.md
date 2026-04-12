@@ -2,6 +2,7 @@
 
 ## 2026-04-12
 
+- Added desktop drag splitters between `canvas | workspace panes` and `explorer | file preview`, with clamped widths and persisted pane sizing, so the right-side workspace tools now resize like an editor instead of staying on fixed widths.
 - Replaced per-line horizontal scrolling in the workspace file preview with a single pane-level bottom scrollbar, so long lines now behave like a real code viewer instead of spawning one scrollbar per row.
 - Trimmed the new workspace explorer and file preview headers down to just the active folder or file name and removed the extra root-summary chrome, so the right-side panels read as much thinner, cleaner utility panes.
 - Added line numbers to workspace file previews, so browsing source files from the canvas now has lightweight editor-style orientation without extra metadata bars.

@@ -1,4 +1,13 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CSSProperties,
+  FormEvent,
+  PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Background,
   Edge,
@@ -86,9 +95,17 @@ const autoFitMaxZoom = 0.86;
 const initialRootTurnVerticalCenterRatio = 0.25;
 const sidebarCollapsedStorageKey = "netchat.sidebar.collapsed";
 const workspaceOrderStorageKey = "netchat.workspace.order";
+const workspacePanelsWidthStorageKey = "netchat.workspace.panels.width";
+const workspaceExplorerWidthStorageKey = "netchat.workspace.explorer.width";
 const desktopCanvasLayoutBreakpoint = 1024;
 const expandedSidebarWidth = 288;
 const collapsedSidebarWidth = 80;
+const desktopWorkspacePanelsDefaultWidth = 860;
+const desktopWorkspaceExplorerDefaultWidth = 320;
+const desktopWorkspaceExplorerMinWidth = 220;
+const desktopWorkspaceFilePreviewMinWidth = 320;
+const desktopWorkspacePanelsMinCanvasWidth = 360;
+const desktopWorkspacePanelsMaxWidthRatio = 0.72;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -179,6 +196,20 @@ type PendingViewportAction =
   | {
       kind: "frame-message-at-top";
       messageId: string;
+    };
+
+type WorkspacePaneDragState =
+  | {
+      kind: "canvas-explorer";
+      startClientX: number;
+      startPanelsWidth: number;
+      hasFilePreview: boolean;
+    }
+  | {
+      kind: "explorer-file";
+      startClientX: number;
+      startExplorerWidth: number;
+      totalPanelsWidth: number;
     };
 
 const useComposerStore = create<{
@@ -317,7 +348,9 @@ function NetchatApp() {
   const reactFlow = useReactFlow();
   const nodesInitialized = useNodesInitialized();
   const initialSidebarCollapsed = readBooleanFromLocalStorage(sidebarCollapsedStorageKey, false);
+  const initialViewportWidth = typeof window === "undefined" ? desktopCanvasLayoutBreakpoint : window.innerWidth;
   const canvasHostRef = useRef<HTMLDivElement>(null);
+  const workspacePanelsHostRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const agentDropdownRef = useRef<HTMLDivElement>(null);
   const openNetMenuRef = useRef<HTMLDivElement>(null);
@@ -334,6 +367,14 @@ function NetchatApp() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [isSidebarTransitionReady, setIsSidebarTransitionReady] = useState(false);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => readStringArrayFromLocalStorage(workspaceOrderStorageKey));
+  const [viewportWidth, setViewportWidth] = useState(initialViewportWidth);
+  const [workspacePanelsWidth, setWorkspacePanelsWidth] = useState(() =>
+    readNumberFromLocalStorage(workspacePanelsWidthStorageKey, desktopWorkspacePanelsDefaultWidth),
+  );
+  const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(() =>
+    readNumberFromLocalStorage(workspaceExplorerWidthStorageKey, desktopWorkspaceExplorerDefaultWidth),
+  );
+  const [workspacePaneDragState, setWorkspacePaneDragState] = useState<WorkspacePaneDragState | null>(null);
   const [viewport, setViewport] = useState<CanvasViewport>(
     () =>
       buildInitialRootTurnViewport({
@@ -452,6 +493,27 @@ function NetchatApp() {
   });
   const activeNetId = workspace?.activeNetId ?? null;
   const activeNet = workspaceNets.find((net) => net.id === activeNetId) ?? null;
+  const hasWorkspaceFilePreview = selectedWorkspaceFilePath !== null;
+  const isDesktopWorkspacePanels = viewportWidth >= desktopCanvasLayoutBreakpoint;
+  const desktopSidebarWidth = isSidebarCollapsed ? collapsedSidebarWidth : expandedSidebarWidth;
+  const workspacePanelsHostWidth = Math.max(0, viewportWidth - desktopSidebarWidth);
+  const workspacePaneLayout = useMemo(
+    () =>
+      resolveWorkspacePaneLayout({
+        isDesktop: isDesktopWorkspacePanels,
+        hostWidth: workspacePanelsHostWidth,
+        totalWidth: workspacePanelsWidth,
+        explorerWidth: workspaceExplorerWidth,
+        hasFilePreview: hasWorkspaceFilePreview,
+      }),
+    [
+      hasWorkspaceFilePreview,
+      isDesktopWorkspacePanels,
+      workspaceExplorerWidth,
+      workspacePanelsHostWidth,
+      workspacePanelsWidth,
+    ],
+  );
   const branchesById = useMemo(
     () => new Map((snapshot?.branches ?? []).map((branch) => [branch.id, branch])),
     [snapshot],
@@ -1079,6 +1141,34 @@ function NetchatApp() {
     setSelectedWorkspaceFilePath(filePath);
   }
 
+  function startCanvasExplorerResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!isDesktopWorkspacePanels) {
+      return;
+    }
+
+    event.preventDefault();
+    setWorkspacePaneDragState({
+      kind: "canvas-explorer",
+      startClientX: event.clientX,
+      startPanelsWidth: workspacePaneLayout.totalWidth,
+      hasFilePreview: hasWorkspaceFilePreview,
+    });
+  }
+
+  function startExplorerFileResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!isDesktopWorkspacePanels || !hasWorkspaceFilePreview) {
+      return;
+    }
+
+    event.preventDefault();
+    setWorkspacePaneDragState({
+      kind: "explorer-file",
+      startClientX: event.clientX,
+      startExplorerWidth: workspacePaneLayout.explorerWidth,
+      totalPanelsWidth: workspacePaneLayout.totalWidth,
+    });
+  }
+
   function requestNetDeletion(netId: string, title: string) {
     setOpenNetMenuId(null);
     setPendingNetDeletion({ id: netId, title });
@@ -1275,6 +1365,25 @@ function NetchatApp() {
   }, [isSidebarCollapsed]);
 
   useEffect(() => {
+    writeNumberToLocalStorage(workspacePanelsWidthStorageKey, workspacePanelsWidth);
+  }, [workspacePanelsWidth]);
+
+  useEffect(() => {
+    writeNumberToLocalStorage(workspaceExplorerWidthStorageKey, workspaceExplorerWidth);
+  }, [workspaceExplorerWidth]);
+
+  useEffect(() => {
+    function handleWindowResize() {
+      setViewportWidth(window.innerWidth);
+    }
+
+    window.addEventListener("resize", handleWindowResize);
+    return () => {
+      window.removeEventListener("resize", handleWindowResize);
+    };
+  }, []);
+
+  useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       setIsSidebarTransitionReady(true);
     });
@@ -1283,6 +1392,96 @@ function NetchatApp() {
       window.cancelAnimationFrame(frame);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isDesktopWorkspacePanels || !isWorkspaceExplorerOpen) {
+      return;
+    }
+
+    if (workspacePaneLayout.totalWidth !== workspacePanelsWidth) {
+      setWorkspacePanelsWidth(workspacePaneLayout.totalWidth);
+    }
+
+    if (workspacePaneLayout.explorerWidth !== workspaceExplorerWidth) {
+      setWorkspaceExplorerWidth(workspacePaneLayout.explorerWidth);
+    }
+  }, [
+    isDesktopWorkspacePanels,
+    isWorkspaceExplorerOpen,
+    workspaceExplorerWidth,
+    workspacePaneLayout.explorerWidth,
+    workspacePaneLayout.totalWidth,
+    workspacePanelsWidth,
+  ]);
+
+  useEffect(() => {
+    if (!workspacePaneDragState) {
+      return;
+    }
+
+    if (!isDesktopWorkspacePanels || !isWorkspaceExplorerOpen) {
+      setWorkspacePaneDragState(null);
+      return;
+    }
+
+    if (workspacePaneDragState.kind === "explorer-file" && !hasWorkspaceFilePreview) {
+      setWorkspacePaneDragState(null);
+    }
+  }, [hasWorkspaceFilePreview, isDesktopWorkspacePanels, isWorkspaceExplorerOpen, workspacePaneDragState]);
+
+  useEffect(() => {
+    if (!workspacePaneDragState) {
+      return;
+    }
+
+    const dragState = workspacePaneDragState;
+
+    function handlePointerMove(event: PointerEvent) {
+      if (dragState.kind === "canvas-explorer") {
+        const nextPanelsWidth = dragState.startPanelsWidth + (dragState.startClientX - event.clientX);
+        const nextLayout = resolveWorkspacePaneLayout({
+          isDesktop: true,
+          hostWidth: Math.max(0, window.innerWidth - (isSidebarCollapsed ? collapsedSidebarWidth : expandedSidebarWidth)),
+          totalWidth: nextPanelsWidth,
+          explorerWidth: workspaceExplorerWidth,
+          hasFilePreview: dragState.hasFilePreview,
+        });
+        setWorkspacePanelsWidth(nextLayout.totalWidth);
+        if (!dragState.hasFilePreview) {
+          setWorkspaceExplorerWidth(nextLayout.explorerWidth);
+        }
+        return;
+      }
+
+      const nextExplorerWidth = dragState.startExplorerWidth + (event.clientX - dragState.startClientX);
+      const nextLayout = resolveWorkspacePaneLayout({
+        isDesktop: true,
+        hostWidth: Math.max(0, window.innerWidth - (isSidebarCollapsed ? collapsedSidebarWidth : expandedSidebarWidth)),
+        totalWidth: dragState.totalPanelsWidth,
+        explorerWidth: nextExplorerWidth,
+        hasFilePreview: true,
+      });
+      setWorkspaceExplorerWidth(nextLayout.explorerWidth);
+    }
+
+    function handlePointerUp() {
+      setWorkspacePaneDragState(null);
+    }
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [isSidebarCollapsed, workspaceExplorerWidth, workspacePaneDragState]);
 
   useEffect(() => {
     if (!activeNetId || canvasSize.width <= 0 || canvasSize.height <= 0) {
@@ -2293,7 +2492,7 @@ function NetchatApp() {
         </div>
       </aside>
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <div className="flex h-full min-w-0">
+        <div ref={workspacePanelsHostRef} className="flex h-full min-w-0">
           <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
             <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
             <div className="absolute right-4 top-4 z-20">
@@ -2479,25 +2678,59 @@ function NetchatApp() {
           </div>
 
           {isWorkspaceExplorerOpen ? (
-            <div className="absolute inset-y-0 right-0 z-20 flex w-full justify-end bg-transparent lg:static lg:z-0 lg:w-auto lg:shrink-0">
-              <WorkspaceExplorerPanel
-                expandedDirectoryPaths={expandedExplorerDirectoryPaths}
-                selectedFilePath={selectedWorkspaceFilePath}
-                workspaceDisplayName={workspaceDisplayName}
-                workspaceId={activeWorkspaceId}
-                onClose={() => setIsWorkspaceExplorerOpen(false)}
-                onSelectFile={handleWorkspaceFileSelect}
-                onToggleDirectory={toggleWorkspaceExplorerDirectory}
-              />
-              {selectedWorkspaceFilePath ? (
-                <WorkspaceFilePreviewPanel
-                  file={selectedWorkspaceFile}
-                  filePath={selectedWorkspaceFilePath}
-                  isLoading={workspaceFileQuery.isLoading || workspaceFileQuery.isFetching}
-                  errorMessage={formatErrorMessage(workspaceFileQuery.error)}
-                  onClose={() => setSelectedWorkspaceFilePath(null)}
-                />
-              ) : null}
+            <div
+              className="absolute inset-y-0 right-0 z-20 flex w-full justify-end bg-transparent lg:static lg:z-0 lg:w-auto lg:shrink-0"
+              style={isDesktopWorkspacePanels ? { width: `${workspacePaneLayout.totalWidth}px` } : undefined}
+            >
+              <div className="relative flex h-full min-w-0 w-full">
+                {isDesktopWorkspacePanels ? (
+                  <PanelResizeHandle
+                    className="absolute inset-y-0 left-0 z-30 -translate-x-1/2"
+                    title="Resize workspace panes"
+                    onPointerDown={startCanvasExplorerResize}
+                  />
+                ) : null}
+
+                <div
+                  className={cn("min-w-0 shrink-0", !isDesktopWorkspacePanels ? "w-[min(22rem,52vw)] max-w-[360px]" : "")}
+                  style={isDesktopWorkspacePanels ? { width: `${workspacePaneLayout.explorerWidth}px` } : undefined}
+                >
+                  <WorkspaceExplorerPanel
+                    expandedDirectoryPaths={expandedExplorerDirectoryPaths}
+                    selectedFilePath={selectedWorkspaceFilePath}
+                    workspaceDisplayName={workspaceDisplayName}
+                    workspaceId={activeWorkspaceId}
+                    onClose={() => setIsWorkspaceExplorerOpen(false)}
+                    onSelectFile={handleWorkspaceFileSelect}
+                    onToggleDirectory={toggleWorkspaceExplorerDirectory}
+                  />
+                </div>
+
+                {selectedWorkspaceFilePath ? (
+                  <>
+                    {isDesktopWorkspacePanels ? (
+                      <PanelResizeHandle
+                        className="absolute inset-y-0 z-30 -translate-x-1/2"
+                        style={{ left: `${workspacePaneLayout.explorerWidth}px` }}
+                        title="Resize explorer and file preview"
+                        onPointerDown={startExplorerFileResize}
+                      />
+                    ) : null}
+                    <div
+                      className="min-w-0 flex-1"
+                      style={isDesktopWorkspacePanels ? { width: `${workspacePaneLayout.fileWidth}px` } : undefined}
+                    >
+                      <WorkspaceFilePreviewPanel
+                        file={selectedWorkspaceFile}
+                        filePath={selectedWorkspaceFilePath}
+                        isLoading={workspaceFileQuery.isLoading || workspaceFileQuery.isFetching}
+                        errorMessage={formatErrorMessage(workspaceFileQuery.error)}
+                        onClose={() => setSelectedWorkspaceFilePath(null)}
+                      />
+                    </div>
+                  </>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </div>
@@ -2595,6 +2828,33 @@ function NetchatApp() {
   );
 }
 
+function PanelResizeHandle({
+  title,
+  className,
+  style,
+  onPointerDown,
+}: {
+  title: string;
+  className?: string;
+  style?: CSSProperties;
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <button
+      aria-label={title}
+      className={cn("group hidden w-5 touch-none cursor-col-resize items-stretch justify-center lg:flex", className)}
+      style={style}
+      type="button"
+      onPointerDown={onPointerDown}
+    >
+      <span className="pointer-events-none relative my-3 flex w-full items-center justify-center">
+        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[rgba(26,26,26,0.16)] transition-colors group-hover:bg-[rgba(26,26,26,0.34)]" />
+        <span className="absolute left-1/2 top-1/2 h-9 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[rgba(26,26,26,0.14)] bg-white/92 shadow-[3px_3px_0_rgba(26,26,26,0.05)] transition-colors group-hover:border-[rgba(26,26,26,0.3)] group-hover:bg-[var(--bg-cream)]" />
+      </span>
+    </button>
+  );
+}
+
 function WorkspaceExplorerPanel({
   workspaceId,
   workspaceDisplayName,
@@ -2613,7 +2873,7 @@ function WorkspaceExplorerPanel({
   onClose: () => void;
 }) {
   return (
-    <aside className="flex w-[min(22rem,52vw)] min-w-[220px] max-w-[360px] shrink-0 flex-col border-l border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,241,234,0.98)_100%)] shadow-[-10px_0_0_rgba(26,26,26,0.04)] lg:w-[320px]">
+    <aside className="flex h-full w-full min-w-0 flex-col border-l border-[var(--text-main)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,241,234,0.98)_100%)] shadow-[-10px_0_0_rgba(26,26,26,0.04)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--text-main)] px-4 py-2.5">
         <div className="min-w-0 truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{workspaceDisplayName}</div>
         <button
@@ -2794,7 +3054,7 @@ function WorkspaceFilePreviewPanel({
   const fileLines = useMemo(() => splitWorkspaceFileContentLines(file?.content ?? ""), [file?.content]);
 
   return (
-    <aside className="flex min-w-0 flex-1 flex-col border-l border-[var(--text-main)] bg-white shadow-[-10px_0_0_rgba(26,26,26,0.04)] lg:w-[min(34rem,42vw)]">
+    <aside className="flex h-full w-full min-w-0 flex-col border-l border-[var(--text-main)] bg-white shadow-[-10px_0_0_rgba(26,26,26,0.04)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--text-main)] px-4 py-2.5">
         <div className="min-w-0 truncate text-[14px] font-medium leading-6 text-[var(--text-main)]">{fileName}</div>
         <button
@@ -4467,6 +4727,36 @@ function writeBooleanToLocalStorage(key: string, value: boolean) {
   }
 }
 
+function readNumberFromLocalStorage(key: string, fallback: number) {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(key);
+    if (storedValue === null) {
+      return fallback;
+    }
+
+    const parsedValue = Number(storedValue);
+    return Number.isFinite(parsedValue) ? parsedValue : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeNumberToLocalStorage(key: string, value: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch {
+    // Ignore storage write failures and keep the in-memory UI state.
+  }
+}
+
 function readStringArrayFromLocalStorage(key: string) {
   if (typeof window === "undefined") {
     return [] as string[];
@@ -5035,6 +5325,46 @@ function splitWorkspaceFileContentLines(content: string) {
   }
 
   return content.replace(/\r\n/g, "\n").split("\n");
+}
+
+function resolveWorkspacePaneLayout(input: {
+  isDesktop: boolean;
+  hostWidth: number;
+  totalWidth: number;
+  explorerWidth: number;
+  hasFilePreview: boolean;
+}) {
+  if (!input.isDesktop) {
+    return {
+      totalWidth: 0,
+      explorerWidth: 0,
+      fileWidth: 0,
+    };
+  }
+
+  const minimumTotalWidth = input.hasFilePreview
+    ? desktopWorkspaceExplorerMinWidth + desktopWorkspaceFilePreviewMinWidth
+    : desktopWorkspaceExplorerMinWidth;
+  const maximumTotalWidth = Math.max(
+    minimumTotalWidth,
+    Math.min(
+      Math.max(minimumTotalWidth, input.hostWidth - desktopWorkspacePanelsMinCanvasWidth),
+      Math.floor(input.hostWidth * desktopWorkspacePanelsMaxWidthRatio),
+    ),
+  );
+  const totalWidth = clampNumber(input.totalWidth, minimumTotalWidth, maximumTotalWidth);
+  const maximumExplorerWidth = input.hasFilePreview ? totalWidth - desktopWorkspaceFilePreviewMinWidth : totalWidth;
+  const explorerWidth = clampNumber(input.explorerWidth, desktopWorkspaceExplorerMinWidth, maximumExplorerWidth);
+
+  return {
+    totalWidth,
+    explorerWidth,
+    fileWidth: input.hasFilePreview ? Math.max(0, totalWidth - explorerWidth) : 0,
+  };
+}
+
+function clampNumber(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(value, minimum), maximum);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
