@@ -1,12 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <title>netchat favicon</title>
-  <text
-    x="32"
-    y="45"
-    font-size="40"
-    text-anchor="middle"
-    font-family="Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, sans-serif"
+  <rect width="64" height="64" rx="14" fill="#050505" />
+  <g
+    fill="none"
+    stroke="#f2f0ea"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="2.6"
   >
-    &#x1F578;&#xFE0F;
-  </text>
+    <path d="M32 12v40" />
+    <path d="M12 32h40" />
+    <path d="M18 18l28 28" />
+    <path d="M46 18 18 46" />
+    <path d="M32 18 40.5 23.5 46 32 40.5 40.5 32 46 23.5 40.5 18 32 23.5 23.5Z" />
+    <path d="M32 24 37 27.5 40 32 37 36.5 32 40 27 36.5 24 32 27 27.5Z" />
+    <circle cx="32" cy="32" r="3.25" fill="#f2f0ea" stroke="none" />
+  </g>
 </svg>

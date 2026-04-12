@@ -19,6 +19,7 @@ const webDistIndexPath = path.join(webDistPath, "index.html");
 const webBuildMarkerPath = path.join(webDistPath, ".netchat-local-build.json");
 const webSourceRoots = [
   path.join(runtimeRoot, "apps", "web", "src"),
+  path.join(runtimeRoot, "apps", "web", "public"),
   path.join(runtimeRoot, "apps", "web", "index.html"),
   path.join(runtimeRoot, "apps", "web", "package.json"),
   path.join(runtimeRoot, "apps", "web", "tsconfig.json"),

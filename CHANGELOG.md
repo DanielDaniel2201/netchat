@@ -4,6 +4,7 @@
 
 - Raised Codex's default daemon inactivity timeout from the shared `60s` fallback to a dedicated `5m` window and added per-runtime timeout env overrides, so long-running `codex exec --json` turns are no longer misclassified as stalled while Claude and Droid keep their shorter defaults.
 - Replaced the default framework lightning favicon with a `🕸️` mark, so browser tabs now match netchat's graph-like branding more closely.
+- Swapped the favicon to a fixed black-backed gray-white spiderweb SVG and included `apps/web/public` in local web rebuild detection, so `npm run app:local` now picks up favicon asset changes without serving a stale dist copy.
 
 ## 2026-04-10
 
