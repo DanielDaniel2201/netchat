@@ -275,7 +275,7 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
   private readonly allowDangerouslySkipPermissions = readBooleanEnv("NETCHAT_ALLOW_DANGEROUS", true);
   private readonly settingSources = readStringEnv("NETCHAT_SETTING_SOURCES");
   private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
-  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
+  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs("claude");
 
   getDescriptor(): AgentRuntimeDescriptor {
     return this.descriptor;
@@ -963,7 +963,7 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
   private readonly cwd = this.cwdResolution.workingDirectory;
   private readonly binaryPath = this.binaryResolution.binaryPath;
   private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
-  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
+  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs("codex");
   private readonly model = readStringEnv("NETCHAT_CODEX_MODEL");
   private readonly profile = readStringEnv("NETCHAT_CODEX_PROFILE");
   private readonly addDirs = readListEnv("NETCHAT_CODEX_ADD_DIRS");
@@ -1466,7 +1466,7 @@ class DroidCliRuntime implements AgentRuntimeAdapter {
   private readonly cwd = this.cwdResolution.workingDirectory;
   private readonly binaryPath = this.binaryResolution.binaryPath;
   private readonly machineId = readStringEnv("NETCHAT_MACHINE_ID") ?? "machine_local";
-  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs();
+  private readonly activityTimeoutMs = resolveRuntimeTimeoutMs("droid");
   private readonly model = readStringEnv("NETCHAT_DROID_MODEL");
   private readonly reasoningEffort = readStringEnv("NETCHAT_DROID_REASONING_EFFORT");
   private readonly autoLevel = readDroidAutoLevelEnv("NETCHAT_DROID_AUTO", "high");
@@ -2078,13 +2078,36 @@ function readDroidAutoLevelEnv(
   return defaultValue;
 }
 
-function resolveRuntimeTimeoutMs() {
-  const rawValue = Number(process.env.NETCHAT_RUNTIME_TIMEOUT_MS ?? 60000);
-  if (!Number.isFinite(rawValue) || rawValue <= 0) {
-    return 60000;
+const runtimeActivityTimeoutDefaults: Record<AgentRuntimeKind, number> = {
+  claude: 60_000,
+  codex: 300_000,
+  droid: 60_000,
+  opencode: 60_000,
+  mock: 60_000,
+};
+
+const runtimeActivityTimeoutEnvKeys: Record<AgentRuntimeKind, readonly string[]> = {
+  claude: ["NETCHAT_CLAUDE_TIMEOUT_MS", "NETCHAT_RUNTIME_TIMEOUT_MS"],
+  codex: ["NETCHAT_CODEX_TIMEOUT_MS", "NETCHAT_RUNTIME_TIMEOUT_MS"],
+  droid: ["NETCHAT_DROID_TIMEOUT_MS", "NETCHAT_RUNTIME_TIMEOUT_MS"],
+  opencode: ["NETCHAT_OPENCODE_TIMEOUT_MS", "NETCHAT_RUNTIME_TIMEOUT_MS"],
+  mock: ["NETCHAT_RUNTIME_TIMEOUT_MS"],
+};
+
+function resolveRuntimeTimeoutMs(runtimeKind: AgentRuntimeKind) {
+  for (const envKey of runtimeActivityTimeoutEnvKeys[runtimeKind]) {
+    const rawEnvValue = process.env[envKey];
+    if (typeof rawEnvValue !== "string") {
+      continue;
+    }
+
+    const rawValue = Number(rawEnvValue);
+    if (Number.isFinite(rawValue) && rawValue > 0) {
+      return rawValue;
+    }
   }
 
-  return rawValue;
+  return runtimeActivityTimeoutDefaults[runtimeKind];
 }
 
 function logRuntime(level: "info" | "warn" | "error", message: string) {

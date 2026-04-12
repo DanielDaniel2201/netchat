@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-12
+
+- Raised Codex's default daemon inactivity timeout from the shared `60s` fallback to a dedicated `5m` window and added per-runtime timeout env overrides, so long-running `codex exec --json` turns are no longer misclassified as stalled while Claude and Droid keep their shorter defaults.
+
 ## 2026-04-10
 
 - Prepared the `0.0.5` patch release against `v0.0.4`, bundling the latest sidebar, workspace, and composer refinements into the next npm publish.

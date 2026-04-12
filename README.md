@@ -48,6 +48,8 @@ npx @danielwyq/netchat@latest
 - `NETCHAT_NO_BROWSER=true`: do not auto-open browser
 - `NETCHAT_SKIP_WEB_BUILD=true`: skip rebuilding web assets during local runs
 - `NETCHAT_APP_DB_PATH`: custom SQLite path
+- `NETCHAT_RUNTIME_TIMEOUT_MS`: global runtime inactivity timeout in milliseconds
+- `NETCHAT_CODEX_TIMEOUT_MS`: Codex-specific inactivity timeout in milliseconds (default `300000`)
 
 ## Requirements
 
