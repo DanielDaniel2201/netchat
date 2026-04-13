@@ -16,6 +16,7 @@ import {
   CreateMachineJobEventInput,
   CreateMachineRegisterInput,
   CreateNetInput,
+  CreateRootArticleInput,
   CreateRootTurnInput,
   GraphSnapshot,
   MachineWorkspacesState,
@@ -31,6 +32,7 @@ import {
   WorkspaceState,
   buildGraphEdges,
   buildPrefixReplayPrompt,
+  buildRootHistoryPrompt,
   buildSelectionPrompt,
   completeMachineJobInputSchema,
   createPendingAssistantState,
@@ -40,6 +42,7 @@ import {
   createNetInputSchema,
   createMachineRegisterInputSchema,
   createBranchInputSchema,
+  createRootArticleInputSchema,
   createBranchTurnInputSchema,
   createRootTurnInputSchema,
   openWorkspaceInputSchema,
@@ -179,6 +182,34 @@ app.post("/api/workspaces/:workspaceId/nets/:netId/select", async (request, repl
 });
 
 app.get("/api/graph", async () => store.getSnapshot());
+
+app.post("/api/root-article", async (request, reply) => {
+  const input = createRootArticleInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  try {
+    const file = store.getWorkspaceFileContent((input.data as CreateRootArticleInput).filePath);
+    if (file.isBinary) {
+      return reply.status(400).send({ message: "This file looks binary, so it cannot be used as an article." });
+    }
+
+    if (file.content.trim().length === 0) {
+      return reply.status(400).send({ message: "This file is empty, so there is no article content to start from." });
+    }
+
+    const snapshot = store.seedRootArticle(file.content, file.path);
+    diagnostics.log(
+      "info",
+      `Seeded the root article from ${file.path} (${file.content.length} chars${file.truncated ? ", truncated preview" : ""}).`,
+    );
+    return snapshot;
+  } catch (error) {
+    diagnostics.log("warn", `Seeding the root article failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
 
 app.get("/api/agents", async (): Promise<AgentRuntimeOption[]> => machines.listAgentRuntimes());
 
@@ -355,9 +386,7 @@ app.post("/api/root-turn/stream", async (request, reply) => {
   const baseSnapshot = store.getSnapshot();
   const rootBranch = baseSnapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   const activeNet = store.getActiveNetSummary();
-  const runtimePrompt = input.data.selectedText
-    ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
-    : input.data.prompt;
+  const runtimePrompt = buildRootRuntimePrompt(baseSnapshot, input.data.prompt, input.data.selectedText ?? null);
 
   try {
     const machine = machines.resolveMachine({
@@ -457,6 +486,7 @@ app.post("/api/branches/stream", async (request, reply) => {
       history: visibleHistory,
       userPrompt: input.data.prompt,
       selectedText: input.data.mode === "selection" ? input.data.selectedText! : null,
+      selectedTextSourceRole: sourceMessage.role,
     });
     const turnId = input.data.clientTurnId ?? makeId("turn");
     const branchId = input.data.clientBranchId ?? makeId("branch");
@@ -636,9 +666,7 @@ app.post("/api/root-turn", async (request, reply) => {
   const snapshot = store.getSnapshot();
   const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   const activeNet = store.getActiveNetSummary();
-  const runtimePrompt = input.data.selectedText
-    ? buildSelectionPrompt(input.data.selectedText, input.data.prompt)
-    : input.data.prompt;
+  const runtimePrompt = buildRootRuntimePrompt(snapshot, input.data.prompt, input.data.selectedText ?? null);
 
   try {
     const machine = machines.resolveMachine({
@@ -708,6 +736,7 @@ app.post("/api/branches", async (request, reply) => {
       history: visibleHistory,
       userPrompt: input.data.prompt,
       selectedText: input.data.mode === "selection" ? input.data.selectedText! : null,
+      selectedTextSourceRole: sourceMessage.role,
     });
 
     diagnostics.log(
@@ -1010,6 +1039,7 @@ function buildOptimisticRootTurnSnapshot(
       branchId: rootBranchId,
       role: "user",
       content: input.prompt,
+      sourcePath: null,
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
@@ -1022,6 +1052,7 @@ function buildOptimisticRootTurnSnapshot(
       branchId: rootBranchId,
       role: "assistant",
       content: "",
+      sourcePath: null,
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
@@ -1085,6 +1116,7 @@ function buildOptimisticBranchCreationSnapshot(
       branchId: input.branchId,
       role: "user",
       content: userMessageContent,
+      sourcePath: null,
       selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
       sessionId: null,
       machineId: input.machineId,
@@ -1097,6 +1129,7 @@ function buildOptimisticBranchCreationSnapshot(
       branchId: input.branchId,
       role: "assistant",
       content: "",
+      sourcePath: null,
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
@@ -1139,6 +1172,7 @@ function buildOptimisticBranchTurnSnapshot(
       branchId: input.branchId,
       role: "user",
       content: input.prompt,
+      sourcePath: null,
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
@@ -1151,6 +1185,7 @@ function buildOptimisticBranchTurnSnapshot(
       branchId: input.branchId,
       role: "assistant",
       content: "",
+      sourcePath: null,
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
@@ -1180,6 +1215,23 @@ function formatError(error: unknown) {
 
 function formatMachineLabel(machineId: string, machineName: string) {
   return `${machineName} (${machineId})`;
+}
+
+function buildRootRuntimePrompt(snapshot: GraphSnapshot, prompt: string, selectedText: string | null) {
+  const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
+  const rootMessages = snapshot.messages.filter((message) => message.branchId === rootBranchId);
+  const selectionSourceRole = selectedText ? (rootMessages.at(-1)?.role ?? null) : null;
+
+  if (!rootBranch?.sessionId && rootMessages.length > 0) {
+    return buildRootHistoryPrompt({
+      history: rootMessages,
+      userPrompt: prompt,
+      selectedText,
+      selectedTextSourceRole: selectionSourceRole,
+    });
+  }
+
+  return selectedText ? buildSelectionPrompt(selectedText, prompt, selectionSourceRole) : prompt;
 }
 
 function readBooleanEnv(name: string) {

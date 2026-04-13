@@ -31,7 +31,9 @@ import {
   FolderOpen,
   FolderPlus,
   LoaderCircle,
+  MessageSquare,
   MoreHorizontal,
+  Newspaper,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -46,6 +48,7 @@ import {
   CreateBranchInput,
   CreateBranchTurnInput,
   CreateNetInput,
+  CreateRootArticleInput,
   CreateRootTurnInput,
   GraphSnapshot,
   MachineWorkspacesState,
@@ -127,6 +130,8 @@ type BubbleComposerMode =
   | "continue-branch"
   | "branch-from-message"
   | "branch-from-selection";
+
+type RootComposerMode = "conversation" | "article";
 
 type MessageNodeData = {
   message: MessageNode;
@@ -392,6 +397,8 @@ function NetchatApp() {
   const [pendingWorkspaceDeletion, setPendingWorkspaceDeletion] = useState<{ id: string; title: string } | null>(null);
   const [isWorkspaceExplorerOpen, setIsWorkspaceExplorerOpen] = useState(false);
   const [expandedExplorerDirectoryPaths, setExpandedExplorerDirectoryPaths] = useState<string[]>([""]);
+  const [newRootComposerMode, setNewRootComposerMode] = useState<RootComposerMode>("conversation");
+  const [selectedArticleFilePath, setSelectedArticleFilePath] = useState<string | null>(null);
   const [selectedWorkspaceFilePath, setSelectedWorkspaceFilePath] = useState<string | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<string[]>([]);
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
@@ -543,7 +550,7 @@ function NetchatApp() {
     [snapshot],
   );
   const selectedMessage =
-    selectedMessageId && messagesById.get(selectedMessageId)?.role === "assistant"
+    selectedMessageId && isConversationSourceRole(messagesById.get(selectedMessageId)?.role)
       ? (messagesById.get(selectedMessageId) ?? null)
       : null;
   const selectedBranch = selectedMessage ? (branchesById.get(selectedMessage.branchId) ?? null) : null;
@@ -704,6 +711,8 @@ function NetchatApp() {
     onSuccess: async (nextWorkspace) => {
       logWeb("info", `Created net ${nextWorkspace.activeNetId}.`);
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setNewRootComposerMode("conversation");
+      setSelectedArticleFilePath(null);
       setComposerValue("");
       setSelectionDraft(null);
       setExpandedBranchIds([]);
@@ -727,6 +736,8 @@ function NetchatApp() {
     onSuccess: async (nextWorkspace) => {
       logWeb("info", `Switched to net ${nextWorkspace.activeNetId}.`);
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setNewRootComposerMode("conversation");
+      setSelectedArticleFilePath(null);
       setComposerValue("");
       setSelectionDraft(null);
       setExpandedBranchIds([]);
@@ -749,6 +760,8 @@ function NetchatApp() {
     },
     onSuccess: async (nextWorkspace) => {
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setNewRootComposerMode("conversation");
+      setSelectedArticleFilePath(null);
       setExpandedWorkspaceIds((current) =>
         current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
       );
@@ -774,6 +787,8 @@ function NetchatApp() {
     },
     onSuccess: async (nextWorkspace) => {
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setNewRootComposerMode("conversation");
+      setSelectedArticleFilePath(null);
       setExpandedWorkspaceIds((current) =>
         current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
       );
@@ -813,6 +828,8 @@ function NetchatApp() {
       }
 
       queryClient.setQueryData(["workspace"], nextWorkspace);
+      setNewRootComposerMode("conversation");
+      setSelectedArticleFilePath(null);
       setWorkspaceOrder((current) =>
         current.includes(nextWorkspace.workspaceId) ? current : [nextWorkspace.workspaceId, ...current],
       );
@@ -852,6 +869,8 @@ function NetchatApp() {
       setPendingWorkspaceDeletion(null);
 
       if (activeWorkspaceChanged) {
+        setNewRootComposerMode("conversation");
+        setSelectedArticleFilePath(null);
         setComposerValue("");
         setSelectionDraft(null);
         setExpandedBranchIds([]);
@@ -918,6 +937,8 @@ function NetchatApp() {
       setPendingNetDeletion(null);
 
       if (activeNetChanged) {
+        setNewRootComposerMode("conversation");
+        setSelectedArticleFilePath(null);
         setComposerValue("");
         setSelectionDraft(null);
         setExpandedBranchIds([]);
@@ -931,6 +952,38 @@ function NetchatApp() {
     },
     onError: (error) => {
       logWeb("error", `Deleting a net failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const createRootArticleMutation = useMutation({
+    mutationFn: async (filePath: string) => {
+      logWeb("info", `Seeding article mode from ${filePath}.`);
+      return request<GraphSnapshot>("/api/root-article", {
+        method: "POST",
+        body: JSON.stringify({
+          filePath,
+        } satisfies CreateRootArticleInput),
+      });
+    },
+    onSuccess: async (nextSnapshot) => {
+      queryClient.setQueryData(["graph"], nextSnapshot);
+      setNewRootComposerMode("conversation");
+      setComposerValue("");
+      setSelectionDraft(null);
+      setStreamErrorMessage(null);
+      clearBrowserSelection();
+
+      const articleMessageId =
+        nextSnapshot.messages.find((message) => message.branchId === rootBranchId && message.role === "article")?.id ?? null;
+      setSelectedMessageId(articleMessageId);
+      setActivePathMessageId(articleMessageId);
+      focusComposer();
+
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onError: (error) => {
+      setStreamErrorMessage(formatErrorMessage(error) ?? "The article could not be loaded.");
+      logWeb("error", `Seeding article mode failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
   const isThinking = activeStreamedTurn?.isPending ?? false;
@@ -1139,6 +1192,19 @@ function NetchatApp() {
   function handleWorkspaceFileSelect(filePath: string) {
     setIsWorkspaceExplorerOpen(true);
     setSelectedWorkspaceFilePath(filePath);
+  }
+
+  function handleArticleFileSelect(filePath: string) {
+    if (createRootArticleMutation.isPending) {
+      return;
+    }
+
+    setIsAgentDropdownOpen(false);
+    setSelectedArticleFilePath(filePath);
+    setSelectionDraft(null);
+    setStreamErrorMessage(null);
+    clearBrowserSelection();
+    createRootArticleMutation.mutate(filePath);
   }
 
   function startCanvasExplorerResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1514,7 +1580,7 @@ function NetchatApp() {
       return;
     }
 
-    const initialRootTurnMessage = getRootBranchFirstUserMessage(snapshot);
+    const initialRootTurnMessage = getRootBranchFirstConversationMessage(snapshot);
     if (initialRootTurnMessage) {
       if (canvasSize.width <= 0 || canvasSize.height <= 0) {
         return;
@@ -1574,7 +1640,7 @@ function NetchatApp() {
 
     if (
       selectedMessageId &&
-      snapshot.messages.some((message) => message.id === selectedMessageId && message.role === "assistant")
+      snapshot.messages.some((message) => message.id === selectedMessageId && isConversationSourceRole(message.role))
     ) {
       return;
     }
@@ -2089,11 +2155,17 @@ function NetchatApp() {
     !selectedMessage && !activeNet?.agentRuntimeId
       ? "Pick an agent below, then start the first turn..."
       : selectedMessage
-        ? selectionForSelectedMessage
-          ? "Ask about the selected text in this context..."
-          : sendMode === "branch-from-message"
-            ? "Start a branch from this reply..."
-            : "Continue from this reply..."
+        ? selectedMessage.role === "article"
+          ? selectionForSelectedMessage
+            ? "Ask about the selected passage in this article..."
+            : sendMode === "branch-from-message"
+              ? "Start a branch from this article..."
+              : "Ask about this article..."
+          : selectionForSelectedMessage
+            ? "Ask about the selected text in this context..."
+            : sendMode === "branch-from-message"
+              ? "Start a branch from this reply..."
+              : "Continue from this reply..."
         : "Start the first turn...";
   const composerErrorMessage =
     activeStreamedTurn && !activeStreamedTurn.isPending
@@ -2131,6 +2203,113 @@ function NetchatApp() {
       activeAgentLabel,
     runtimeKind: sendTargetAgent?.runtimeKind ?? sendTargetRuntimeKind ?? activeNet?.agentRuntimeKind ?? null,
   };
+  const newNetModeToggleButton = (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] text-[var(--text-main)] transition-colors hover:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]",
+        newRootComposerMode === "article" ? "border-[var(--text-main)] bg-[rgba(244,241,234,0.84)]" : "",
+      )}
+      disabled={workspaceQuery.isLoading || !activeWorkspaceId || createRootArticleMutation.isPending}
+      title={newRootComposerMode === "article" ? "Switch back to conversation mode" : "Switch to article mode"}
+      onClick={() => {
+        setIsAgentDropdownOpen(false);
+        setNewRootComposerMode((current) => (current === "article" ? "conversation" : "article"));
+      }}
+    >
+      {newRootComposerMode === "article" ? <MessageSquare className="size-4" /> : <Newspaper className="size-4" />}
+    </button>
+  );
+  const newNetComposerBottomBar = (
+    <div className="absolute bottom-4 left-6 right-4 flex items-center justify-between gap-4">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+        <div
+          className="pointer-events-none max-w-[300px] shrink-0 truncate text-[13px] leading-5 text-[rgba(26,26,26,0.46)]"
+          title={workingDirectoryPath}
+        >
+          {truncateMiddle(workingDirectoryPath, 64)}
+        </div>
+        <div ref={agentDropdownRef} className="relative shrink-0">
+          <button
+            aria-expanded={isAgentDropdownOpen}
+            aria-haspopup="listbox"
+            className="flex h-9 min-w-[188px] items-center gap-3 rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] px-3 text-left text-[13px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors hover:border-[var(--text-main)] focus-visible:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
+            disabled={workspaceQuery.isLoading || isSwitchingNet || isUpdatingActiveNetAgent || agentOptions.length === 0}
+            type="button"
+            onClick={() => setIsAgentDropdownOpen((current) => !current)}
+          >
+            <AgentRuntimeBadge
+              className="min-w-0 flex-1"
+              iconWrapperClassName="size-5"
+              label={selectedAgentDisplay.label}
+              labelClassName="truncate"
+              runtimeKind={selectedAgentDisplay.runtimeKind}
+            />
+            <ChevronDown
+              className={cn(
+                "size-4 shrink-0 text-[rgba(26,26,26,0.54)] transition-transform",
+                isAgentDropdownOpen ? "rotate-180" : "",
+              )}
+            />
+          </button>
+
+          {isAgentDropdownOpen ? (
+            <div className="absolute left-0 top-full z-20 mt-2 w-[244px] border border-[var(--text-main)] bg-white p-1.5 shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
+              <div aria-label="Agent options" className="max-h-[240px] overflow-y-auto" role="listbox">
+                {agentOptions.map((agent) => {
+                  const availabilityLabel = buildAgentAvailabilityLabel(agent);
+                  const isSelected = agent.runtimeId === displayedAgentSelectValue;
+
+                  return (
+                    <button
+                      key={agent.runtimeId}
+                      aria-selected={isSelected}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-left transition-colors",
+                        isSelected ? "bg-[var(--bg-cream)]" : "bg-white hover:bg-[rgba(244,241,234,0.72)]",
+                        !agent.installed ? "cursor-not-allowed opacity-45" : "",
+                      )}
+                      disabled={!agent.installed}
+                      role="option"
+                      type="button"
+                      onClick={() => {
+                        setIsAgentDropdownOpen(false);
+                        updateActiveNetAgent(agent.runtimeId);
+                      }}
+                    >
+                      <AgentRuntimeBadge
+                        className="min-w-0 flex-1"
+                        iconWrapperClassName="size-6"
+                        label={agent.runtimeLabel}
+                        labelClassName="truncate text-[13px] font-medium text-[var(--text-main)]"
+                        runtimeKind={agent.runtimeKind}
+                      />
+                      {availabilityLabel ? (
+                        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.42)]">
+                          {availabilityLabel}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
+        {newNetModeToggleButton}
+      </div>
+
+      {newRootComposerMode === "conversation" ? (
+        <Button
+          className="h-11 w-11 shrink-0 rounded-none border border-[var(--text-main)] bg-[var(--text-main)] px-0 text-white shadow-none hover:bg-[var(--block-slate)]"
+          disabled={sendDisabled}
+          type="submit"
+        >
+          <ArrowUp className="size-4" />
+        </Button>
+      ) : null}
+    </div>
+  );
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--bg-cream)] text-[var(--text-main)] lg:flex-row">
@@ -2521,7 +2700,7 @@ function NetchatApp() {
               onNodeClick={(_event, node) => {
                 const selectedText = window.getSelection()?.toString().trim();
                 const message = (node.data as MessageNodeData | undefined)?.message;
-                if (message?.role === "assistant" && !selectedText) {
+                if (isConversationSourceRole(message?.role) && !selectedText) {
                   pickMessage(node.id);
                 }
               }}
@@ -2567,103 +2746,33 @@ function NetchatApp() {
           <div className="absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
             <form className="pointer-events-auto w-full max-w-[840px]" onSubmit={handleSubmit}>
               <div className="relative border border-[var(--text-main)] bg-white px-6 py-5 shadow-[14px_14px_0_rgba(26,26,26,0.08)]">
-                <Textarea
-                  ref={composerRef}
-                  className="!min-h-[172px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[18px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
-                  placeholder={composerPlaceholder}
-                  value={composerValue}
-                  onChange={(event) => setComposerValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      if (!sendDisabled) {
-                        submitCurrentPrompt();
+                {newRootComposerMode === "conversation" ? (
+                  <Textarea
+                    ref={composerRef}
+                    className="!min-h-[172px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[18px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
+                    placeholder={composerPlaceholder}
+                    value={composerValue}
+                    onChange={(event) => setComposerValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        if (!sendDisabled) {
+                          submitCurrentPrompt();
+                        }
                       }
-                    }
-                  }}
-                />
-                <div className="absolute bottom-4 left-6 flex max-w-[calc(100%-6rem)] flex-wrap items-center gap-3">
-                  <div
-                    className="pointer-events-none max-w-[300px] shrink-0 truncate text-[13px] leading-5 text-[rgba(26,26,26,0.46)]"
-                    title={workingDirectoryPath}
-                  >
-                    {truncateMiddle(workingDirectoryPath, 64)}
-                  </div>
-                  <div ref={agentDropdownRef} className="relative shrink-0">
-                    <button
-                      aria-expanded={isAgentDropdownOpen}
-                      aria-haspopup="listbox"
-                      className="flex h-9 min-w-[188px] items-center gap-3 rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] px-3 text-left text-[13px] font-medium text-[var(--text-main)] shadow-none outline-none transition-colors hover:border-[var(--text-main)] focus-visible:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]"
-                      disabled={workspaceQuery.isLoading || isSwitchingNet || isUpdatingActiveNetAgent || agentOptions.length === 0}
-                      type="button"
-                      onClick={() => setIsAgentDropdownOpen((current) => !current)}
-                    >
-                      <AgentRuntimeBadge
-                        className="min-w-0 flex-1"
-                        iconWrapperClassName="size-5"
-                        label={selectedAgentDisplay.label}
-                        labelClassName="truncate"
-                        runtimeKind={selectedAgentDisplay.runtimeKind}
-                      />
-                      <ChevronDown
-                        className={cn(
-                          "size-4 shrink-0 text-[rgba(26,26,26,0.54)] transition-transform",
-                          isAgentDropdownOpen ? "rotate-180" : "",
-                        )}
-                      />
-                    </button>
-
-                    {isAgentDropdownOpen ? (
-                      <div className="absolute left-0 top-full z-20 mt-2 w-[244px] border border-[var(--text-main)] bg-white p-1.5 shadow-[10px_10px_0_rgba(26,26,26,0.08)]">
-                        <div aria-label="Agent options" className="max-h-[240px] overflow-y-auto" role="listbox">
-                          {agentOptions.map((agent) => {
-                            const availabilityLabel = buildAgentAvailabilityLabel(agent);
-                            const isSelected = agent.runtimeId === displayedAgentSelectValue;
-
-                            return (
-                              <button
-                                key={agent.runtimeId}
-                                aria-selected={isSelected}
-                                className={cn(
-                                  "flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-left transition-colors",
-                                  isSelected ? "bg-[var(--bg-cream)]" : "bg-white hover:bg-[rgba(244,241,234,0.72)]",
-                                  !agent.installed ? "cursor-not-allowed opacity-45" : "",
-                                )}
-                                disabled={!agent.installed}
-                                role="option"
-                                type="button"
-                                onClick={() => {
-                                  setIsAgentDropdownOpen(false);
-                                  updateActiveNetAgent(agent.runtimeId);
-                                }}
-                              >
-                                <AgentRuntimeBadge
-                                  className="min-w-0 flex-1"
-                                  iconWrapperClassName="size-6"
-                                  label={agent.runtimeLabel}
-                                  labelClassName="truncate text-[13px] font-medium text-[var(--text-main)]"
-                                  runtimeKind={agent.runtimeKind}
-                                />
-                                {availabilityLabel ? (
-                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.42)]">
-                                    {availabilityLabel}
-                                  </span>
-                                ) : null}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <Button
-                  className="absolute bottom-4 right-4 h-11 w-11 rounded-none border border-[var(--text-main)] bg-[var(--text-main)] px-0 text-white shadow-none hover:bg-[var(--block-slate)]"
-                  disabled={sendDisabled}
-                  type="submit"
-                >
-                  <ArrowUp className="size-4" />
-                </Button>
+                    }}
+                  />
+                ) : (
+                  <ArticleModeFilePicker
+                    expandedDirectoryPaths={expandedExplorerDirectoryPaths}
+                    isBusy={createRootArticleMutation.isPending}
+                    selectedFilePath={selectedArticleFilePath}
+                    workspaceId={activeWorkspaceId}
+                    onSelectFile={handleArticleFileSelect}
+                    onToggleDirectory={toggleWorkspaceExplorerDirectory}
+                  />
+                )}
+                {newNetComposerBottomBar}
               </div>
 
               {composerErrorMessage ? (
@@ -2754,7 +2863,7 @@ function NetchatApp() {
             >
               {selectionForSelectedMessage ? (
                 <div className="border-b border-[var(--node-border)] bg-[rgba(244,241,234,0.52)] px-5 py-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">User</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">Source</div>
                   <div className="mt-2 break-words text-[15px] italic leading-7 text-[rgba(26,26,26,0.78)]">
                     {`"${truncate(selectionForSelectedMessage.selectedText, 160)}"`}
                   </div>
@@ -2861,6 +2970,55 @@ function PanelResizeHandle({
   );
 }
 
+function ArticleModeFilePicker({
+  workspaceId,
+  expandedDirectoryPaths,
+  selectedFilePath,
+  isBusy,
+  onToggleDirectory,
+  onSelectFile,
+}: {
+  workspaceId: string | null;
+  expandedDirectoryPaths: string[];
+  selectedFilePath: string | null;
+  isBusy: boolean;
+  onToggleDirectory: (directoryPath: string) => void;
+  onSelectFile: (filePath: string) => void;
+}) {
+  return (
+    <div className="pb-24">
+      <div className="flex items-center justify-between gap-4 border-b border-[var(--node-border)] pb-3">
+        <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">Select a file to start with</div>
+        {isBusy ? (
+          <div className="flex shrink-0 items-center gap-2 text-[12px] leading-5 text-[rgba(26,26,26,0.54)]">
+            <LoaderCircle className="size-3.5 animate-spin" />
+            Loading article...
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-4 max-h-[320px] overflow-y-auto border border-[var(--node-border)] bg-[rgba(244,241,234,0.3)] px-2 py-2">
+        {workspaceId ? (
+          <WorkspaceExplorerDirectoryEntries
+            depth={0}
+            directoryPath=""
+            expandedDirectoryPaths={expandedDirectoryPaths}
+            selectedFilePath={selectedFilePath}
+            variant="article-picker"
+            workspaceId={workspaceId}
+            onSelectFile={onSelectFile}
+            onToggleDirectory={onToggleDirectory}
+          />
+        ) : (
+          <div className="px-3 py-5 text-[13px] leading-6 text-[rgba(26,26,26,0.56)]">
+            Workspace files are unavailable right now.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceExplorerPanel({
   workspaceId,
   workspaceDisplayName,
@@ -2917,6 +3075,7 @@ function WorkspaceExplorerDirectoryEntries({
   depth,
   expandedDirectoryPaths,
   selectedFilePath,
+  variant = "explorer",
   onToggleDirectory,
   onSelectFile,
 }: {
@@ -2925,6 +3084,7 @@ function WorkspaceExplorerDirectoryEntries({
   depth: number;
   expandedDirectoryPaths: string[];
   selectedFilePath: string | null;
+  variant?: "explorer" | "article-picker";
   onToggleDirectory: (directoryPath: string) => void;
   onSelectFile: (filePath: string) => void;
 }) {
@@ -2965,6 +3125,7 @@ function WorkspaceExplorerDirectoryEntries({
             entry={entry}
             expandedDirectoryPaths={expandedDirectoryPaths}
             selectedFilePath={selectedFilePath}
+            variant={variant}
             workspaceId={workspaceId}
             onSelectFile={onSelectFile}
             onToggleDirectory={onToggleDirectory}
@@ -2974,10 +3135,15 @@ function WorkspaceExplorerDirectoryEntries({
             key={entry.path}
             type="button"
             className={cn(
-              "flex w-full items-center border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+              "flex w-full items-center border border-transparent pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+              variant === "article-picker" ? "py-1.5" : "py-2",
               selectedFilePath === entry.path
-                ? "border-[var(--text-main)] bg-[var(--bg-cream)]"
-                : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.48)]",
+                ? variant === "article-picker"
+                  ? "border-[var(--text-main)] bg-white shadow-[4px_4px_0_rgba(26,26,26,0.04)]"
+                  : "border-[var(--text-main)] bg-[var(--bg-cream)]"
+                : variant === "article-picker"
+                  ? "hover:border-[rgba(26,26,26,0.12)] hover:bg-white"
+                  : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.48)]",
             )}
             style={{ paddingLeft: `${depth * 16 + 12}px` }}
             title={entry.path}
@@ -2997,6 +3163,7 @@ function WorkspaceExplorerDirectoryNode({
   depth,
   expandedDirectoryPaths,
   selectedFilePath,
+  variant = "explorer",
   onToggleDirectory,
   onSelectFile,
 }: {
@@ -3005,6 +3172,7 @@ function WorkspaceExplorerDirectoryNode({
   depth: number;
   expandedDirectoryPaths: string[];
   selectedFilePath: string | null;
+  variant?: "explorer" | "article-picker";
   onToggleDirectory: (directoryPath: string) => void;
   onSelectFile: (filePath: string) => void;
 }) {
@@ -3015,10 +3183,15 @@ function WorkspaceExplorerDirectoryNode({
       <button
         type="button"
         className={cn(
-          "flex w-full items-center gap-1 border border-transparent py-2 pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+          "flex w-full items-center gap-1 border border-transparent pr-3 text-left text-[13px] leading-5 text-[var(--text-main)] transition-colors",
+          variant === "article-picker" ? "py-1.5" : "py-2",
           isExpanded
-            ? "bg-[rgba(244,241,234,0.58)]"
-            : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.4)]",
+            ? variant === "article-picker"
+              ? "bg-white"
+              : "bg-[rgba(244,241,234,0.58)]"
+            : variant === "article-picker"
+              ? "hover:border-[rgba(26,26,26,0.12)] hover:bg-white"
+              : "hover:border-[var(--node-border)] hover:bg-[rgba(244,241,234,0.4)]",
         )}
         style={{ paddingLeft: `${depth * 16 + 12}px` }}
         title={entry.path}
@@ -3034,6 +3207,7 @@ function WorkspaceExplorerDirectoryNode({
           directoryPath={entry.path}
           expandedDirectoryPaths={expandedDirectoryPaths}
           selectedFilePath={selectedFilePath}
+          variant={variant}
           workspaceId={workspaceId}
           onSelectFile={onSelectFile}
           onToggleDirectory={onToggleDirectory}
@@ -3422,20 +3596,22 @@ function CanvasThumbnail({
 }
 
 function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
+  const isAssistant = data.message.role === "assistant";
+  const isArticle = data.message.role === "article";
   const isUser = data.message.role === "user";
-  const roleLabel = isUser ? "User" : data.assistantLabel;
+  const roleLabel = resolveMessageRoleLabel(data.message.role, data.assistantLabel);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const sessionIdLabel = data.message.sessionId ?? "pending";
   const [assistantTraceExpanded, setAssistantTraceExpanded] = useState(false);
   const liveAssistantState = useLiveAssistantStateStore((state) =>
-    !isUser ? (state.statesByMessageId[data.message.id] ?? data.persistedAssistantState ?? null) : null,
+    isAssistant ? (state.statesByMessageId[data.message.id] ?? data.persistedAssistantState ?? null) : null,
   );
-  const responseContent = !isUser
+  const responseContent = isAssistant
     ? liveAssistantState?.responseText || data.message.content
     : data.message.content;
-  const canSelectAssistantResponse = !liveAssistantState || liveAssistantState.status === "complete";
+  const canSelectMessage = isAssistant ? !liveAssistantState || liveAssistantState.status === "complete" : isArticle;
   const showPendingAssistantState =
-    !isUser && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
+    isAssistant && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
   const renderStreamingResponseAsMarkdown = !showPendingAssistantState;
   const shouldFreezeMeasuredHeight = showPendingAssistantState;
   const visibleAssistantBlocks =
@@ -3507,7 +3683,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         ref={bubbleRef}
         className={cn(
           "group relative overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[8px_8px_0_rgba(26,26,26,0.08)] transition-all",
-          isUser
+          !isAssistant
             ? data.isActiveMessage
               ? "border-t-[var(--block-slate)] bg-[rgba(247,247,242,0.98)] shadow-[10px_10px_0_rgba(58,64,66,0.11)]"
               : "border-t-[var(--block-slate)]"
@@ -3534,7 +3710,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
           }
 
           const selectedText = window.getSelection()?.toString().trim();
-          if (!isUser && !selectedText) {
+          if (isConversationSourceRole(data.message.role) && !selectedText) {
             data.onPickMessage(data.message.id);
           }
           event.stopPropagation();
@@ -3572,7 +3748,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               <div
                 className={cn(
                   "editorial-meta",
-                  isUser
+                  !isAssistant
                     ? "text-[rgba(58,64,66,0.72)]"
                     : showPendingAssistantState || data.hasSelectionDraft
                       ? "text-[var(--block-ochre)]"
@@ -3597,7 +3773,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         </div>
 
         <div className="relative px-4 py-4">
-          {!isUser && liveAssistantState ? (
+          {isAssistant && liveAssistantState ? (
             <div className="space-y-3">
               {visibleAssistantBlocks.length > 0 ? (
                 <details
@@ -3709,7 +3885,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                       nodeId={data.message.id}
                       content={responseContent}
                       anchors={data.selectionAnchors}
-                      disabled={!canSelectAssistantResponse}
+                      disabled={!canSelectMessage}
                       renderMarkdown={renderStreamingResponseAsMarkdown}
                       onToggleAnchor={data.onToggleSelectionAnchor}
                       onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
@@ -3734,8 +3910,8 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               nodeId={data.message.id}
               content={responseContent}
               anchors={data.selectionAnchors}
-              disabled={isUser}
-              renderMarkdown={!isUser}
+              disabled={!canSelectMessage}
+              renderMarkdown={isArticle && isMarkdownFilePath(data.message.sourcePath ?? "")}
               onToggleAnchor={data.onToggleSelectionAnchor}
               onSelection={(draft) => data.onSelectionDraft({ ...draft, sourceMessageId: data.message.id })}
             />
@@ -4624,8 +4800,25 @@ function getInitialCanvasSize(sidebarCollapsed: boolean) {
   };
 }
 
-function getRootBranchFirstUserMessage(snapshot: GraphSnapshot) {
-  return snapshot.messages.find((message) => message.branchId === rootBranchId && message.role === "user") ?? null;
+function getRootBranchFirstConversationMessage(snapshot: GraphSnapshot) {
+  return snapshot.messages.find(
+    (message) => message.branchId === rootBranchId && (message.role === "user" || message.role === "article"),
+  ) ?? null;
+}
+
+function isConversationSourceRole(role: MessageNode["role"] | undefined): role is "assistant" | "article" {
+  return role === "assistant" || role === "article";
+}
+
+function resolveMessageRoleLabel(role: MessageNode["role"], assistantLabel: string) {
+  switch (role) {
+    case "user":
+      return "User";
+    case "article":
+      return "article";
+    default:
+      return assistantLabel;
+  }
 }
 
 function getVisibleBranchIds(
@@ -4949,6 +5142,7 @@ function buildOptimisticRootStreamTurn(
       branchId: rootBranchId,
       role: "user",
       content: input.prompt,
+      sourcePath: null,
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
@@ -4961,6 +5155,7 @@ function buildOptimisticRootStreamTurn(
       branchId: rootBranchId,
       role: "assistant",
       content: "",
+      sourcePath: null,
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,
@@ -5105,6 +5300,7 @@ function buildOptimisticBranchCreationStreamTurn(
       branchId,
       role: "user",
       content: userMessageContent,
+      sourcePath: null,
       selectedText: input.input.mode === "selection" ? input.input.selectedText ?? null : null,
       sessionId: null,
       machineId: sourceMessage.machineId,
@@ -5117,6 +5313,7 @@ function buildOptimisticBranchCreationStreamTurn(
       branchId,
       role: "assistant",
       content: "",
+      sourcePath: null,
       selectedText: null,
       sessionId: null,
       machineId: sourceMessage.machineId,
@@ -5168,6 +5365,7 @@ function buildOptimisticBranchTurnStreamTurn(
       branchId: input.branchId,
       role: "user",
       content: input.prompt,
+      sourcePath: null,
       selectedText: input.selectedText,
       sessionId: null,
       machineId: input.machineId,
@@ -5180,6 +5378,7 @@ function buildOptimisticBranchTurnStreamTurn(
       branchId: input.branchId,
       role: "assistant",
       content: "",
+      sourcePath: null,
       selectedText: null,
       sessionId: null,
       machineId: input.machineId,

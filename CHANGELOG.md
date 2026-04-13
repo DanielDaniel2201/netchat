@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-13
+
+- Added a new-chat Article Mode that swaps the first-turn textarea for a workspace file picker and seeds the canvas from a selected local file, so users can begin a conversation from article source material instead of typing the opening bubble manually.
+- Added persisted `article` root messages with markdown-aware rendering and first-turn root prompt replay, so follow-up questions and selection-based branches stay grounded in the imported article before any agent session exists.
+
 ## 2026-04-12
 
 - Replaced the file preview word-wrap toggle with Markdown rendering for `.md` files while keeping the plain numbered, horizontally scrollable viewer for all other file types.

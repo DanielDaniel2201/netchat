@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type Role = "user" | "assistant";
+export type Role = "user" | "assistant" | "article";
 
 export type Branch = {
   id: string;
@@ -22,6 +22,7 @@ export type MessageNode = {
   branchId: string;
   role: Role;
   content: string;
+  sourcePath: string | null;
   selectedText: string | null;
   sessionId: string | null;
   machineId: string | null;
@@ -328,6 +329,12 @@ export const createRootTurnInputSchema = z.object({
 
 export type CreateRootTurnInput = z.infer<typeof createRootTurnInputSchema>;
 
+export const createRootArticleInputSchema = z.object({
+  filePath: z.string().trim().min(1).max(4096),
+});
+
+export type CreateRootArticleInput = z.infer<typeof createRootArticleInputSchema>;
+
 export const createBranchInputSchema = z
   .object({
     sourceMessageId: z.string().min(1),
@@ -580,18 +587,30 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-export function buildSelectionPrompt(selectedText: string, userPrompt: string): string {
+export function buildSelectionPrompt(
+  selectedText: string,
+  userPrompt: string,
+  sourceRole: Role | null = "assistant",
+): string {
   const normalizedSelectedText = truncatePromptContext(selectedText.trim() || "(empty selection)", 1600);
   const normalizedUserPrompt =
     userPrompt.trim().length > 0
       ? userPrompt.trim()
       : "Continue by explaining the highlighted passage more deeply.";
+  const sourceDescription =
+    sourceRole === "article"
+      ? "The user is asking a follow-up about a highlighted passage from an article they provided."
+      : "The user is asking a follow-up about a highlighted passage from your previous answer.";
+  const groundingInstruction =
+    sourceRole === "article"
+      ? "Stay grounded in the article's context and keep the next answer focused on the highlighted passage unless the user broadens the scope."
+      : "Stay grounded in the original reply's context and keep the next answer focused on the highlighted passage unless the user broadens the scope.";
 
   return [
-    "The user is asking a follow-up about a highlighted passage from your previous answer.",
+    sourceDescription,
     "Highlighted passage:",
     `"""${normalizedSelectedText}"""`,
-    "Stay grounded in the original reply's context and keep the next answer focused on the highlighted passage unless the user broadens the scope.",
+    groundingInstruction,
     "",
     "User follow-up:",
     normalizedUserPrompt,
@@ -602,6 +621,7 @@ export function buildPrefixReplayPrompt(input: {
   history: ReadonlyArray<Pick<MessageNode, "role" | "content">>;
   userPrompt: string;
   selectedText?: string | null;
+  selectedTextSourceRole?: Role | null;
 }): string {
   const normalizedHistory = input.history.map((message) => ({
     role: message.role,
@@ -626,7 +646,7 @@ export function buildPrefixReplayPrompt(input: {
     lines.push("(empty transcript)");
   } else {
     for (const [index, message] of normalizedHistory.entries()) {
-      lines.push(`[${index + 1}] ${message.role === "user" ? "User" : "Assistant"}:`);
+      lines.push(`[${index + 1}] ${formatPromptRoleLabel(message.role)}:`);
       lines.push(`"""${message.content}"""`);
       lines.push("");
     }
@@ -642,10 +662,68 @@ export function buildPrefixReplayPrompt(input: {
 
   if (input.selectedText?.trim()) {
     lines.push("");
-    lines.push("Highlighted context inside the last assistant message:");
+    lines.push(`Highlighted context inside the last ${describePromptSourceLabel(input.selectedTextSourceRole)} message:`);
     lines.push(`"""${truncatePromptContext(input.selectedText.trim(), 1600)}"""`);
     lines.push(
-      "Keep the next answer grounded in that highlighted passage unless the user broadens the scope.",
+      input.selectedTextSourceRole === "article"
+        ? "Keep the next answer grounded in that highlighted passage and the surrounding article unless the user broadens the scope."
+        : "Keep the next answer grounded in that highlighted passage unless the user broadens the scope.",
+    );
+  }
+
+  lines.push("");
+  lines.push("New user message:");
+  lines.push(normalizedUserPrompt);
+
+  return lines.join("\n");
+}
+
+export function buildRootHistoryPrompt(input: {
+  history: ReadonlyArray<Pick<MessageNode, "role" | "content">>;
+  userPrompt: string;
+  selectedText?: string | null;
+  selectedTextSourceRole?: Role | null;
+}): string {
+  const normalizedHistory = input.history.map((message) => ({
+    role: message.role,
+    content: message.content.trim() || "(empty message)",
+  }));
+  const normalizedUserPrompt =
+    input.userPrompt.trim().length > 0
+      ? input.userPrompt.trim()
+      : input.selectedText?.trim()
+        ? "Continue by explaining the highlighted passage more deeply."
+        : "Continue the conversation from this point.";
+  const lines = [
+    "You are continuing the root conversation in netchat.",
+    "The transcript below is the complete root conversation history so far.",
+    "Any article message is source material the user explicitly provided.",
+    "",
+    "Transcript:",
+  ];
+
+  if (normalizedHistory.length === 0) {
+    lines.push("(empty transcript)");
+  } else {
+    for (const [index, message] of normalizedHistory.entries()) {
+      lines.push(`[${index + 1}] ${formatPromptRoleLabel(message.role)}:`);
+      lines.push(`"""${message.content}"""`);
+      lines.push("");
+    }
+  }
+
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  if (input.selectedText?.trim()) {
+    lines.push("");
+    lines.push(`Highlighted context inside the last ${describePromptSourceLabel(input.selectedTextSourceRole)} message:`);
+    lines.push(`"""${truncatePromptContext(input.selectedText.trim(), 1600)}"""`);
+    lines.push(
+      input.selectedTextSourceRole === "article"
+        ? "Keep the next answer grounded in that highlighted passage and the surrounding article unless the user broadens the scope."
+        : "Keep the next answer grounded in that highlighted passage unless the user broadens the scope.",
     );
   }
 
@@ -717,4 +795,19 @@ function truncatePromptContext(value: string, maxLength: number) {
   }
 
   return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function formatPromptRoleLabel(role: Role) {
+  switch (role) {
+    case "user":
+      return "User";
+    case "article":
+      return "Article";
+    default:
+      return "Assistant";
+  }
+}
+
+function describePromptSourceLabel(role: Role | null | undefined) {
+  return role === "article" ? "article" : "assistant";
 }

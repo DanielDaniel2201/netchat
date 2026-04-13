@@ -37,6 +37,7 @@ type MessageRow = {
   branch_id: string;
   role: MessageNode["role"];
   content: string;
+  source_path: string | null;
   selected_text: string | null;
   session_id: string | null;
   machine_id: string | null;
@@ -102,7 +103,7 @@ export class GraphStore {
   getMessage(messageId: string): MessageNode | undefined {
     const row = this.database
       .prepare(
-        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, runtime_id, runtime_kind, ordinal_in_branch, created_at
+        `SELECT id, branch_id, role, content, source_path, selected_text, session_id, machine_id, runtime_id, runtime_kind, ordinal_in_branch, created_at
          FROM messages
          WHERE id = ?`,
       )
@@ -211,6 +212,7 @@ export class GraphStore {
         branchId: branch.id,
         role: "user",
         content: prompt,
+        sourcePath: null,
         selectedText: options?.selectedText ?? null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
@@ -223,6 +225,7 @@ export class GraphStore {
         branchId: branch.id,
         role: "assistant",
         content: runtime.outputText,
+        sourcePath: null,
         selectedText: null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
@@ -295,6 +298,7 @@ export class GraphStore {
         branchId,
         role: "user",
         content: userMessageContent,
+        sourcePath: null,
         selectedText: isSelectionBranch ? input.selectedText! : null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
@@ -307,6 +311,7 @@ export class GraphStore {
         branchId,
         role: "assistant",
         content: runtime.outputText,
+        sourcePath: null,
         selectedText: null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
@@ -353,6 +358,7 @@ export class GraphStore {
         branchId,
         role: "user",
         content: prompt,
+        sourcePath: null,
         selectedText: options?.selectedText ?? null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
@@ -365,6 +371,7 @@ export class GraphStore {
         branchId,
         role: "assistant",
         content: runtime.outputText,
+        sourcePath: null,
         selectedText: null,
         sessionId: runtime.handle,
         machineId: runtime.machineId,
@@ -373,6 +380,40 @@ export class GraphStore {
         ordinalInBranch: nextOrdinal + 1,
       });
       this.upsertAssistantState(assistantMessageId, options?.assistantState);
+    });
+
+    return this.getSnapshot();
+  }
+
+  seedRootArticle(
+    content: string,
+    options: {
+      sourcePath: string;
+      messageId?: string;
+      createdAt?: string;
+    },
+  ): GraphSnapshot {
+    this.runInTransaction(() => {
+      const branch = this.ensureRootBranch();
+      const existingRootMessages = this.listMessages().filter((message) => message.branchId === branch.id);
+      if (existingRootMessages.length > 0) {
+        throw new Error("The active net already has root messages, so an article can only be seeded into a fresh net.");
+      }
+
+      this.insertMessage({
+        id: options.messageId ?? makeId("msg"),
+        branchId: branch.id,
+        role: "article",
+        content,
+        sourcePath: options.sourcePath,
+        selectedText: null,
+        sessionId: null,
+        machineId: null,
+        runtimeId: null,
+        runtimeKind: null,
+        ordinalInBranch: this.getNextMessageOrdinal(branch.id),
+        createdAt: options.createdAt ?? nowIso(),
+      });
     });
 
     return this.getSnapshot();
@@ -397,7 +438,7 @@ export class GraphStore {
   private listMessages() {
     const rows = this.database
       .prepare(
-        `SELECT id, branch_id, role, content, selected_text, session_id, machine_id, runtime_id, runtime_kind, ordinal_in_branch, created_at
+        `SELECT id, branch_id, role, content, source_path, selected_text, session_id, machine_id, runtime_id, runtime_kind, ordinal_in_branch, created_at
          FROM messages
          ORDER BY created_at ASC, ordinal_in_branch ASC, id ASC`,
       )
@@ -447,6 +488,7 @@ export class GraphStore {
         branch_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
+        source_path TEXT,
         selected_text TEXT,
         session_id TEXT,
         machine_id TEXT,
@@ -467,6 +509,7 @@ export class GraphStore {
     `);
 
     this.ensureMessageSelectedTextColumn();
+    this.ensureMessageSourcePathColumn();
     this.ensureBranchRuntimeColumns();
     this.ensureMessageRuntimeColumns();
   }
@@ -532,12 +575,14 @@ export class GraphStore {
     branchId: string;
     role: MessageNode["role"];
     content: string;
+    sourcePath: string | null;
     selectedText: string | null;
     sessionId: string | null;
     machineId: string | null;
     runtimeId: string | null;
     runtimeKind: MessageNode["runtimeKind"];
     ordinalInBranch: number;
+    createdAt?: string;
   }) {
     this.database
       .prepare(
@@ -546,27 +591,29 @@ export class GraphStore {
            branch_id,
            role,
            content,
+           source_path,
            selected_text,
            session_id,
            machine_id,
-           runtime_id,
-           runtime_kind,
-           ordinal_in_branch,
-           created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         runtime_id,
+         runtime_kind,
+         ordinal_in_branch,
+         created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.id,
         input.branchId,
         input.role,
         input.content,
+        input.sourcePath,
         input.selectedText,
         input.sessionId,
         input.machineId,
         input.runtimeId,
         input.runtimeKind,
         input.ordinalInBranch,
-        nowIso(),
+        input.createdAt ?? nowIso(),
       );
   }
 
@@ -622,6 +669,15 @@ export class GraphStore {
     this.database.exec(`ALTER TABLE messages ADD COLUMN selected_text TEXT;`);
   }
 
+  private ensureMessageSourcePathColumn() {
+    const columns = this.database.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "source_path")) {
+      return;
+    }
+
+    this.database.exec(`ALTER TABLE messages ADD COLUMN source_path TEXT;`);
+  }
+
   private ensureBranchRuntimeColumns() {
     const columns = this.database.prepare(`PRAGMA table_info(branches)`).all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "runtime_id")) {
@@ -650,7 +706,29 @@ export function readLatestMessageTimestamp(databasePath: string) {
 }
 
 export function readLatestUserMessageTimestamp(databasePath: string) {
-  return readLatestMessageTimestampByRole(databasePath, "user");
+  if (!existsSync(databasePath)) {
+    return null;
+  }
+
+  const database = new DatabaseSync(databasePath);
+  try {
+    const row = database
+      .prepare(
+        `SELECT MAX(created_at) AS latest_message_at
+         FROM messages
+         WHERE role IN ('user', 'article')`,
+      )
+      .get() as { latest_message_at: string | null } | undefined;
+
+    return typeof row?.latest_message_at === "string" && row.latest_message_at.trim().length > 0
+      ? row.latest_message_at
+      : null;
+  } catch {
+    return null;
+  } finally {
+    const close = (database as unknown as { close?: () => void }).close;
+    close?.call(database);
+  }
 }
 
 function readLatestMessageTimestampByRole(databasePath: string, role?: MessageNode["role"]) {
@@ -717,6 +795,7 @@ function mapMessageRow(row: MessageRow): MessageNode {
     branchId: row.branch_id,
     role: row.role,
     content: row.content,
+    sourcePath: row.source_path,
     selectedText: row.selected_text,
     sessionId: row.session_id,
     machineId: row.machine_id,

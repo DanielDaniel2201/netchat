@@ -218,6 +218,16 @@ export class WorkspaceStore {
     return nextSnapshot;
   }
 
+  seedRootArticle(sourcePath: string, content: string): GraphSnapshot {
+    const nextSnapshot = this.activeStore.seedRootArticle(content, {
+      sourcePath,
+    });
+    this.touchActiveNet({
+      promptToRetitle: path.basename(sourcePath),
+    });
+    return nextSnapshot;
+  }
+
   applyBranchCreation(
     input: CreateBranchInput,
     runtime: AgentTurnResult,

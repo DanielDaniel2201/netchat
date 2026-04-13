@@ -242,6 +242,10 @@ export class WorkspaceManagerStore {
     return this.activeStore.applyRootTurn(prompt, runtime, options);
   }
 
+  seedRootArticle(content: string, sourcePath: string): GraphSnapshot {
+    return this.activeStore.seedRootArticle(sourcePath, content);
+  }
+
   applyBranchCreation(
     input: CreateBranchInput,
     runtime: AgentTurnResult,
