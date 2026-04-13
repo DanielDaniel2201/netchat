@@ -2862,9 +2862,8 @@ function NetchatApp() {
               onSubmit={handleSubmit}
             >
               {selectionForSelectedMessage ? (
-                <div className="border-b border-[var(--node-border)] bg-[rgba(244,241,234,0.52)] px-5 py-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">Source</div>
-                  <div className="mt-2 break-words text-[15px] italic leading-7 text-[rgba(26,26,26,0.78)]">
+                <div className="border-b border-[var(--node-border)] bg-[rgba(244,241,234,0.52)] px-5 py-3">
+                  <div className="break-words text-[15px] italic leading-7 text-[rgba(26,26,26,0.78)]">
                     {`"${truncate(selectionForSelectedMessage.selectedText, 160)}"`}
                   </div>
                 </div>
