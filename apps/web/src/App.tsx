@@ -2,6 +2,7 @@ import {
   CSSProperties,
   FormEvent,
   PointerEvent as ReactPointerEvent,
+  RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -39,6 +40,8 @@ import {
   Pencil,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import {
@@ -109,6 +112,7 @@ const desktopWorkspaceExplorerMinWidth = 220;
 const desktopWorkspaceFilePreviewMinWidth = 320;
 const desktopWorkspacePanelsMinCanvasWidth = 360;
 const desktopWorkspacePanelsMaxWidthRatio = 0.72;
+const focusViewScrollTopInset = 104;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -143,6 +147,7 @@ type MessageNodeData = {
   showSessionId: boolean;
   sessionLabelSide: "left" | "right";
   onMeasureHeight: (messageId: string, height: number) => void;
+  onEnterFocusView: (messageId: string) => void;
   onPickMessage: (messageId: string) => void;
   onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
   onSelectionDraft: (draft: SelectionDraft) => void;
@@ -355,6 +360,7 @@ function NetchatApp() {
   const initialSidebarCollapsed = readBooleanFromLocalStorage(sidebarCollapsedStorageKey, false);
   const initialViewportWidth = typeof window === "undefined" ? desktopCanvasLayoutBreakpoint : window.innerWidth;
   const canvasHostRef = useRef<HTMLDivElement>(null);
+  const focusViewScrollRef = useRef<HTMLDivElement>(null);
   const workspacePanelsHostRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const agentDropdownRef = useRef<HTMLDivElement>(null);
@@ -369,6 +375,7 @@ function NetchatApp() {
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
+  const [focusViewTargetMessageId, setFocusViewTargetMessageId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [isSidebarTransitionReady, setIsSidebarTransitionReady] = useState(false);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => readStringArrayFromLocalStorage(workspaceOrderStorageKey));
@@ -558,6 +565,8 @@ function NetchatApp() {
   const selectedBranchMessages = selectedMessage ? messagesByBranch.get(selectedMessage.branchId) ?? [] : [];
   const selectionForSelectedMessage =
     selectedMessage && selectionDraft?.sourceMessageId === selectedMessage.id ? selectionDraft : null;
+  const isFocusViewActive = focusViewTargetMessageId !== null;
+  const pathViewportMessageId = isFocusViewActive ? focusViewTargetMessageId : activePathMessageId;
   const selectedMessageIsTail = selectedMessage
     ? selectedBranchMessages.at(-1)?.id === selectedMessage.id
     : true;
@@ -994,6 +1003,22 @@ function NetchatApp() {
     });
   }
 
+  const exitFocusView = useCallback(() => {
+    setFocusViewTargetMessageId(null);
+  }, []);
+
+  const openFocusView = useCallback(
+    (messageId: string) => {
+      activateMessagePath(messageId);
+      setSelectedMessageId(null);
+      setSelectionDraft(null);
+      setPendingViewportAction(null);
+      clearBrowserSelection();
+      setFocusViewTargetMessageId(messageId);
+    },
+    [setSelectedMessageId],
+  );
+
   const applyViewport = useCallback(
     (nextViewport: CanvasViewport) => {
       setViewport((current) =>
@@ -1033,7 +1058,9 @@ function NetchatApp() {
       return;
     }
 
-    const nodeElement = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectedMessage.id}"]`);
+    const nodeElement = isFocusViewActive
+      ? focusViewScrollRef.current?.querySelector<HTMLElement>(`[data-focus-message-id="${selectedMessage.id}"]`) ?? null
+      : document.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectedMessage.id}"]`);
     if (!nodeElement) {
       setComposerAnchor((current) => (current === null ? current : null));
       return;
@@ -1059,9 +1086,17 @@ function NetchatApp() {
         ? current
         : nextAnchor,
     );
-  }, [selectedMessage]);
+  }, [isFocusViewActive, selectedMessage]);
 
   function pickMessage(messageId: string) {
+    if (selectedMessageId === messageId) {
+      activateMessagePath(null);
+      setSelectedMessageId(null);
+      setSelectionDraft(null);
+      clearBrowserSelection();
+      return;
+    }
+
     activateMessagePath(messageId);
     setSelectedMessageId(messageId);
     setSelectionDraft(null);
@@ -1284,21 +1319,31 @@ function NetchatApp() {
         descendantBranchIds.add(anchor.id);
         setExpandedBranchIds((current) => current.filter((branchId) => !descendantBranchIds.has(branchId)));
         activateMessagePath(anchor.sourceMessageId);
-        setPendingViewportAction({
-          kind: "center-message",
-          messageId: anchor.sourceMessageId,
-        });
+        if (isFocusViewActive) {
+          setFocusViewTargetMessageId(anchor.sourceMessageId);
+          setPendingViewportAction(null);
+        } else {
+          setPendingViewportAction({
+            kind: "center-message",
+            messageId: anchor.sourceMessageId,
+          });
+        }
         return;
       }
 
       setExpandedBranchIds((current) => (current.includes(anchor.id) ? current : [...current, anchor.id]));
       activateMessagePath(anchor.targetMessageId);
-      setPendingViewportAction({
-        kind: "frame-message-at-top",
-        messageId: anchor.targetMessageId,
-      });
+      if (isFocusViewActive) {
+        setFocusViewTargetMessageId(anchor.targetMessageId);
+        setPendingViewportAction(null);
+      } else {
+        setPendingViewportAction({
+          kind: "frame-message-at-top",
+          messageId: anchor.targetMessageId,
+        });
+      }
     },
-    [snapshot, setSelectedMessageId],
+    [isFocusViewActive, snapshot, setSelectedMessageId],
   );
 
   const graph = useMemo(() => {
@@ -1310,10 +1355,11 @@ function NetchatApp() {
       defaultAssistantLabel: activeAgentLabel,
       expandedBranchIds: expandedBranchIdSet,
       snapshot,
-      activePathMessageId,
+      activePathMessageId: pathViewportMessageId,
       persistedAssistantStatesByMessageId,
       onPickMessage: pickMessage,
       onToggleSelectionAnchor: toggleSelectionAnchor,
+      onEnterFocusView: openFocusView,
       selectionDraft,
       measuredNodeHeights,
       onMeasureHeight: reportMessageNodeHeight,
@@ -1321,10 +1367,11 @@ function NetchatApp() {
       showSessionIds: uiConfig?.showSessionIds ?? false,
     });
   }, [
-    activePathMessageId,
     activeAgentLabel,
     expandedBranchIdSet,
     measuredNodeHeights,
+    openFocusView,
+    pathViewportMessageId,
     persistedAssistantStatesByMessageId,
     reportMessageNodeHeight,
     selectionDraft,
@@ -1338,6 +1385,26 @@ function NetchatApp() {
     }),
     [],
   );
+  const focusVisibleBranchIds = useMemo(
+    () =>
+      snapshot && focusViewTargetMessageId
+        ? getVisibleBranchIds(snapshot, focusViewTargetMessageId, expandedBranchIdSet)
+        : new Set<string>(),
+    [expandedBranchIdSet, focusViewTargetMessageId, snapshot],
+  );
+  const focusSelectionAnchorsByMessageId = useMemo(
+    () =>
+      snapshot && focusViewTargetMessageId
+        ? buildSelectionAnchorMetadata(snapshot, focusVisibleBranchIds).selectionAnchorsByMessageId
+        : new Map<string, MessageSelectionAnchor[]>(),
+    [focusViewTargetMessageId, focusVisibleBranchIds, snapshot],
+  );
+  const focusPathMessages = useMemo(
+    () =>
+      snapshot && focusViewTargetMessageId ? buildVisiblePathMessages(snapshot, focusViewTargetMessageId) : [],
+    [focusViewTargetMessageId, snapshot],
+  );
+  const focusPathSignature = useMemo(() => focusPathMessages.map((message) => message.id).join("|"), [focusPathMessages]);
 
   const handleViewportChange = useCallback(
     (nextViewport: CanvasViewport) => {
@@ -1663,6 +1730,16 @@ function NetchatApp() {
   }, [activePathMessageId, snapshot]);
 
   useEffect(() => {
+    if (!focusViewTargetMessageId) {
+      return;
+    }
+
+    if (!snapshot || !snapshot.messages.some((message) => message.id === focusViewTargetMessageId)) {
+      exitFocusView();
+    }
+  }, [exitFocusView, focusViewTargetMessageId, snapshot]);
+
+  useEffect(() => {
     if (!snapshot) {
       setExpandedBranchIds([]);
       return;
@@ -1711,6 +1788,11 @@ function NetchatApp() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (isFocusViewActive) {
+          exitFocusView();
+          return;
+        }
+
         activateMessagePath(null);
         setSelectedMessageId(null);
         setSelectionDraft(null);
@@ -1722,7 +1804,7 @@ function NetchatApp() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [setSelectedMessageId]);
+  }, [exitFocusView, isFocusViewActive, setSelectedMessageId]);
 
   useEffect(() => {
     if (selectionDraft && selectionDraft.sourceMessageId !== selectedMessageId) {
@@ -1820,15 +1902,18 @@ function NetchatApp() {
 
     const frame = window.requestAnimationFrame(syncBubbleComposerAnchor);
     window.addEventListener("resize", syncBubbleComposerAnchor);
+    const focusScrollElement = isFocusViewActive ? focusViewScrollRef.current : null;
+    focusScrollElement?.addEventListener("scroll", syncBubbleComposerAnchor, { passive: true });
 
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", syncBubbleComposerAnchor);
+      focusScrollElement?.removeEventListener("scroll", syncBubbleComposerAnchor);
     };
-  }, [selectedMessage, syncBubbleComposerAnchor]);
+  }, [isFocusViewActive, selectedMessage, syncBubbleComposerAnchor]);
 
   useEffect(() => {
-    if (!pendingViewportAction || !snapshot) {
+    if (isFocusViewActive || !pendingViewportAction || !snapshot) {
       return;
     }
 
@@ -1871,7 +1956,52 @@ function NetchatApp() {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [canvasSize.height, canvasSize.width, graph.nodes, measuredNodeHeights, pendingViewportAction, reactFlow, snapshot, viewport.zoom]);
+  }, [
+    canvasSize.height,
+    canvasSize.width,
+    graph.nodes,
+    isFocusViewActive,
+    measuredNodeHeights,
+    pendingViewportAction,
+    reactFlow,
+    snapshot,
+    viewport.zoom,
+  ]);
+
+  useEffect(() => {
+    if (!isFocusViewActive || !focusViewTargetMessageId) {
+      return;
+    }
+
+    let frameId = 0;
+    let attempts = 0;
+
+    const scrollTargetIntoView = () => {
+      const container = focusViewScrollRef.current;
+      const targetElement = container?.querySelector<HTMLElement>(`[data-focus-message-id="${focusViewTargetMessageId}"]`) ?? null;
+      if (!container || !targetElement) {
+        if (attempts < 8) {
+          attempts += 1;
+          frameId = window.requestAnimationFrame(scrollTargetIntoView);
+        }
+        return;
+      }
+
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = targetElement.getBoundingClientRect();
+      const nextScrollTop = container.scrollTop + (targetRect.top - containerRect.top) - focusViewScrollTopInset;
+      container.scrollTo({
+        top: Math.max(0, Math.round(nextScrollTop)),
+        behavior: "smooth",
+      });
+    };
+
+    frameId = window.requestAnimationFrame(scrollTargetIntoView);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [focusPathSignature, focusViewTargetMessageId, isFocusViewActive]);
 
   const isSwitchingNet =
     createNetMutation.isPending ||
@@ -1922,6 +2052,9 @@ function NetchatApp() {
     setLiveAssistantState(optimisticTurn.assistantMessageId, optimisticTurn.assistantState);
     setSelectedMessageId(optimisticTurn.assistantMessageId);
     setActivePathMessageId(optimisticTurn.assistantMessageId);
+    if (isFocusViewActive) {
+      setFocusViewTargetMessageId(optimisticTurn.assistantMessageId);
+    }
   }
 
   function handleCreateNet() {
@@ -2674,22 +2807,24 @@ function NetchatApp() {
         <div ref={workspacePanelsHostRef} className="flex h-full min-w-0">
           <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
             <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
-            <div className="absolute right-4 top-4 z-20">
-              <button
-                type="button"
-                className={cn(
-                  "inline-flex h-10 w-10 items-center justify-center border border-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors",
-                  isWorkspaceExplorerOpen
-                    ? "bg-[var(--text-main)] text-white hover:bg-[var(--block-slate)]"
-                    : "bg-white text-[var(--text-main)] hover:bg-[var(--bg-cream)]",
-                )}
-                disabled={workspaceQuery.isLoading || !workspace?.workingDirectory}
-                title={isWorkspaceExplorerOpen ? "Hide workspace explorer" : "Show workspace explorer"}
-                onClick={() => setIsWorkspaceExplorerOpen((current) => !current)}
-              >
-                <FolderOpen className="size-4" />
-              </button>
-            </div>
+            {!isFocusViewActive ? (
+              <div className="absolute right-4 top-4 z-20">
+                <button
+                  type="button"
+                  className={cn(
+                    "inline-flex h-10 w-10 items-center justify-center border border-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors",
+                    isWorkspaceExplorerOpen
+                      ? "bg-[var(--text-main)] text-white hover:bg-[var(--block-slate)]"
+                      : "bg-white text-[var(--text-main)] hover:bg-[var(--bg-cream)]",
+                  )}
+                  disabled={workspaceQuery.isLoading || !workspace?.workingDirectory}
+                  title={isWorkspaceExplorerOpen ? "Hide workspace explorer" : "Show workspace explorer"}
+                  onClick={() => setIsWorkspaceExplorerOpen((current) => !current)}
+                >
+                  <FolderOpen className="size-4" />
+                </button>
+              </div>
+            ) : null}
 
             <ReactFlow
               className="netchat-flow canvas-flow h-full w-full bg-[var(--bg-cream)]"
@@ -2724,7 +2859,7 @@ function NetchatApp() {
               <Background gap={96} size={1} color="var(--line-color)" />
             </ReactFlow>
 
-        {graph.nodes.length > 0 ? (
+        {!isFocusViewActive && graph.nodes.length > 0 ? (
           <CanvasThumbnail
             canvasSize={canvasSize}
             measuredNodeHeights={measuredNodeHeights}
@@ -2850,8 +2985,49 @@ function NetchatApp() {
           ) : null}
         </div>
 
+        {isFocusViewActive ? (
+          <div className="fixed inset-0 z-40 bg-[var(--bg-cream)]">
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.96)_0%,rgba(244,241,234,0)_100%)]" />
+            <div className="absolute right-4 top-4 z-10">
+              <button
+                type="button"
+                className="inline-flex h-10 min-w-[2.5rem] items-center justify-center border border-[var(--text-main)] bg-white px-2 text-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
+                title="Exit focus view"
+                onClick={exitFocusView}
+              >
+                <ZoomOut className="size-4" />
+              </button>
+            </div>
+
+            <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center px-4">
+              <div className="border border-[var(--text-main)] bg-white/96 px-4 py-2 text-[12px] font-medium uppercase tracking-[0.08em] text-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] backdrop-blur-sm">
+                Focus view. Press Esc or use the zoom-out button to exit.
+              </div>
+            </div>
+
+            <div ref={focusViewScrollRef} className="h-full overflow-y-auto px-4 pb-16 pt-24 sm:px-6 lg:px-8">
+              <div className="mx-auto flex w-full max-w-none flex-col gap-6">
+                {focusPathMessages.map((message) => (
+                  <FocusMessageBubble
+                    key={message.id}
+                    assistantLabel={message.runtimeKind ? resolveAgentRuntimeLabel(message.runtimeKind) : activeAgentLabel}
+                    hasSelectionDraft={selectionDraft?.sourceMessageId === message.id}
+                    isActiveMessage={message.id === focusViewTargetMessageId}
+                    message={message}
+                    persistedAssistantState={persistedAssistantStatesByMessageId[message.id] ?? null}
+                    selectionAnchors={focusSelectionAnchorsByMessageId.get(message.id) ?? []}
+                    onPickMessage={pickMessage}
+                    onSelectionDraft={applySelectionDraft}
+                    onToggleSelectionAnchor={toggleSelectionAnchor}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {showBubbleComposer ? (
-          <div className="pointer-events-none fixed inset-0 z-30">
+          <div className={cn("pointer-events-none fixed inset-0", isFocusViewActive ? "z-50" : "z-30")}>
             <form
               className="pointer-events-auto fixed border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[14px_14px_0_rgba(26,26,26,0.08)]"
               style={{
@@ -3699,7 +3875,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         style={{ width: messageNodeWidth }}
         onClickCapture={(event) => {
           const target = event.target as HTMLElement;
-          if (target.closest("[data-selection-anchor=\"true\"]")) {
+          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-focus-trigger=\"true\"]")) {
             return;
           }
 
@@ -3716,26 +3892,34 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         }}
         onMouseDownCapture={(event) => {
           const target = event.target as HTMLElement;
-          if (target.closest("[data-selection-anchor=\"true\"]")) {
+          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-focus-trigger=\"true\"]")) {
             return;
           }
 
           if (target.closest("[data-stream-block=\"true\"]")) {
             event.stopPropagation();
             return;
+          }
+
+          if (data.hasSelectionDraft) {
+            clearBrowserSelection();
           }
 
           event.stopPropagation();
         }}
         onPointerDownCapture={(event) => {
           const target = event.target as HTMLElement;
-          if (target.closest("[data-selection-anchor=\"true\"]")) {
+          if (target.closest("[data-selection-anchor=\"true\"]") || target.closest("[data-focus-trigger=\"true\"]")) {
             return;
           }
 
           if (target.closest("[data-stream-block=\"true\"]")) {
             event.stopPropagation();
             return;
+          }
+
+          if (data.hasSelectionDraft) {
+            clearBrowserSelection();
           }
 
           event.stopPropagation();
@@ -3766,8 +3950,30 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               </div>
             ) : null}
           </div>
-          <div className="shrink-0 editorial-meta text-[rgba(26,26,26,0.42)]">
-            {formatMessageTime(data.message.createdAt)}
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
+              {formatMessageTime(data.message.createdAt)}
+            </div>
+            {isArticle ? (
+              <button
+                type="button"
+                data-focus-trigger="true"
+                className="inline-flex h-8 min-w-[2rem] items-center justify-center border border-[var(--text-main)] bg-white px-2 text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)]"
+                title="Open focus view"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  data.onEnterFocusView(data.message.id);
+                }}
+              >
+                <ZoomIn className="size-3.5" />
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -3921,12 +4127,311 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
   );
 }
 
+function FocusMessageBubble({
+  message,
+  persistedAssistantState,
+  assistantLabel,
+  isActiveMessage,
+  hasSelectionDraft,
+  selectionAnchors,
+  onPickMessage,
+  onToggleSelectionAnchor,
+  onSelectionDraft,
+}: {
+  message: MessageNode;
+  persistedAssistantState: AssistantStreamState | null;
+  assistantLabel: string;
+  isActiveMessage: boolean;
+  hasSelectionDraft: boolean;
+  selectionAnchors: MessageSelectionAnchor[];
+  onPickMessage: (messageId: string) => void;
+  onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
+  onSelectionDraft: (draft: SelectionDraft) => void;
+}) {
+  const isAssistant = message.role === "assistant";
+  const isArticle = message.role === "article";
+  const isUser = message.role === "user";
+  const roleLabel = resolveMessageRoleLabel(message.role, assistantLabel);
+  const [assistantTraceExpanded, setAssistantTraceExpanded] = useState(false);
+  const liveAssistantState = useLiveAssistantStateStore((state) =>
+    isAssistant ? (state.statesByMessageId[message.id] ?? persistedAssistantState ?? null) : null,
+  );
+  const responseContent = isAssistant ? liveAssistantState?.responseText || message.content : message.content;
+  const canSelectMessage = isAssistant ? !liveAssistantState || liveAssistantState.status === "complete" : isArticle;
+  const showPendingAssistantState =
+    isAssistant && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
+  const renderStreamingResponseAsMarkdown = !showPendingAssistantState;
+  const visibleAssistantBlocks =
+    liveAssistantState?.blocks.filter((block) =>
+      block.kind === "thinking"
+        ? block.text.trim().length > 0
+        : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
+    ) ?? [];
+  const selectedPassage = isUser ? message.selectedText?.trim() ?? "" : "";
+
+  return (
+    <div
+      data-focus-message-id={message.id}
+      className="w-full"
+      style={{ scrollMarginTop: focusViewScrollTopInset }}
+    >
+      <div
+        className={cn(
+          "relative overflow-hidden border border-[var(--node-border)] border-t-[4px] bg-white text-left shadow-[10px_10px_0_rgba(26,26,26,0.08)] transition-colors",
+          !isAssistant
+            ? isActiveMessage
+              ? "border-t-[var(--block-slate)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(58,64,66,0.11)]"
+              : "border-t-[var(--block-slate)]"
+            : liveAssistantState?.status === "error"
+              ? "border-dashed border-rose-300 border-t-rose-500 bg-rose-50 shadow-[10px_10px_0_rgba(190,24,93,0.1)]"
+            : showPendingAssistantState
+              ? "border-dashed border-[var(--block-ochre)] border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.12)]"
+            : hasSelectionDraft
+              ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
+            : isActiveMessage
+              ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.15)]"
+              : "border-t-[var(--block-green)]",
+        )}
+        onClickCapture={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
+          if (target.closest("[data-stream-block=\"true\"]")) {
+            event.stopPropagation();
+            return;
+          }
+
+          const selectedText = window.getSelection()?.toString().trim();
+          if (isConversationSourceRole(message.role) && !selectedText) {
+            onPickMessage(message.id);
+          }
+          event.stopPropagation();
+        }}
+        onMouseDownCapture={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
+          if (target.closest("[data-stream-block=\"true\"]")) {
+            event.stopPropagation();
+            return;
+          }
+
+          if (hasSelectionDraft) {
+            clearBrowserSelection();
+          }
+
+          event.stopPropagation();
+        }}
+        onPointerDownCapture={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("[data-selection-anchor=\"true\"]")) {
+            return;
+          }
+
+          if (target.closest("[data-stream-block=\"true\"]")) {
+            event.stopPropagation();
+            return;
+          }
+
+          if (hasSelectionDraft) {
+            clearBrowserSelection();
+          }
+
+          event.stopPropagation();
+        }}
+      >
+        <div className="relative flex items-start justify-between gap-4 border-b border-[var(--node-border)] px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "editorial-meta",
+                  !isAssistant
+                    ? "text-[rgba(58,64,66,0.72)]"
+                    : showPendingAssistantState || hasSelectionDraft
+                      ? "text-[var(--block-ochre)]"
+                      : liveAssistantState?.status === "error"
+                        ? "text-rose-700"
+                        : "text-[var(--block-green)]",
+                )}
+              >
+                {roleLabel}
+              </div>
+              {showPendingAssistantState ? <LoaderCircle className="size-3.5 animate-spin text-[var(--block-ochre)]" /> : null}
+            </div>
+            {isUser && selectedPassage ? (
+              <div className="mt-2 break-words whitespace-pre-wrap text-[13px] italic leading-5 text-[rgba(26,26,26,0.56)]">
+                {`"${selectedPassage}"`}
+              </div>
+            ) : null}
+          </div>
+          <div className="shrink-0 editorial-meta text-[rgba(26,26,26,0.42)]">
+            {formatMessageTime(message.createdAt)}
+          </div>
+        </div>
+
+        <div className="relative px-4 py-4">
+          {isAssistant && liveAssistantState ? (
+            <div className="space-y-3">
+              {visibleAssistantBlocks.length > 0 ? (
+                <details
+                  data-stream-block="true"
+                  open={assistantTraceExpanded}
+                  onToggle={(event) => {
+                    const nextExpanded = event.currentTarget.open;
+                    setAssistantTraceExpanded((current) => (current === nextExpanded ? current : nextExpanded));
+                  }}
+                  className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.34)]"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-3 py-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <ChevronDown
+                        className={cn(
+                          "size-4 shrink-0 text-[rgba(26,26,26,0.46)] transition-transform",
+                          assistantTraceExpanded ? "rotate-0" : "-rotate-90",
+                        )}
+                      />
+                      <span className="editorial-meta text-[rgba(26,26,26,0.72)]">Thinking & Tools</span>
+                    </div>
+                  </summary>
+
+                  <div className="space-y-3 border-t border-[var(--node-border)] px-3 py-3">
+                    {visibleAssistantBlocks.map((block) => (
+                      <details
+                        key={block.id}
+                        data-stream-block="true"
+                        className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
+                      >
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-3 py-2.5">
+                          <span className="editorial-meta text-[rgba(26,26,26,0.66)]">
+                            {block.kind === "thinking" ? "Thinking" : `Tool 路 ${block.toolName}`}
+                          </span>
+                          <span
+                            className={cn(
+                              "editorial-meta",
+                              block.kind === "thinking"
+                                ? block.status === "complete"
+                                  ? "text-[rgba(26,26,26,0.44)]"
+                                  : "text-[var(--block-ochre)]"
+                                : block.status === "error"
+                                  ? "text-rose-700"
+                                  : block.status === "complete"
+                                    ? "text-[rgba(26,26,26,0.44)]"
+                                    : "text-[var(--block-ochre)]",
+                            )}
+                          >
+                            {block.status === "error" ? "Error" : block.status === "complete" ? "Complete" : "Streaming"}
+                          </span>
+                        </summary>
+                        <div className="space-y-3 px-3 py-3">
+                          {block.kind === "thinking" ? (
+                            <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
+                              {block.text || `${assistantLabel} is thinking...`}
+                            </div>
+                          ) : (
+                            <>
+                              <div>
+                                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
+                                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[13px] leading-6 text-[rgba(26,26,26,0.78)]">
+                                  {block.inputText || "Waiting for tool arguments..."}
+                                </pre>
+                              </div>
+                              {block.outputText ? (
+                                <div>
+                                  <div className="editorial-meta text-[rgba(26,26,26,0.44)]">
+                                    {block.isError ? "Tool error" : "Tool result"}
+                                  </div>
+                                  <pre
+                                    className={cn(
+                                      "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[13px] leading-6",
+                                      block.isError
+                                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                                        : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
+                                    )}
+                                  >
+                                    {block.outputText}
+                                  </pre>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+
+              <div
+                className={cn(
+                  "border px-3 py-3",
+                  showPendingAssistantState
+                    ? "border-dashed border-[var(--block-ochre)] bg-[rgba(255,249,242,0.72)]"
+                    : liveAssistantState.status === "error"
+                      ? "border-rose-200 bg-rose-50"
+                      : "border-[var(--node-border)] bg-white",
+                )}
+              >
+                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Response</div>
+                <div className="mt-3">
+                  {responseContent ? (
+                    <SelectableMessage
+                      nodeId={message.id}
+                      anchors={selectionAnchors}
+                      content={responseContent}
+                      disabled={!canSelectMessage}
+                      renderAnchorHandles={false}
+                      renderMarkdown={renderStreamingResponseAsMarkdown}
+                      syncNodeInternals={false}
+                      onToggleAnchor={onToggleSelectionAnchor}
+                      onSelection={(draft) => onSelectionDraft({ ...draft, sourceMessageId: message.id })}
+                    />
+                  ) : (
+                    <div className="flex min-h-[60px] items-center gap-3 text-[15px] leading-7 text-[rgba(26,26,26,0.58)]">
+                      <LoaderCircle className="size-4 animate-spin text-[var(--block-ochre)]" />
+                      <span>{`Waiting for ${assistantLabel} to respond...`}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {liveAssistantState.errorMessage ? (
+                <div className="border border-rose-200 bg-rose-50 px-3 py-2.5 text-[14px] leading-6 text-rose-700">
+                  {liveAssistantState.errorMessage}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <SelectableMessage
+              nodeId={message.id}
+              anchors={selectionAnchors}
+              content={responseContent}
+              disabled={!canSelectMessage}
+              renderAnchorHandles={false}
+              renderMarkdown={isArticle && isMarkdownFilePath(message.sourcePath ?? "")}
+              syncNodeInternals={false}
+              onToggleAnchor={onToggleSelectionAnchor}
+              onSelection={(draft) => onSelectionDraft({ ...draft, sourceMessageId: message.id })}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SelectableMessage({
   nodeId,
   content,
   anchors,
   disabled,
+  renderAnchorHandles = true,
   renderMarkdown,
+  syncNodeInternals = true,
   onToggleAnchor,
   onSelection,
 }: {
@@ -3934,7 +4439,9 @@ function SelectableMessage({
   content: string;
   anchors: MessageSelectionAnchor[];
   disabled: boolean;
+  renderAnchorHandles?: boolean;
   renderMarkdown: boolean;
+  syncNodeInternals?: boolean;
   onToggleAnchor: (anchor: MessageSelectionAnchor) => void;
   onSelection: (draft: Omit<SelectionDraft, "sourceMessageId">) => void;
 }) {
@@ -4006,6 +4513,10 @@ function SelectableMessage({
   );
 
   useEffect(() => {
+    if (!syncNodeInternals) {
+      return;
+    }
+
     // React Flow only needs to refresh handles when their layout actually changes.
     const frame = window.requestAnimationFrame(() => {
       updateNodeInternals(nodeId);
@@ -4014,7 +4525,7 @@ function SelectableMessage({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [nodeId, nodeInternalsSignature, updateNodeInternals]);
+  }, [nodeId, nodeInternalsSignature, syncNodeInternals, updateNodeInternals]);
 
   return (
     <div
@@ -4126,13 +4637,15 @@ function SelectableMessage({
                   onToggleAnchor(anchor);
                 }}
               >
-                <Handle
-                  id={anchor.handleId}
-                  type="source"
-                  position={Position.Bottom}
-                  isConnectable={false}
-                  className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
-                />
+                {renderAnchorHandles ? (
+                  <Handle
+                    id={anchor.handleId}
+                    type="source"
+                    position={Position.Bottom}
+                    isConnectable={false}
+                    className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                  />
+                ) : null}
                 <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
               </button>
             ))}
@@ -4177,13 +4690,15 @@ function SelectableMessage({
                   onToggleAnchor(anchor);
                 }}
               >
-                <Handle
-                  id={anchor.handleId}
-                  type="source"
-                  position={Position.Bottom}
-                  isConnectable={false}
-                  className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
-                />
+                {renderAnchorHandles ? (
+                  <Handle
+                    id={anchor.handleId}
+                    type="source"
+                    position={Position.Bottom}
+                    isConnectable={false}
+                    className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                  />
+                ) : null}
                 <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
               </button>
             ))}
@@ -4521,61 +5036,18 @@ function makeSelectionAnchorHandleId(branchId: string) {
   return `selection-anchor-${branchId}`;
 }
 
-function buildFlowGraph({
-  defaultAssistantLabel,
-  expandedBranchIds,
-  persistedAssistantStatesByMessageId,
-  snapshot,
-  activePathMessageId,
-  selectionDraft,
-  measuredNodeHeights,
-  onMeasureHeight,
-  onPickMessage,
-  onToggleSelectionAnchor,
-  onSelectionDraft,
-  showSessionIds,
-}: {
-  defaultAssistantLabel: string;
-  expandedBranchIds: Set<string>;
-  persistedAssistantStatesByMessageId: Record<string, AssistantStreamState | null>;
-  snapshot: GraphSnapshot;
-  activePathMessageId: string | null;
-  selectionDraft: SelectionDraft | null;
-  measuredNodeHeights: Record<string, number>;
-  onMeasureHeight: (messageId: string, height: number) => void;
-  onPickMessage: (messageId: string) => void;
-  onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
-  onSelectionDraft: (draft: SelectionDraft) => void;
-  showSessionIds: boolean;
-}) {
-  const activeEdgeIds = getActiveEdgeIds(snapshot, activePathMessageId);
-  const nodes: Node[] = [];
-
-  if (snapshot.messages.length === 0) {
-    return { nodes, edges: [] };
-  }
-
-  const visibleBranchIds = getVisibleBranchIds(snapshot, activePathMessageId, expandedBranchIds);
+function buildSelectionAnchorMetadata(snapshot: GraphSnapshot, visibleBranchIds: Set<string>) {
   const branchOrder = new Map(snapshot.branches.map((branch, index) => [branch.id, index]));
   const messagesById = new Map(snapshot.messages.map((message) => [message.id, message]));
   const allMessagesByBranch = new Map<string, MessageNode[]>();
   const childBranchesBySourceMessage = new Map<string, typeof snapshot.branches>();
   const selectionAnchorsByMessageId = new Map<string, MessageSelectionAnchor[]>();
   const sourceHandleByEdgeId = new Map<string, string>();
-  const visibleBranches = snapshot.branches.filter((branch) => visibleBranchIds.has(branch.id));
-  const visibleMessages = snapshot.messages.filter((message) => visibleBranchIds.has(message.branchId));
-  const visibleMessagesByBranch = new Map<string, MessageNode[]>();
 
   for (const message of snapshot.messages) {
     const branchMessages = allMessagesByBranch.get(message.branchId) ?? [];
     branchMessages.push(message);
     allMessagesByBranch.set(message.branchId, branchMessages);
-  }
-
-  for (const message of visibleMessages) {
-    const branchMessages = visibleMessagesByBranch.get(message.branchId) ?? [];
-    branchMessages.push(message);
-    visibleMessagesByBranch.set(message.branchId, branchMessages);
   }
 
   for (const branch of snapshot.branches) {
@@ -4615,6 +5087,128 @@ function buildFlowGraph({
 
   for (const childBranches of childBranchesBySourceMessage.values()) {
     childBranches.sort((left, right) => (branchOrder.get(left.id) ?? 0) - (branchOrder.get(right.id) ?? 0));
+  }
+
+  return {
+    childBranchesBySourceMessage,
+    selectionAnchorsByMessageId,
+    sourceHandleByEdgeId,
+  };
+}
+
+function buildVisiblePathMessages(snapshot: GraphSnapshot, targetMessageId: string) {
+  const targetMessage = snapshot.messages.find((message) => message.id === targetMessageId);
+  if (!targetMessage) {
+    return [] as MessageNode[];
+  }
+
+  const branchesById = new Map(snapshot.branches.map((branch) => [branch.id, branch]));
+  const messagesByBranch = new Map<string, MessageNode[]>();
+
+  for (const message of snapshot.messages) {
+    const branchMessages = messagesByBranch.get(message.branchId) ?? [];
+    branchMessages.push(message);
+    messagesByBranch.set(message.branchId, branchMessages);
+  }
+
+  const lineage: GraphSnapshot["branches"] = [];
+  let currentBranchId: string | null = targetMessage.branchId;
+
+  while (currentBranchId) {
+    const branch = branchesById.get(currentBranchId);
+    if (!branch) {
+      break;
+    }
+
+    lineage.push(branch);
+    currentBranchId = branch.parentBranchId;
+  }
+
+  lineage.reverse();
+
+  const stopMessageIds = new Map<string, string>();
+  stopMessageIds.set(targetMessage.branchId, targetMessage.id);
+
+  for (let index = 1; index < lineage.length; index += 1) {
+    const parentBranch = lineage[index - 1];
+    const childBranch = lineage[index];
+    if (!childBranch.sourceMessageId) {
+      continue;
+    }
+
+    stopMessageIds.set(parentBranch.id, childBranch.sourceMessageId);
+  }
+
+  const visibleMessages: MessageNode[] = [];
+
+  for (const branch of lineage) {
+    const branchMessages = messagesByBranch.get(branch.id) ?? [];
+    const stopMessageId = stopMessageIds.get(branch.id);
+    if (!stopMessageId) {
+      continue;
+    }
+
+    for (const message of branchMessages) {
+      visibleMessages.push(message);
+      if (message.id === stopMessageId) {
+        break;
+      }
+    }
+  }
+
+  return visibleMessages;
+}
+
+function buildFlowGraph({
+  defaultAssistantLabel,
+  expandedBranchIds,
+  persistedAssistantStatesByMessageId,
+  snapshot,
+  activePathMessageId,
+  selectionDraft,
+  measuredNodeHeights,
+  onMeasureHeight,
+  onEnterFocusView,
+  onPickMessage,
+  onToggleSelectionAnchor,
+  onSelectionDraft,
+  showSessionIds,
+}: {
+  defaultAssistantLabel: string;
+  expandedBranchIds: Set<string>;
+  persistedAssistantStatesByMessageId: Record<string, AssistantStreamState | null>;
+  snapshot: GraphSnapshot;
+  activePathMessageId: string | null;
+  selectionDraft: SelectionDraft | null;
+  measuredNodeHeights: Record<string, number>;
+  onMeasureHeight: (messageId: string, height: number) => void;
+  onEnterFocusView: (messageId: string) => void;
+  onPickMessage: (messageId: string) => void;
+  onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
+  onSelectionDraft: (draft: SelectionDraft) => void;
+  showSessionIds: boolean;
+}) {
+  const activeEdgeIds = getActiveEdgeIds(snapshot, activePathMessageId);
+  const nodes: Node[] = [];
+
+  if (snapshot.messages.length === 0) {
+    return { nodes, edges: [] };
+  }
+
+  const visibleBranchIds = getVisibleBranchIds(snapshot, activePathMessageId, expandedBranchIds);
+  const {
+    childBranchesBySourceMessage,
+    selectionAnchorsByMessageId,
+    sourceHandleByEdgeId,
+  } = buildSelectionAnchorMetadata(snapshot, visibleBranchIds);
+  const visibleBranches = snapshot.branches.filter((branch) => visibleBranchIds.has(branch.id));
+  const visibleMessages = snapshot.messages.filter((message) => visibleBranchIds.has(message.branchId));
+  const visibleMessagesByBranch = new Map<string, MessageNode[]>();
+
+  for (const message of visibleMessages) {
+    const branchMessages = visibleMessagesByBranch.get(message.branchId) ?? [];
+    branchMessages.push(message);
+    visibleMessagesByBranch.set(message.branchId, branchMessages);
   }
 
   const visibleEdgeSnapshot = buildGraphEdges({
@@ -4687,6 +5281,7 @@ function buildFlowGraph({
           showSessionId: showSessionIds,
           sessionLabelSide: laneIndex < 0 ? "left" : "right",
           onMeasureHeight,
+          onEnterFocusView,
           onPickMessage,
           onToggleSelectionAnchor,
           onSelectionDraft,

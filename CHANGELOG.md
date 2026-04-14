@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-14
+
+- Added an article-only Focus View with a new zoom-in action on article bubbles, opening a full-screen reading mode that hides sidebar, explorer chrome, and minimap so one branch path can be read as a document instead of a canvas.
+- Kept selection follow-ups and branch anchor toggles working inside Focus View, and now auto-scroll focus mode to newly expanded branch tops and optimistic in-progress assistant bubbles after send so branch reading flow stays uninterrupted.
+- Let clicking the same assistant or article bubble dismiss an already-open inline composer, including selection-based follow-up composers, so users can toggle reply mode off without extra canvas clicks.
+
 ## 2026-04-13
 
 - Added a new-chat Article Mode that swaps the first-turn textarea for a workspace file picker and seeds the canvas from a selected local file, so users can begin a conversation from article source material instead of typing the opening bubble manually.
