@@ -22,6 +22,7 @@ import {
   useNodesInitialized,
   useUpdateNodeInternals,
   useReactFlow,
+  useViewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -87,7 +88,7 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
 const messageNodeWidth = Math.round((1480 * 2) / 3);
 const branchLaneWidth = 1860;
 const branchMessageGap = 96;
-const branchForkGap = 92;
+const branchForkHandleTop = 112;
 const bubbleComposerGap = 18;
 const bubbleComposerWidth = 760;
 const newNetComposerWidth = 840;
@@ -147,6 +148,7 @@ type MessageNodeData = {
   showSessionId: boolean;
   sessionLabelSide: "left" | "right";
   onMeasureHeight: (messageId: string, height: number) => void;
+  onMeasureSelectionAnchors: (messageId: string, anchors: MeasuredSelectionAnchorLayout[]) => void;
   onEnterFocusView: (messageId: string) => void;
   onPickMessage: (messageId: string) => void;
   onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
@@ -162,6 +164,12 @@ type MessageSelectionAnchor = {
   startOffset: number | null;
   endOffset: number | null;
   isExpanded: boolean;
+};
+
+type MeasuredSelectionAnchorLayout = {
+  id: string;
+  side: "left" | "right";
+  top: number;
 };
 
 type ActiveStreamedTurn = {
@@ -376,6 +384,9 @@ function NetchatApp() {
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
   const [focusViewTargetMessageId, setFocusViewTargetMessageId] = useState<string | null>(null);
+  const [measuredSelectionAnchorLayoutsByMessageId, setMeasuredSelectionAnchorLayoutsByMessageId] = useState<
+    Record<string, MeasuredSelectionAnchorLayout[]>
+  >({});
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [isSidebarTransitionReady, setIsSidebarTransitionReady] = useState(false);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => readStringArrayFromLocalStorage(workspaceOrderStorageKey));
@@ -1302,6 +1313,40 @@ function NetchatApp() {
           },
     );
   }, []);
+  const reportSelectionAnchorLayouts = useCallback(
+    (messageId: string, anchors: MeasuredSelectionAnchorLayout[]) => {
+      const normalizedAnchors = [...anchors]
+        .map((anchor) => ({
+          id: anchor.id,
+          side: anchor.side,
+          top: Math.max(0, Math.round(anchor.top)),
+        }))
+        .sort((left, right) => left.top - right.top || left.id.localeCompare(right.id));
+
+      setMeasuredSelectionAnchorLayoutsByMessageId((current) => {
+        const previousAnchors = current[messageId] ?? [];
+        if (areMeasuredSelectionAnchorLayoutsEqual(previousAnchors, normalizedAnchors)) {
+          return current;
+        }
+
+        if (normalizedAnchors.length === 0) {
+          if (!(messageId in current)) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next[messageId];
+          return next;
+        }
+
+        return {
+          ...current,
+          [messageId]: normalizedAnchors,
+        };
+      });
+    },
+    [],
+  );
   const expandedBranchIdSet = useMemo(() => new Set(expandedBranchIds), [expandedBranchIds]);
 
   const toggleSelectionAnchor = useCallback(
@@ -1362,7 +1407,9 @@ function NetchatApp() {
       onEnterFocusView: openFocusView,
       selectionDraft,
       measuredNodeHeights,
+      measuredSelectionAnchorLayoutsByMessageId,
       onMeasureHeight: reportMessageNodeHeight,
+      onMeasureSelectionAnchors: reportSelectionAnchorLayouts,
       onSelectionDraft: applySelectionDraft,
       showSessionIds: uiConfig?.showSessionIds ?? false,
     });
@@ -1370,10 +1417,12 @@ function NetchatApp() {
     activeAgentLabel,
     expandedBranchIdSet,
     measuredNodeHeights,
+    measuredSelectionAnchorLayoutsByMessageId,
     openFocusView,
     pathViewportMessageId,
     persistedAssistantStatesByMessageId,
     reportMessageNodeHeight,
+    reportSelectionAnchorLayouts,
     selectionDraft,
     snapshot,
     toggleSelectionAnchor,
@@ -3796,6 +3845,14 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
     ) ?? [];
   const selectedPassage = isUser ? data.message.selectedText?.trim() ?? "" : "";
+  const viewport = useViewport();
+  const selectionAnchorSignature = useMemo(
+    () =>
+      JSON.stringify(
+        data.selectionAnchors.map((anchor) => [anchor.id, anchor.isExpanded, anchor.startOffset, anchor.endOffset, anchor.label]),
+      ),
+    [data.selectionAnchors],
+  );
 
   useEffect(() => {
     const bubbleElement = bubbleRef.current;
@@ -3824,6 +3881,48 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     };
   }, [assistantTraceExpanded, data.message.id, data.onMeasureHeight, shouldFreezeMeasuredHeight]);
 
+  useEffect(() => {
+    const bubbleElement = bubbleRef.current;
+    if (!bubbleElement) {
+      return;
+    }
+
+    const reportSelectionAnchors = () => {
+      const bubbleRect = bubbleElement.getBoundingClientRect();
+      const nextAnchors = Array.from(bubbleElement.querySelectorAll<HTMLElement>("[data-selection-anchor-id]"))
+        .map((button) => {
+          const anchorId = button.dataset.selectionAnchorId?.trim() ?? "";
+          if (!anchorId) {
+            return null;
+          }
+
+          const buttonRect = button.getBoundingClientRect();
+          const handleRect = button.querySelector<HTMLElement>(".react-flow__handle")?.getBoundingClientRect() ?? buttonRect;
+          return {
+            id: anchorId,
+            side: button.dataset.selectionAnchorSide === "right" ? ("right" as const) : ("left" as const),
+            top: (handleRect.top - bubbleRect.top + handleRect.height / 2) / Math.max(viewport.zoom, 0.0001),
+          } satisfies MeasuredSelectionAnchorLayout;
+        })
+        .filter((anchor): anchor is MeasuredSelectionAnchorLayout => anchor !== null);
+
+      data.onMeasureSelectionAnchors(data.message.id, nextAnchors);
+    };
+
+    reportSelectionAnchors();
+
+    const frame = window.requestAnimationFrame(reportSelectionAnchors);
+    const observer = new ResizeObserver(reportSelectionAnchors);
+    observer.observe(bubbleElement);
+    window.addEventListener("resize", reportSelectionAnchors);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", reportSelectionAnchors);
+    };
+  }, [assistantTraceExpanded, data.message.id, data.onMeasureSelectionAnchors, responseContent, selectionAnchorSignature, viewport.zoom]);
+
   return (
     <div className="relative" style={{ width: messageNodeWidth }}>
       {data.showSessionId ? (
@@ -3848,10 +3947,42 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
         className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
       />
       <Handle
+        id={makeForkTargetHandleId("left")}
+        type="target"
+        position={Position.Left}
+        isConnectable={false}
+        className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+        style={{ top: branchForkHandleTop }}
+      />
+      <Handle
+        id={makeForkTargetHandleId("right")}
+        type="target"
+        position={Position.Right}
+        isConnectable={false}
+        className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+        style={{ top: branchForkHandleTop }}
+      />
+      <Handle
         type="source"
         position={Position.Bottom}
         isConnectable={false}
         className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+      />
+      <Handle
+        id={makeForkSourceHandleId("left")}
+        type="source"
+        position={Position.Left}
+        isConnectable={false}
+        className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+        style={{ top: branchForkHandleTop }}
+      />
+      <Handle
+        id={makeForkSourceHandleId("right")}
+        type="source"
+        position={Position.Right}
+        isConnectable={false}
+        className="!h-1 !w-1 !border-0 !bg-transparent opacity-0"
+        style={{ top: branchForkHandleTop }}
       />
 
       <div
@@ -4618,6 +4749,8 @@ function SelectableMessage({
                 key={anchor.id}
                 type="button"
                 data-selection-anchor="true"
+                data-selection-anchor-id={anchor.id}
+                data-selection-anchor-side={anchor.side}
                 title={anchor.label}
                 className={cn(
                   "nodrag nopan absolute left-1/2 z-10 inline-flex w-[112px] -translate-x-1/2 -translate-y-1/2 items-center justify-center border px-2 py-1 text-center text-[10px] leading-4 transition-colors",
@@ -4641,9 +4774,14 @@ function SelectableMessage({
                   <Handle
                     id={anchor.handleId}
                     type="source"
-                    position={Position.Bottom}
+                    position={anchor.side === "left" ? Position.Left : Position.Right}
                     isConnectable={false}
-                    className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                    className={cn(
+                      "!h-1 !w-1 !border-0 !bg-transparent opacity-0",
+                      anchor.side === "left"
+                        ? "!left-0 !top-1/2 !-translate-x-0 !-translate-y-1/2"
+                        : "!right-0 !top-1/2 !translate-x-0 !-translate-y-1/2",
+                    )}
                   />
                 ) : null}
                 <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
@@ -4671,6 +4809,8 @@ function SelectableMessage({
                 key={anchor.id}
                 type="button"
                 data-selection-anchor="true"
+                data-selection-anchor-id={anchor.id}
+                data-selection-anchor-side={anchor.side}
                 title={anchor.label}
                 className={cn(
                   "nodrag nopan absolute left-1/2 z-10 inline-flex w-[112px] -translate-x-1/2 -translate-y-1/2 items-center justify-center border px-2 py-1 text-center text-[10px] leading-4 transition-colors",
@@ -4694,9 +4834,14 @@ function SelectableMessage({
                   <Handle
                     id={anchor.handleId}
                     type="source"
-                    position={Position.Bottom}
+                    position={anchor.side === "left" ? Position.Left : Position.Right}
                     isConnectable={false}
-                    className="!bottom-0 !left-1/2 !h-1 !w-1 !-translate-x-1/2 !translate-y-0 !border-0 !bg-transparent opacity-0"
+                    className={cn(
+                      "!h-1 !w-1 !border-0 !bg-transparent opacity-0",
+                      anchor.side === "left"
+                        ? "!left-0 !top-1/2 !-translate-x-0 !-translate-y-1/2"
+                        : "!right-0 !top-1/2 !translate-x-0 !-translate-y-1/2",
+                    )}
                   />
                 ) : null}
                 <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
@@ -4859,6 +5004,29 @@ function arePositionedSelectionAnchorsEqual(
       leftAnchor.side !== rightAnchor.side ||
       leftAnchor.top !== rightAnchor.top
     ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function areMeasuredSelectionAnchorLayoutsEqual(
+  left: MeasuredSelectionAnchorLayout[],
+  right: MeasuredSelectionAnchorLayout[],
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftAnchor = left[index];
+    const rightAnchor = right[index];
+    if (!rightAnchor) {
+      return false;
+    }
+
+    if (leftAnchor.id !== rightAnchor.id || leftAnchor.side !== rightAnchor.side || leftAnchor.top !== rightAnchor.top) {
       return false;
     }
   }
@@ -5036,13 +5204,20 @@ function makeSelectionAnchorHandleId(branchId: string) {
   return `selection-anchor-${branchId}`;
 }
 
+function makeForkSourceHandleId(side: "left" | "right") {
+  return `fork-source-${side}`;
+}
+
+function makeForkTargetHandleId(side: "left" | "right") {
+  return `fork-target-${side}`;
+}
+
 function buildSelectionAnchorMetadata(snapshot: GraphSnapshot, visibleBranchIds: Set<string>) {
   const branchOrder = new Map(snapshot.branches.map((branch, index) => [branch.id, index]));
   const messagesById = new Map(snapshot.messages.map((message) => [message.id, message]));
   const allMessagesByBranch = new Map<string, MessageNode[]>();
   const childBranchesBySourceMessage = new Map<string, typeof snapshot.branches>();
   const selectionAnchorsByMessageId = new Map<string, MessageSelectionAnchor[]>();
-  const sourceHandleByEdgeId = new Map<string, string>();
 
   for (const message of snapshot.messages) {
     const branchMessages = allMessagesByBranch.get(message.branchId) ?? [];
@@ -5064,7 +5239,6 @@ function buildSelectionAnchorMetadata(snapshot: GraphSnapshot, visibleBranchIds:
       continue;
     }
 
-    const forkEdgeId = `edge_fork_${branch.sourceMessageId}_${firstBranchMessage.id}`;
     const anchors = selectionAnchorsByMessageId.get(branch.sourceMessageId) ?? [];
     const label = branch.selectedText.trim() || "Selected passage";
 
@@ -5079,10 +5253,6 @@ function buildSelectionAnchorMetadata(snapshot: GraphSnapshot, visibleBranchIds:
       isExpanded: visibleBranchIds.has(branch.id),
     });
     selectionAnchorsByMessageId.set(branch.sourceMessageId, anchors);
-
-    if (visibleBranchIds.has(branch.id)) {
-      sourceHandleByEdgeId.set(forkEdgeId, makeSelectionAnchorHandleId(branch.id));
-    }
   }
 
   for (const childBranches of childBranchesBySourceMessage.values()) {
@@ -5092,7 +5262,6 @@ function buildSelectionAnchorMetadata(snapshot: GraphSnapshot, visibleBranchIds:
   return {
     childBranchesBySourceMessage,
     selectionAnchorsByMessageId,
-    sourceHandleByEdgeId,
   };
 }
 
@@ -5167,7 +5336,9 @@ function buildFlowGraph({
   activePathMessageId,
   selectionDraft,
   measuredNodeHeights,
+  measuredSelectionAnchorLayoutsByMessageId,
   onMeasureHeight,
+  onMeasureSelectionAnchors,
   onEnterFocusView,
   onPickMessage,
   onToggleSelectionAnchor,
@@ -5181,7 +5352,9 @@ function buildFlowGraph({
   activePathMessageId: string | null;
   selectionDraft: SelectionDraft | null;
   measuredNodeHeights: Record<string, number>;
+  measuredSelectionAnchorLayoutsByMessageId: Record<string, MeasuredSelectionAnchorLayout[]>;
   onMeasureHeight: (messageId: string, height: number) => void;
+  onMeasureSelectionAnchors: (messageId: string, anchors: MeasuredSelectionAnchorLayout[]) => void;
   onEnterFocusView: (messageId: string) => void;
   onPickMessage: (messageId: string) => void;
   onToggleSelectionAnchor: (anchor: MessageSelectionAnchor) => void;
@@ -5199,7 +5372,6 @@ function buildFlowGraph({
   const {
     childBranchesBySourceMessage,
     selectionAnchorsByMessageId,
-    sourceHandleByEdgeId,
   } = buildSelectionAnchorMetadata(snapshot, visibleBranchIds);
   const visibleBranches = snapshot.branches.filter((branch) => visibleBranchIds.has(branch.id));
   const visibleMessages = snapshot.messages.filter((message) => visibleBranchIds.has(message.branchId));
@@ -5210,6 +5382,43 @@ function buildFlowGraph({
     branchMessages.push(message);
     visibleMessagesByBranch.set(message.branchId, branchMessages);
   }
+
+  function getMeasuredSelectionAnchorLayout(sourceMessageId: string, branchId: string) {
+    return measuredSelectionAnchorLayoutsByMessageId[sourceMessageId]?.find((anchor) => anchor.id === branchId) ?? null;
+  }
+
+  const branchLaneById = new Map<string, number>([[rootBranchId, 0]]);
+  const branchSideById = new Map<string, "center" | "left" | "right">([[rootBranchId, "center"]]);
+  let nextLeftLane = -1;
+  let nextRightLane = 1;
+
+  placeBranch(rootBranchId, 0);
+
+  const forkSourceHandleByEdgeId = new Map<string, string>();
+  const forkTargetHandleByEdgeId = new Map<string, string>();
+
+  visibleBranches.forEach((branch) => {
+    if (!branch.sourceMessageId) {
+      return;
+    }
+
+    const firstBranchMessage = visibleMessagesByBranch.get(branch.id)?.[0];
+    const measuredAnchorLayout = getMeasuredSelectionAnchorLayout(branch.sourceMessageId, branch.id);
+    const branchSide = measuredAnchorLayout?.side ?? branchSideById.get(branch.id);
+    if (!firstBranchMessage || (branchSide !== "left" && branchSide !== "right")) {
+      return;
+    }
+
+    const forkEdgeId = `edge_fork_${branch.sourceMessageId}_${firstBranchMessage.id}`;
+    forkSourceHandleByEdgeId.set(
+      forkEdgeId,
+      branch.selectedText?.trim() ? makeSelectionAnchorHandleId(branch.id) : makeForkSourceHandleId(branchSide),
+    );
+    forkTargetHandleByEdgeId.set(
+      forkEdgeId,
+      makeForkTargetHandleId(branchSide === "left" ? "right" : "left"),
+    );
+  });
 
   const visibleEdgeSnapshot = buildGraphEdges({
     branches: visibleBranches,
@@ -5222,8 +5431,9 @@ function buildFlowGraph({
     return {
       id: edge.id,
       source: edge.source,
-      sourceHandle: sourceHandleByEdgeId.get(edge.id),
+      sourceHandle: edge.kind === "fork" ? forkSourceHandleByEdgeId.get(edge.id) : undefined,
       target: edge.target,
+      targetHandle: edge.kind === "fork" ? forkTargetHandleByEdgeId.get(edge.id) : undefined,
       type: "step",
       zIndex: isActive ? 5 : 1,
       markerEnd: {
@@ -5238,13 +5448,6 @@ function buildFlowGraph({
       },
     };
   });
-
-  const branchLaneById = new Map<string, number>([[rootBranchId, 0]]);
-  const branchSideById = new Map<string, "center" | "left" | "right">([[rootBranchId, "center"]]);
-  let nextLeftLane = -1;
-  let nextRightLane = 1;
-
-  placeBranch(rootBranchId, 0);
 
   return { nodes, edges };
 
@@ -5281,6 +5484,7 @@ function buildFlowGraph({
           showSessionId: showSessionIds,
           sessionLabelSide: laneIndex < 0 ? "left" : "right",
           onMeasureHeight,
+          onMeasureSelectionAnchors,
           onEnterFocusView,
           onPickMessage,
           onToggleSelectionAnchor,
@@ -5295,29 +5499,33 @@ function buildFlowGraph({
           return;
         }
 
-        assignLaneToBranch(childBranch.id, branchId);
-        placeBranch(childBranch.id, cursorY + height + branchForkGap);
+        assignLaneToBranch(childBranch, branchId);
+        const measuredAnchorLayout = getMeasuredSelectionAnchorLayout(message.id, childBranch.id);
+        const nextStartY = measuredAnchorLayout ? cursorY + measuredAnchorLayout.top - branchForkHandleTop : cursorY;
+        placeBranch(childBranch.id, nextStartY);
       });
 
       cursorY += height + branchMessageGap;
     });
   }
 
-  function assignLaneToBranch(
-    branchId: string,
-    parentBranchId: string,
-  ) {
+  function assignLaneToBranch(branch: GraphSnapshot["branches"][number], parentBranchId: string) {
+    const branchId = branch.id;
     if (branchLaneById.has(branchId)) {
       return;
     }
 
     const parentSide = branchSideById.get(parentBranchId) ?? "center";
+    const measuredAnchorLayout = branch.sourceMessageId
+      ? getMeasuredSelectionAnchorLayout(branch.sourceMessageId, branch.id)
+      : null;
     const side =
-      parentSide === "center"
+      measuredAnchorLayout?.side ??
+      (parentSide === "center"
         ? Math.abs(nextLeftLane) <= Math.abs(nextRightLane)
           ? "left"
           : "right"
-        : parentSide;
+        : parentSide);
     const laneIndex = side === "left" ? nextLeftLane-- : nextRightLane++;
 
     branchSideById.set(branchId, side);

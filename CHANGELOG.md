@@ -5,6 +5,7 @@
 - Added an article-only Focus View with a new zoom-in action on article bubbles, opening a full-screen reading mode that hides sidebar, explorer chrome, and minimap so one branch path can be read as a document instead of a canvas.
 - Kept selection follow-ups and branch anchor toggles working inside Focus View, and now auto-scroll focus mode to newly expanded branch tops and optimistic in-progress assistant bubbles after send so branch reading flow stays uninterrupted.
 - Let clicking the same assistant or article bubble dismiss an already-open inline composer, including selection-based follow-up composers, so users can toggle reply mode off without extra canvas clicks.
+- Repositioned forked branch entry bubbles to seed from the selected-passage anchor when a branch comes from highlighted text, with lateral fork routing as the fallback for non-selection branches, so expanding a branch tracks the relevant passage instead of dropping below a very tall source bubble.
 
 ## 2026-04-13
 
