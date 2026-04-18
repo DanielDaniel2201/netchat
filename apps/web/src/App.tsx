@@ -74,7 +74,9 @@ import {
   resolveAgentRuntimeLabel,
   rootBranchId,
 } from "@netchat/shared";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { create } from "zustand";
 
 import claudeIconUrl from "./assets/claude.svg";
@@ -228,44 +230,44 @@ type FocusBranchContinuation = {
 
 type FocusReturnState =
   | {
-      kind: "selection-anchor";
-      returnFocusMessageId: string;
-      sourceMessageId: string;
-      branchId: string;
-    }
+    kind: "selection-anchor";
+    returnFocusMessageId: string;
+    sourceMessageId: string;
+    branchId: string;
+  }
   | {
-      kind: "continuation-chooser";
-      returnFocusMessageId: string;
-      sourceMessageId: string;
-      branchId: string;
-    };
+    kind: "continuation-chooser";
+    returnFocusMessageId: string;
+    sourceMessageId: string;
+    branchId: string;
+  };
 
 type PendingFocusReturnScroll =
   | {
-      kind: "selection-anchor";
-      sourceMessageId: string;
-      branchId: string;
-      behavior: ScrollBehavior;
-    }
+    kind: "selection-anchor";
+    sourceMessageId: string;
+    branchId: string;
+    behavior: ScrollBehavior;
+  }
   | {
-      kind: "continuation-chooser";
-      sourceMessageId: string;
-      behavior: ScrollBehavior;
-    };
+    kind: "continuation-chooser";
+    sourceMessageId: string;
+    behavior: ScrollBehavior;
+  };
 
 type WorkspacePaneDragState =
   | {
-      kind: "canvas-explorer";
-      startClientX: number;
-      startPanelsWidth: number;
-      hasFilePreview: boolean;
-    }
+    kind: "canvas-explorer";
+    startClientX: number;
+    startPanelsWidth: number;
+    hasFilePreview: boolean;
+  }
   | {
-      kind: "explorer-file";
-      startClientX: number;
-      startExplorerWidth: number;
-      totalPanelsWidth: number;
-    };
+    kind: "explorer-file";
+    startClientX: number;
+    startExplorerWidth: number;
+    totalPanelsWidth: number;
+  };
 
 const useComposerStore = create<{
   selectedMessageId: string | null;
@@ -287,8 +289,8 @@ const useLiveAssistantStateStore = create<{
       Object.keys(current.statesByMessageId).length === 0
         ? current
         : {
-            statesByMessageId: {},
-          },
+          statesByMessageId: {},
+        },
     ),
   pruneStates: (messageIds) =>
     set((current) => {
@@ -307,8 +309,8 @@ const useLiveAssistantStateStore = create<{
 
       return changed
         ? {
-            statesByMessageId: nextStates,
-          }
+          statesByMessageId: nextStates,
+        }
         : current;
     }),
   setState: (messageId, nextState) =>
@@ -316,11 +318,11 @@ const useLiveAssistantStateStore = create<{
       assistantStatesEqual(current.statesByMessageId[messageId] ?? null, nextState)
         ? current
         : {
-            statesByMessageId: {
-              ...current.statesByMessageId,
-              [messageId]: nextState,
-            },
+          statesByMessageId: {
+            ...current.statesByMessageId,
+            [messageId]: nextState,
           },
+        },
     ),
 }));
 
@@ -389,6 +391,9 @@ const markdownComponents: Components = {
     );
   },
 };
+
+const markdownRemarkPlugins = [remarkGfm, remarkMath];
+const markdownRehypePlugins = [rehypeKatex];
 
 export default function App() {
   return (
@@ -713,10 +718,10 @@ function NetchatApp() {
           setLiveAssistantState(
             event.assistantMessageId,
             persistedAssistantState ??
-              projectAssistantStateForRender(
-                finalizeAssistantState(currentLiveAssistantState, committedMessage?.content ?? ""),
-              ) ??
+            projectAssistantStateForRender(
               finalizeAssistantState(currentLiveAssistantState, committedMessage?.content ?? ""),
+            ) ??
+            finalizeAssistantState(currentLiveAssistantState, committedMessage?.content ?? ""),
           );
           setSelectedMessageId(event.assistantMessageId);
           setActivePathMessageId(event.assistantMessageId);
@@ -728,9 +733,9 @@ function NetchatApp() {
         setActiveStreamedTurn((current) =>
           current?.turnId === event.turnId
             ? {
-                ...current,
-                isPending: false,
-              }
+              ...current,
+              isPending: false,
+            }
             : current,
         );
         setStreamErrorMessage(event.message);
@@ -741,9 +746,9 @@ function NetchatApp() {
       setActiveStreamedTurn((current) =>
         current?.turnId === optimisticTurn.turnId
           ? {
-              ...current,
-              isPending: false,
-            }
+            ...current,
+            isPending: false,
+          }
           : current,
       );
       const currentLiveAssistantState =
@@ -1102,16 +1107,16 @@ function NetchatApp() {
     setPendingFocusAnchorScroll(
       targetReturnState.kind === "selection-anchor"
         ? {
-            kind: "selection-anchor",
-            sourceMessageId: targetReturnState.sourceMessageId,
-            branchId: targetReturnState.branchId,
-            behavior: "auto",
-          }
+          kind: "selection-anchor",
+          sourceMessageId: targetReturnState.sourceMessageId,
+          branchId: targetReturnState.branchId,
+          behavior: "auto",
+        }
         : {
-            kind: "continuation-chooser",
-            sourceMessageId: targetReturnState.sourceMessageId,
-            behavior: "auto",
-          },
+          kind: "continuation-chooser",
+          sourceMessageId: targetReturnState.sourceMessageId,
+          behavior: "auto",
+        },
     );
     setFocusReturnState(null);
     skipNextFocusTargetAutoScrollRef.current = true;
@@ -1179,9 +1184,9 @@ function NetchatApp() {
 
     setComposerAnchor((current) =>
       current &&
-      current.left === nextAnchor.left &&
-      current.top === nextAnchor.top &&
-      current.width === nextAnchor.width
+        current.left === nextAnchor.left &&
+        current.top === nextAnchor.top &&
+        current.width === nextAnchor.width
         ? current
         : nextAnchor,
     );
@@ -1396,9 +1401,9 @@ function NetchatApp() {
       current[messageId] === normalizedHeight
         ? current
         : {
-            ...current,
-            [messageId]: normalizedHeight,
-          },
+          ...current,
+          [messageId]: normalizedHeight,
+        },
     );
   }, []);
   const reportSelectionAnchorLayouts = useCallback(
@@ -2138,14 +2143,14 @@ function NetchatApp() {
       const nextViewport =
         targetAction.kind === "branch-entry"
           ? buildBranchEntryViewport({
-              canvasSize,
-              targetNode,
-            })
+            canvasSize,
+            targetNode,
+          })
           : buildMessageHorizontalCenterViewport({
-              canvasSize,
-              targetNode,
-              viewport,
-            });
+            canvasSize,
+            targetNode,
+            viewport,
+          });
       if (!nextViewport) {
         return;
       }
@@ -2233,11 +2238,11 @@ function NetchatApp() {
       const targetElement =
         targetAnchor.kind === "selection-anchor"
           ? container?.querySelector<HTMLElement>(
-              `[data-focus-message-id="${targetAnchor.sourceMessageId}"] [data-selection-anchor-id="${targetAnchor.branchId}"]`,
-            ) ?? null
+            `[data-focus-message-id="${targetAnchor.sourceMessageId}"] [data-selection-anchor-id="${targetAnchor.branchId}"]`,
+          ) ?? null
           : container?.querySelector<HTMLElement>(
-              `[data-focus-continuation-source-message-id="${targetAnchor.sourceMessageId}"]`,
-            ) ?? null;
+            `[data-focus-continuation-source-message-id="${targetAnchor.sourceMessageId}"]`,
+          ) ?? null;
       if (!container || !targetElement) {
         if (attempts < 12) {
           attempts += 1;
@@ -2265,9 +2270,9 @@ function NetchatApp() {
 
       setPendingFocusAnchorScroll((current) =>
         current?.kind === targetAnchor.kind &&
-        current.sourceMessageId === targetAnchor.sourceMessageId &&
-        (current.kind === "continuation-chooser" ||
-          (targetAnchor.kind === "selection-anchor" && current.branchId === targetAnchor.branchId))
+          current.sourceMessageId === targetAnchor.sourceMessageId &&
+          (current.kind === "continuation-chooser" ||
+            (targetAnchor.kind === "selection-anchor" && current.branchId === targetAnchor.branchId))
           ? null
           : current,
       );
@@ -2344,9 +2349,9 @@ function NetchatApp() {
       title: "",
       ...(defaultNewNetAgent
         ? {
-            agentRuntimeId: defaultNewNetAgent.runtimeId,
-            agentRuntimeKind: defaultNewNetAgent.runtimeKind,
-          }
+          agentRuntimeId: defaultNewNetAgent.runtimeId,
+          agentRuntimeKind: defaultNewNetAgent.runtimeKind,
+        }
         : {}),
     });
   }
@@ -2369,12 +2374,12 @@ function NetchatApp() {
     if (sendMode === "root" || sendMode === "continue-root") {
       const optimisticTurn = snapshot
         ? buildOptimisticRootStreamTurn(snapshot, {
-            machineId: null,
-            runtimeId: sendTargetRuntimeId,
-            runtimeKind: sendTargetRuntimeKind,
-            prompt,
-            selectedText: selectionForSelectedMessage?.selectedText ?? null,
-          })
+          machineId: null,
+          runtimeId: sendTargetRuntimeId,
+          runtimeKind: sendTargetRuntimeKind,
+          prompt,
+          selectedText: selectionForSelectedMessage?.selectedText ?? null,
+        })
         : null;
       if (optimisticTurn) {
         beginOptimisticTurn(optimisticTurn);
@@ -2394,14 +2399,14 @@ function NetchatApp() {
         },
         "Root turn",
         optimisticTurn ??
-          buildFallbackOptimisticTurn({
-            prompt,
-            machineId: null,
-            runtimeId: sendTargetRuntimeId,
-            runtimeKind: sendTargetRuntimeKind,
-            selectedText: selectionForSelectedMessage?.selectedText ?? null,
-            snapshot,
-          }),
+        buildFallbackOptimisticTurn({
+          prompt,
+          machineId: null,
+          runtimeId: sendTargetRuntimeId,
+          runtimeKind: sendTargetRuntimeKind,
+          selectedText: selectionForSelectedMessage?.selectedText ?? null,
+          snapshot,
+        }),
       );
       return;
     }
@@ -2409,13 +2414,13 @@ function NetchatApp() {
     if (sendMode === "continue-branch" && selectedBranch) {
       const optimisticTurn = snapshot
         ? buildOptimisticBranchTurnStreamTurn(snapshot, {
-            branchId: selectedBranch.id,
-            machineId: selectedBranch.machineId,
-            runtimeId: selectedBranch.runtimeId,
-            runtimeKind: selectedBranch.runtimeKind,
-            prompt,
-            selectedText: selectionForSelectedMessage?.selectedText ?? null,
-          })
+          branchId: selectedBranch.id,
+          machineId: selectedBranch.machineId,
+          runtimeId: selectedBranch.runtimeId,
+          runtimeKind: selectedBranch.runtimeKind,
+          prompt,
+          selectedText: selectionForSelectedMessage?.selectedText ?? null,
+        })
         : null;
       if (optimisticTurn) {
         beginOptimisticTurn(optimisticTurn);
@@ -2435,14 +2440,14 @@ function NetchatApp() {
         },
         "Branch turn",
         optimisticTurn ??
-          buildFallbackOptimisticTurn({
-            prompt,
-            machineId: selectedBranch.machineId ?? null,
-            runtimeId: selectedBranch.runtimeId ?? activeNet?.agentRuntimeId ?? null,
-            runtimeKind: selectedBranch.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
-            selectedText: selectionForSelectedMessage?.selectedText ?? null,
-            snapshot,
-          }),
+        buildFallbackOptimisticTurn({
+          prompt,
+          machineId: selectedBranch.machineId ?? null,
+          runtimeId: selectedBranch.runtimeId ?? activeNet?.agentRuntimeId ?? null,
+          runtimeKind: selectedBranch.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
+          selectedText: selectionForSelectedMessage?.selectedText ?? null,
+          snapshot,
+        }),
       );
       return;
     }
@@ -2450,15 +2455,15 @@ function NetchatApp() {
     if (sendMode === "branch-from-selection" && selectedMessage && selectionForSelectedMessage) {
       const optimisticTurn = snapshot
         ? buildOptimisticBranchCreationStreamTurn(snapshot, {
-            input: {
-              sourceMessageId: selectedMessage.id,
-              mode: "selection",
-              selectedText: selectionForSelectedMessage.selectedText,
-              startOffset: selectionForSelectedMessage.startOffset,
-              endOffset: selectionForSelectedMessage.endOffset,
-              prompt,
-            } satisfies CreateBranchInput,
-          })
+          input: {
+            sourceMessageId: selectedMessage.id,
+            mode: "selection",
+            selectedText: selectionForSelectedMessage.selectedText,
+            startOffset: selectionForSelectedMessage.startOffset,
+            endOffset: selectionForSelectedMessage.endOffset,
+            prompt,
+          } satisfies CreateBranchInput,
+        })
         : null;
       if (optimisticTurn) {
         if (optimisticTurn.branchId) {
@@ -2488,14 +2493,14 @@ function NetchatApp() {
         },
         "Branch creation",
         optimisticTurn ??
-          buildFallbackOptimisticTurn({
-            prompt,
-            machineId: selectedMessage.machineId ?? null,
-            runtimeId: selectedMessage.runtimeId ?? activeNet?.agentRuntimeId ?? null,
-            runtimeKind: selectedMessage.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
-            selectedText: selectionForSelectedMessage.selectedText,
-            snapshot,
-          }),
+        buildFallbackOptimisticTurn({
+          prompt,
+          machineId: selectedMessage.machineId ?? null,
+          runtimeId: selectedMessage.runtimeId ?? activeNet?.agentRuntimeId ?? null,
+          runtimeKind: selectedMessage.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
+          selectedText: selectionForSelectedMessage.selectedText,
+          snapshot,
+        }),
       );
       return;
     }
@@ -2503,12 +2508,12 @@ function NetchatApp() {
     if (sendMode === "branch-from-message" && selectedMessage) {
       const optimisticTurn = snapshot
         ? buildOptimisticBranchCreationStreamTurn(snapshot, {
-            input: {
-              sourceMessageId: selectedMessage.id,
-              mode: "message",
-              prompt,
-            } satisfies CreateBranchInput,
-          })
+          input: {
+            sourceMessageId: selectedMessage.id,
+            mode: "message",
+            prompt,
+          } satisfies CreateBranchInput,
+        })
         : null;
       if (optimisticTurn) {
         beginOptimisticTurn(optimisticTurn);
@@ -2530,14 +2535,14 @@ function NetchatApp() {
         },
         "Branch creation",
         optimisticTurn ??
-          buildFallbackOptimisticTurn({
-            prompt,
-            machineId: selectedMessage.machineId ?? null,
-            runtimeId: selectedMessage.runtimeId ?? activeNet?.agentRuntimeId ?? null,
-            runtimeKind: selectedMessage.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
-            selectedText: null,
-            snapshot,
-          }),
+        buildFallbackOptimisticTurn({
+          prompt,
+          machineId: selectedMessage.machineId ?? null,
+          runtimeId: selectedMessage.runtimeId ?? activeNet?.agentRuntimeId ?? null,
+          runtimeKind: selectedMessage.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
+          selectedText: null,
+          snapshot,
+        }),
       );
     }
   }
@@ -2583,14 +2588,14 @@ function NetchatApp() {
       : streamErrorMessage;
   const netErrorMessage = formatErrorMessage(
     openWorkspaceFolderMutation.error ??
-      deleteWorkspaceMutation.error ??
-      selectWorkspaceMutation.error ??
-      selectWorkspaceNetMutation.error ??
-      createNetMutation.error ??
-      selectNetMutation.error ??
-      renameNetMutation.error ??
-      updateNetAgentMutation.error ??
-      deleteNetMutation.error,
+    deleteWorkspaceMutation.error ??
+    selectWorkspaceMutation.error ??
+    selectWorkspaceNetMutation.error ??
+    createNetMutation.error ??
+    selectNetMutation.error ??
+    renameNetMutation.error ??
+    updateNetAgentMutation.error ??
+    deleteNetMutation.error,
   );
   const pendingDeletionNetId = pendingNetDeletion?.id ?? null;
   const pendingDeletionWorkspaceId = pendingWorkspaceDeletion?.id ?? null;
@@ -3136,65 +3141,65 @@ function NetchatApp() {
               <Background gap={96} size={1} color="var(--line-color)" />
             </ReactFlow>
 
-        {!isFocusViewActive && graph.nodes.length > 0 ? (
-          <CanvasThumbnail
-            canvasSize={canvasSize}
-            measuredNodeHeights={measuredNodeHeights}
-            nodes={graph.nodes as Node<MessageNodeData>[]}
-            viewport={viewport}
-            onViewportChange={applyViewport}
-          />
-        ) : null}
+            {!isFocusViewActive && graph.nodes.length > 0 ? (
+              <CanvasThumbnail
+                canvasSize={canvasSize}
+                measuredNodeHeights={measuredNodeHeights}
+                nodes={graph.nodes as Node<MessageNodeData>[]}
+                viewport={viewport}
+                onViewportChange={applyViewport}
+              />
+            ) : null}
 
-        {graphQuery.isLoading ? (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
-            <div className="border border-[var(--text-main)] bg-white px-6 py-4 text-sm tracking-[0.08em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
-              Loading conversation canvas...
-            </div>
-          </div>
-        ) : null}
-
-        {!graphQuery.isLoading && !hasMessages ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
-            <form className="pointer-events-auto w-full max-w-[840px]" onSubmit={handleSubmit}>
-              <div className="relative border border-[var(--text-main)] bg-white px-6 py-5 shadow-[14px_14px_0_rgba(26,26,26,0.08)]">
-                {newRootComposerMode === "conversation" ? (
-                  <Textarea
-                    ref={composerRef}
-                    className="!min-h-[172px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[18px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
-                    placeholder={composerPlaceholder}
-                    value={composerValue}
-                    onChange={(event) => setComposerValue(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        if (!sendDisabled) {
-                          submitCurrentPrompt();
-                        }
-                      }
-                    }}
-                  />
-                ) : (
-                  <ArticleModeFilePicker
-                    expandedDirectoryPaths={expandedExplorerDirectoryPaths}
-                    isBusy={createRootArticleMutation.isPending}
-                    selectedFilePath={selectedArticleFilePath}
-                    workspaceId={activeWorkspaceId}
-                    onSelectFile={handleArticleFileSelect}
-                    onToggleDirectory={toggleWorkspaceExplorerDirectory}
-                  />
-                )}
-                {newNetComposerBottomBar}
-              </div>
-
-              {composerErrorMessage ? (
-                <div className="border-x border-b border-rose-200 bg-rose-50 px-7 py-4 text-sm leading-6 text-rose-700">
-                  {composerErrorMessage}
+            {graphQuery.isLoading ? (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4">
+                <div className="border border-[var(--text-main)] bg-white px-6 py-4 text-sm tracking-[0.08em] text-[rgba(26,26,26,0.62)] shadow-[8px_8px_0_rgba(26,26,26,0.08)]">
+                  Loading conversation canvas...
                 </div>
-              ) : null}
-            </form>
-          </div>
-        ) : null}
+              </div>
+            ) : null}
+
+            {!graphQuery.isLoading && !hasMessages ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center px-6 py-8">
+                <form className="pointer-events-auto w-full max-w-[840px]" onSubmit={handleSubmit}>
+                  <div className="relative border border-[var(--text-main)] bg-white px-6 py-5 shadow-[14px_14px_0_rgba(26,26,26,0.08)]">
+                    {newRootComposerMode === "conversation" ? (
+                      <Textarea
+                        ref={composerRef}
+                        className="!min-h-[172px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[18px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
+                        placeholder={composerPlaceholder}
+                        value={composerValue}
+                        onChange={(event) => setComposerValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            if (!sendDisabled) {
+                              submitCurrentPrompt();
+                            }
+                          }
+                        }}
+                      />
+                    ) : (
+                      <ArticleModeFilePicker
+                        expandedDirectoryPaths={expandedExplorerDirectoryPaths}
+                        isBusy={createRootArticleMutation.isPending}
+                        selectedFilePath={selectedArticleFilePath}
+                        workspaceId={activeWorkspaceId}
+                        onSelectFile={handleArticleFileSelect}
+                        onToggleDirectory={toggleWorkspaceExplorerDirectory}
+                      />
+                    )}
+                    {newNetComposerBottomBar}
+                  </div>
+
+                  {composerErrorMessage ? (
+                    <div className="border-x border-b border-rose-200 bg-rose-50 px-7 py-4 text-sm leading-6 text-rose-700">
+                      {composerErrorMessage}
+                    </div>
+                  ) : null}
+                </form>
+              </div>
+            ) : null}
 
           </div>
 
@@ -3217,8 +3222,8 @@ function NetchatApp() {
                   style={
                     isDesktopWorkspacePanels
                       ? {
-                          width: `${hasWorkspaceFilePreview ? workspacePaneLayout.explorerWidth : workspacePaneLayout.totalWidth}px`,
-                        }
+                        width: `${hasWorkspaceFilePreview ? workspacePaneLayout.explorerWidth : workspacePaneLayout.totalWidth}px`,
+                      }
                       : undefined
                   }
                 >
@@ -3743,7 +3748,7 @@ function WorkspaceFilePreviewPanel({
           <div className="px-6 py-6 text-[13px] leading-6 text-[rgba(26,26,26,0.54)]">This file is empty.</div>
         ) : isMarkdownPreview ? (
           <div className="px-6 py-5 text-[15px] leading-7 text-[var(--text-main)]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+            <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
               {file.content}
             </ReactMarkdown>
           </div>
@@ -4246,13 +4251,13 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               : "border-t-[var(--block-slate)]"
             : liveAssistantState?.status === "error"
               ? "border-dashed border-rose-300 border-t-rose-500 bg-rose-50 shadow-[8px_8px_0_rgba(190,24,93,0.1)]"
-            : showPendingAssistantState
-              ? "border-dashed border-[var(--block-ochre)] border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[8px_8px_0_rgba(194,142,85,0.12)]"
-            : data.hasSelectionDraft
-              ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[8px_8px_0_rgba(194,142,85,0.14)]"
-            : data.isActiveMessage
-              ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[10px_10px_0_rgba(62,78,66,0.15)]"
-              : "border-t-[var(--block-green)] hover:-translate-y-0.5",
+              : showPendingAssistantState
+                ? "border-dashed border-[var(--block-ochre)] border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[8px_8px_0_rgba(194,142,85,0.12)]"
+                : data.hasSelectionDraft
+                  ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[8px_8px_0_rgba(194,142,85,0.14)]"
+                  : data.isActiveMessage
+                    ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[10px_10px_0_rgba(62,78,66,0.15)]"
+                    : "border-t-[var(--block-green)] hover:-translate-y-0.5",
         )}
         style={{ width: messageNodeWidth }}
         onClickCapture={(event) => {
@@ -4375,10 +4380,10 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-3 py-2.5">
                     <div className="flex min-w-0 items-center gap-2">
                       <ChevronDown
-                      className={cn(
-                        "size-4 shrink-0 text-[rgba(26,26,26,0.46)] transition-transform",
-                        assistantTraceExpanded ? "rotate-0" : "-rotate-90",
-                      )}
+                        className={cn(
+                          "size-4 shrink-0 text-[rgba(26,26,26,0.46)] transition-transform",
+                          assistantTraceExpanded ? "rotate-0" : "-rotate-90",
+                        )}
                       />
                       <span className="editorial-meta text-[rgba(26,26,26,0.72)]">Thinking & Tools</span>
                     </div>
@@ -4566,13 +4571,13 @@ function FocusMessageBubble({
               : "border-t-[var(--block-slate)]"
             : liveAssistantState?.status === "error"
               ? "border-dashed border-rose-300 border-t-rose-500 bg-rose-50 shadow-[10px_10px_0_rgba(190,24,93,0.1)]"
-            : showPendingAssistantState
-              ? "border-dashed border-[var(--block-ochre)] border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.12)]"
-            : hasSelectionDraft
-              ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
-            : isActiveMessage
-              ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.15)]"
-              : "border-t-[var(--block-green)]",
+              : showPendingAssistantState
+                ? "border-dashed border-[var(--block-ochre)] border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.12)]"
+                : hasSelectionDraft
+                  ? "border-t-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] shadow-[10px_10px_0_rgba(194,142,85,0.14)]"
+                  : isActiveMessage
+                    ? "border-t-[var(--block-green)] bg-[rgba(247,247,242,0.98)] shadow-[12px_12px_0_rgba(62,78,66,0.15)]"
+                    : "border-t-[var(--block-green)]",
         )}
         onClickCapture={(event) => {
           const target = event.target as HTMLElement;
@@ -5099,12 +5104,12 @@ function SelectableMessage({
         <div ref={contentRef} data-selection-content="true" className="min-w-0">
           {renderMarkdown
             ? (
-                <div className="message-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                    {content}
-                  </ReactMarkdown>
-                </div>
-              )
+              <div className="message-markdown">
+                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+                  {content}
+                </ReactMarkdown>
+              </div>
+            )
             : <div className="whitespace-pre-wrap break-words">{content}</div>}
         </div>
 
@@ -5195,8 +5200,8 @@ function getRenderableSelectionAnchors(content: string, anchors: MessageSelectio
     .map((anchor) => {
       const fallbackLabel =
         typeof anchor.startOffset === "number" &&
-        typeof anchor.endOffset === "number" &&
-        anchor.endOffset > anchor.startOffset
+          typeof anchor.endOffset === "number" &&
+          anchor.endOffset > anchor.startOffset
           ? content.slice(clamp(anchor.startOffset, 0, content.length), clamp(anchor.endOffset, 0, content.length))
           : "";
 
@@ -5388,9 +5393,9 @@ function resolveSelectionAnchorOffsets(
   const preferredMatch =
     typeof anchor.startOffset === "number" && typeof anchor.endOffset === "number" && anchor.endOffset > anchor.startOffset
       ? {
-          startOffset: clamp(anchor.startOffset, 0, totalLength),
-          endOffset: clamp(anchor.endOffset, clamp(anchor.startOffset, 0, totalLength) + 1, totalLength),
-        }
+        startOffset: clamp(anchor.startOffset, 0, totalLength),
+        endOffset: clamp(anchor.endOffset, clamp(anchor.startOffset, 0, totalLength) + 1, totalLength),
+      }
       : null;
 
   if (preferredMatch) {
@@ -5973,9 +5978,9 @@ function estimateBubbleHeightFromContent(content: string, selectedText: string |
   const selectedPassage = selectedText?.replace(/\r\n/g, "\n").trim() ?? "";
   const selectionLines = selectedPassage
     ? selectedPassage.split("\n").reduce((count, line) => {
-        const visibleLength = Math.max(line.trim().length, 1);
-        return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
-      }, 0)
+      const visibleLength = Math.max(line.trim().length, 1);
+      return count + Math.max(1, Math.ceil(visibleLength / messageEstimateCharsPerLine));
+    }, 0)
     : 0;
   const wrappedLines = normalized.split("\n").reduce((count, line) => {
     const visibleLength = Math.max(line.trim().length, 1);

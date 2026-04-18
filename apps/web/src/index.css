@@ -1,6 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600&display=swap");
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap");
 @import url("https://cdn.jsdelivr.net/npm/lxgw-wenkai-mono-webfont/style.css");
+@import "katex/dist/katex.min.css";
 
 @tailwind base;
 @tailwind components;
