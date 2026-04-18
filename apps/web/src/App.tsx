@@ -3284,19 +3284,11 @@ function NetchatApp() {
               <button
                 type="button"
                 className="inline-flex h-10 min-w-[2.5rem] items-center justify-center border border-[var(--text-main)] bg-white px-2 text-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
-                title="Exit focus view"
+                title="Exit focus view (ESC)"
                 onClick={exitFocusView}
               >
                 <ZoomOut className="size-4" />
               </button>
-            </div>
-
-            <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center px-4">
-              <div className="border border-[var(--text-main)] bg-white/96 px-4 py-2 text-[12px] font-medium uppercase tracking-[0.08em] text-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] backdrop-blur-sm">
-                {focusReturnState
-                  ? "Focus view. Press Esc or use the return arrow to jump back, or use the zoom-out button to exit."
-                  : "Focus view. Press Esc or use the zoom-out button to exit."}
-              </div>
             </div>
 
             <div
