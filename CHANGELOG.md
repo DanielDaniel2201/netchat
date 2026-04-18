@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-18
+
+- Reworked article Focus View branch dives to reuse Focus View itself instead of a separate canvas mode: selected-text branch jumps now behave like programmatically focusing the branch’s top user bubble, non-root branches render as branch-local focus instead of vertically splicing the parent article into the same column, and both selected-text branches and whole-message type-2 branches now expose the same icon-only return arrow and `Esc` behavior, snapping straight back to either the originating selection anchor or the article-bottom continuation chooser without smooth-scroll animation.
+
 ## 2026-04-14
 
 - Simplified selection-branch camera moves to horizontal recentering only, fixed expanded anchor clicks inside article Focus View to collapse in place, and stopped article/root nets from reapplying their initial viewport on every branch toggle so selected-text navigation no longer jerks the canvas back to a top-framed zoom.
