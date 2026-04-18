@@ -2,10 +2,14 @@
 
 ## 2026-04-14
 
+- Simplified selection-branch camera moves to horizontal recentering only, fixed expanded anchor clicks inside article Focus View to collapse in place, and stopped article/root nets from reapplying their initial viewport on every branch toggle so selected-text navigation no longer jerks the canvas back to a top-framed zoom.
 - Added an article-only Focus View with a new zoom-in action on article bubbles, opening a full-screen reading mode that hides sidebar, explorer chrome, and minimap so one branch path can be read as a document instead of a canvas.
 - Kept selection follow-ups and branch anchor toggles working inside Focus View, and now auto-scroll focus mode to newly expanded branch tops and optimistic in-progress assistant bubbles after send so branch reading flow stays uninterrupted.
 - Let clicking the same assistant or article bubble dismiss an already-open inline composer, including selection-based follow-up composers, so users can toggle reply mode off without extra canvas clicks.
 - Repositioned forked branch entry bubbles to seed from the selected-passage anchor when a branch comes from highlighted text, with lateral fork routing as the fallback for non-selection branches, so expanding a branch tracks the relevant passage instead of dropping below a very tall source bubble.
+- Split non-tail assistant/article branching back into two layouts, keeping direct bubble-click branches fully below the source bubble while selection-created branches fork laterally from the exact selected-passage anchor with a much shorter gap.
+- Let article Focus View branch-outs temporarily exit back to the canvas with a `Return` action, then restore the article reader at the originating selection line near the top third of the screen instead of dumping the user back at the top of the article.
+- Added bottom-edge `user query` continuation pickers in article Focus View for whole-message follow-up branches, spacing each dashed-arrow entry evenly across the source bubble so users can continue on the intended branch without leaving the reader.
 
 ## 2026-04-13
 
