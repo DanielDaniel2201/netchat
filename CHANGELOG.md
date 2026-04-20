@@ -2,6 +2,11 @@
 
 ## 2026-04-20
 
+- Routed daemon runtime logs into `/runtime/diagnostics` and tagged Codex app-server sourced entries with a `(Codex appServer)` prefix, so diagnostics can distinguish native runtime-origin events from server-side strategy logs.
+- Fixed root-turn runtime/session planning to respect net-scoped agent selection before legacy root-session reuse, so switching a net from Claude to Codex now starts a fresh Codex thread with replayed visible history instead of incorrectly trying to `thread/resume` a Claude session id.
+- Stopped retryable Codex app-server error notifications such as `Reconnecting... n/5` from aborting netchat turns prematurely, and now finalize successful app-server turns from streamed assistant deltas when `turn/completed` arrives without embedded items.
+- Replaced daemon Codex execution from `codex exec --json` to `codex app-server` JSON-RPC (`thread/start|resume|fork` + `turn/start`), with minimum CLI version gating, so Codex branch/continue can now be managed through one unified app-server control path.
+- Expanded native branch-fork eligibility from Claude-only to Claude+Codex on tail messages, so Composer `Branch` now maps to absolute runtime fork (new session/thread id) for both runtimes instead of replay fallback in Codex tail cases.
 - Added an explicit `Continue session` / `Start branch` toggle above tail assistant/article composers, so users can branch directly from the current reply instead of being locked into the active lane.
 - Switched tail Claude branch creation to resume with native `--fork-session` when a live session handle exists, falling back to visible-path replay only for older branch points and non-Claude contexts.
 - Temporarily masked Droid from local app startup and runtime selection, so `npm run app:local` now only boots background daemons for Claude Code and Codex.

@@ -2637,7 +2637,8 @@ function NetchatApp() {
   };
   const bubbleComposerIntentLabel =
     tailComposerIntent === "branch"
-      ? selectedMessage?.sessionId && selectedMessage.runtimeKind === "claude"
+      ? selectedMessage?.sessionId &&
+        (selectedMessage.runtimeKind === "claude" || selectedMessage.runtimeKind === "codex")
         ? "Native fork when possible"
         : "Replay branch"
       : selectedMessage?.sessionId

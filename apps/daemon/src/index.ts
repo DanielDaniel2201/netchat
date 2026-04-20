@@ -11,7 +11,7 @@ import { DaemonDiagnosticsStore } from "./diagnostics.js";
 import { detectRuntimeEnvironment } from "./environment.js";
 import { loadLocalEnv } from "./load-env.js";
 import { MachineClient } from "./machine.js";
-import { createRuntimeAdapter } from "./runtime.js";
+import { createRuntimeAdapter, setRuntimeLogSink } from "./runtime.js";
 
 applyCliEnvOverrides();
 loadLocalEnv();
@@ -21,6 +21,9 @@ const runtime = createRuntimeAdapter();
 const runtimeDescriptor = runtime.getDescriptor();
 const initialEnvironment = await detectRuntimeEnvironment(runtimeDescriptor, runtime.getWorkingDirectory());
 const diagnostics = new DaemonDiagnosticsStore(initialEnvironment);
+setRuntimeLogSink((level, message) => {
+  diagnostics.log(level, message);
+});
 const machineClient = new MachineClient(
   runtime,
   async () => {

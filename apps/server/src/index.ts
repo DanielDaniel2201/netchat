@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
+  AgentRuntimeKind,
   AgentRuntimeOption,
   AgentTurnEvent,
   AgentTurnInput,
@@ -386,12 +387,17 @@ app.post("/api/root-turn/stream", async (request, reply) => {
   const baseSnapshot = store.getSnapshot();
   const rootBranch = baseSnapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   const activeNet = store.getActiveNetSummary();
-  const runtimePrompt = buildRootRuntimePrompt(baseSnapshot, input.data.prompt, input.data.selectedText ?? null);
-
   try {
     const machine = machines.resolveMachine({
       preferredMachineId: input.data.machineId ?? rootBranch?.machineId ?? null,
-      preferredRuntimeId: rootBranch?.runtimeId ?? activeNet.agentRuntimeId ?? null,
+      preferredRuntimeId: activeNet.agentRuntimeId ?? rootBranch?.runtimeId ?? null,
+    });
+    const rootSessionPlan = buildRootSessionPlan(rootBranch, machine.environment.runtimeKind);
+    const runtimePrompt = buildRootRuntimePrompt({
+      canResumeRootSession: rootSessionPlan.session.mode === "resume",
+      prompt: input.data.prompt,
+      selectedText: input.data.selectedText ?? null,
+      snapshot: baseSnapshot,
     });
     const turnId = input.data.clientTurnId ?? makeId("turn");
     const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
@@ -402,14 +408,7 @@ app.post("/api/root-turn/stream", async (request, reply) => {
       payload: {
         prompt: runtimePrompt,
         workingDirectory: activeWorkspace.workingDirectory,
-        session: rootBranch?.sessionId
-          ? {
-              mode: "resume",
-              handle: rootBranch.sessionId,
-            }
-          : {
-              mode: "new",
-            },
+        session: rootSessionPlan.session,
         metadata: {
           netchatOperation: "root-turn",
           selectedText: input.data.selectedText ?? null,
@@ -430,8 +429,8 @@ app.post("/api/root-turn/stream", async (request, reply) => {
     diagnostics.log(
       "info",
       input.data.selectedText
-        ? `Streaming root turn from highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`
-        : `Streaming root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`,
+        ? `Streaming root turn from highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootSessionPlan.sessionLabel}.`
+        : `Streaming root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootSessionPlan.sessionLabel}.`,
     );
 
     return streamTurnResponse({
@@ -664,32 +663,30 @@ app.post("/api/root-turn", async (request, reply) => {
   const snapshot = store.getSnapshot();
   const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
   const activeNet = store.getActiveNetSummary();
-  const runtimePrompt = buildRootRuntimePrompt(snapshot, input.data.prompt, input.data.selectedText ?? null);
-
   try {
     const machine = machines.resolveMachine({
       preferredMachineId: input.data.machineId ?? rootBranch?.machineId ?? null,
-      preferredRuntimeId: rootBranch?.runtimeId ?? activeNet.agentRuntimeId ?? null,
+      preferredRuntimeId: activeNet.agentRuntimeId ?? rootBranch?.runtimeId ?? null,
+    });
+    const rootSessionPlan = buildRootSessionPlan(rootBranch, machine.environment.runtimeKind);
+    const runtimePrompt = buildRootRuntimePrompt({
+      canResumeRootSession: rootSessionPlan.session.mode === "resume",
+      prompt: input.data.prompt,
+      selectedText: input.data.selectedText ?? null,
+      snapshot,
     });
     diagnostics.log(
       "info",
       input.data.selectedText
-        ? `Received root turn from a highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`
-        : `Received root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootBranch?.sessionId ?? "new"}.`,
+        ? `Received root turn from a highlighted passage (${input.data.selectedText.length} selected chars, ${input.data.prompt.length} prompt chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootSessionPlan.sessionLabel}.`
+        : `Received root turn (${input.data.prompt.length} chars). Routing to ${formatMachineLabel(machine.id, machine.name)} with session ${rootSessionPlan.sessionLabel}.`,
     );
     const runtime = await machines.enqueueJob(machine.id, {
       kind: "root-turn",
       payload: {
         prompt: runtimePrompt,
         workingDirectory: activeWorkspace.workingDirectory,
-        session: rootBranch?.sessionId
-          ? {
-              mode: "resume",
-              handle: rootBranch.sessionId,
-            }
-          : {
-              mode: "new",
-            },
+        session: rootSessionPlan.session,
         metadata: {
           netchatOperation: "root-turn",
           selectedText: input.data.selectedText ?? null,
@@ -1213,12 +1210,43 @@ function formatMachineLabel(machineId: string, machineName: string) {
   return `${machineName} (${machineId})`;
 }
 
-function buildRootRuntimePrompt(snapshot: GraphSnapshot, prompt: string, selectedText: string | null) {
-  const rootBranch = snapshot.branches.find((branch) => branch.id === rootBranchId) ?? null;
+function buildRootSessionPlan(
+  rootBranch: Branch | null,
+  runtimeKind: AgentRuntimeKind,
+): {
+  session: AgentTurnInput["session"];
+  sessionLabel: string;
+} {
+  const sessionId = rootBranch?.sessionId?.trim();
+  if (sessionId && rootBranch?.runtimeKind === runtimeKind) {
+    return {
+      session: {
+        mode: "resume",
+        handle: sessionId,
+      },
+      sessionLabel: sessionId,
+    };
+  }
+
+  return {
+    session: {
+      mode: "new",
+    },
+    sessionLabel: "new",
+  };
+}
+
+function buildRootRuntimePrompt(input: {
+  snapshot: GraphSnapshot;
+  prompt: string;
+  selectedText: string | null;
+  canResumeRootSession: boolean;
+}) {
+  const { snapshot, prompt, selectedText, canResumeRootSession } = input;
   const rootMessages = snapshot.messages.filter((message) => message.branchId === rootBranchId);
   const selectionSourceRole = selectedText ? (rootMessages.at(-1)?.role ?? null) : null;
 
-  if (!rootBranch?.sessionId && rootMessages.length > 0) {
+  if (!canResumeRootSession && rootMessages.length > 0) {
     return buildRootHistoryPrompt({
       history: rootMessages,
       userPrompt: prompt,
@@ -1273,7 +1301,10 @@ function buildBranchCreationRuntimePlan(
 
 function canUseNativeBranchFork(snapshot: GraphSnapshot, sourceMessage: MessageNode) {
   const sourceSessionId = sourceMessage.sessionId?.trim();
-  if (!sourceSessionId || sourceMessage.runtimeKind !== "claude") {
+  if (
+    !sourceSessionId ||
+    (sourceMessage.runtimeKind !== "claude" && sourceMessage.runtimeKind !== "codex")
+  ) {
     return false;
   }
 
