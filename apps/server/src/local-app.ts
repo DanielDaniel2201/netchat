@@ -32,7 +32,7 @@ const packagedServerEntryPath = path.join(runtimeRoot, "dist", "apps", "server",
 const sourceDaemonEntryPath = path.join(runtimeRoot, "apps", "daemon", "src", "index.ts");
 const packagedDaemonEntryPath = path.join(runtimeRoot, "dist", "apps", "daemon", "index.mjs");
 const managedChildren: ChildProcess[] = [];
-const managedRuntimeKinds = ["claude", "codex", "droid"] as const satisfies readonly AgentRuntimeKind[];
+const managedRuntimeKinds = ["claude", "codex"] as const satisfies readonly AgentRuntimeKind[];
 const localLoopbackHost = "localhost";
 
 let shuttingDown = false;

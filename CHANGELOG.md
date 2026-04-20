@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-20
+
+- Temporarily masked Droid from local app startup and runtime selection, so `npm run app:local` now only boots background daemons for Claude Code and Codex.
+
 ## 2026-04-18
 
 - Enabled LaTeX math rendering in message markdown and markdown file previews via `remark-math` + `rehype-katex`, so formulas like `$$...$$` now render as readable equations instead of raw source strings.

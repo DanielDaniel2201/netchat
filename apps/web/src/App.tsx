@@ -80,7 +80,6 @@ import remarkMath from "remark-math";
 import { create } from "zustand";
 
 import claudeIconUrl from "./assets/claude.svg";
-import droidIconUrl from "./assets/droid.svg";
 import openaiIconUrl from "./assets/openai.svg";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -203,7 +202,6 @@ type AgentDisplayInfo = {
 const agentRuntimeIconSources: Partial<Record<AgentRuntimeKind, string>> = {
   claude: claudeIconUrl,
   codex: openaiIconUrl,
-  droid: droidIconUrl,
 };
 
 type CanvasViewport = {
@@ -500,7 +498,9 @@ function NetchatApp() {
   const persistedSnapshot = graphQuery.data;
   const snapshot = activeStreamedTurn?.optimisticSnapshot ?? persistedSnapshot;
   const uiConfig = uiConfigQuery.data;
-  const agentOptions = agentsQuery.data ?? [];
+  const agentOptions = (agentsQuery.data ?? []).filter(
+    (agent) => agent.runtimeKind === "claude" || agent.runtimeKind === "codex",
+  );
   const workspaceNets = workspace?.nets ?? [];
   const knownWorkspaces = machineWorkspaces?.workspaces ?? [];
   const defaultWorkspaceOrder = useMemo(
