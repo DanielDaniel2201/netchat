@@ -255,6 +255,7 @@ export type AgentTurnSession =
 export type AgentTurnMetadata = {
   netchatOperation?: MachineJobKind;
   selectedText?: string | null;
+  forkSession?: boolean;
 };
 
 export type AgentTurnInput = {

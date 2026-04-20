@@ -2,6 +2,8 @@
 
 ## 2026-04-20
 
+- Added an explicit `Continue session` / `Start branch` toggle above tail assistant/article composers, so users can branch directly from the current reply instead of being locked into the active lane.
+- Switched tail Claude branch creation to resume with native `--fork-session` when a live session handle exists, falling back to visible-path replay only for older branch points and non-Claude contexts.
 - Temporarily masked Droid from local app startup and runtime selection, so `npm run app:local` now only boots background daemons for Claude Code and Codex.
 
 ## 2026-04-18

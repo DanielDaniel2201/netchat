@@ -477,23 +477,18 @@ app.post("/api/branches/stream", async (request, reply) => {
   try {
     const activeWorkspace = store.getWorkspaceState();
     const activeNet = store.getActiveNetSummary();
+    const snapshot = store.getSnapshot();
     const machine = machines.resolveMachine({
       preferredMachineId: sourceMessage.machineId ?? null,
       preferredRuntimeId: sourceMessage.runtimeId ?? activeNet.agentRuntimeId ?? null,
     });
-    const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
-    const branchPrompt = buildPrefixReplayPrompt({
-      history: visibleHistory,
-      userPrompt: input.data.prompt,
-      selectedText: input.data.mode === "selection" ? input.data.selectedText! : null,
-      selectedTextSourceRole: sourceMessage.role,
-    });
+    const branchPlan = buildBranchCreationRuntimePlan(snapshot, sourceMessage, input.data as CreateBranchInput);
     const turnId = input.data.clientTurnId ?? makeId("turn");
     const branchId = input.data.clientBranchId ?? makeId("branch");
     const userMessageId = input.data.clientUserMessageId ?? makeId("msg");
     const assistantMessageId = input.data.clientAssistantMessageId ?? makeId("msg");
     const createdAt = input.data.clientCreatedAt ?? nowIso();
-    const optimisticSnapshot = buildOptimisticBranchCreationSnapshot(store.getSnapshot(), {
+    const optimisticSnapshot = buildOptimisticBranchCreationSnapshot(snapshot, {
       assistantMessageId,
       branchId,
       createdAt,
@@ -511,14 +506,13 @@ app.post("/api/branches/stream", async (request, reply) => {
       {
       kind: "branch-create",
       payload: {
-        prompt: branchPrompt,
+        prompt: branchPlan.prompt,
         workingDirectory: activeWorkspace.workingDirectory,
-        session: {
-          mode: "new",
-        },
+        session: branchPlan.session,
         metadata: {
           netchatOperation: "branch-create",
           selectedText: input.data.mode === "selection" ? input.data.selectedText ?? null : null,
+          forkSession: branchPlan.strategy === "native-fork",
         },
       } satisfies AgentTurnInput,
       },
@@ -527,8 +521,12 @@ app.post("/api/branches/stream", async (request, reply) => {
     diagnostics.log(
       "info",
       input.data.mode === "message"
-        ? `Streaming branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
-        : `Streaming branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
+        ? branchPlan.strategy === "native-fork"
+          ? `Streaming branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} using native fork-session (${input.data.prompt.length} prompt chars, source session ${sourceMessage.sessionId ?? "unknown"}).`
+          : `Streaming branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${branchPlan.visibleHistoryLength} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPlan.prompt.length} chars).`
+        : branchPlan.strategy === "native-fork"
+          ? `Streaming branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} using native fork-session (${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, source session ${sourceMessage.sessionId ?? "unknown"}).`
+          : `Streaming branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${branchPlan.visibleHistoryLength} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPlan.prompt.length} chars).`,
     );
 
     return streamTurnResponse({
@@ -727,23 +725,22 @@ app.post("/api/branches", async (request, reply) => {
   try {
     const activeWorkspace = store.getWorkspaceState();
     const activeNet = store.getActiveNetSummary();
+    const snapshot = store.getSnapshot();
     const machine = machines.resolveMachine({
       preferredMachineId: sourceMessage.machineId ?? null,
       preferredRuntimeId: sourceMessage.runtimeId ?? activeNet.agentRuntimeId ?? null,
     });
-    const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
-    const branchPrompt = buildPrefixReplayPrompt({
-      history: visibleHistory,
-      userPrompt: input.data.prompt,
-      selectedText: input.data.mode === "selection" ? input.data.selectedText! : null,
-      selectedTextSourceRole: sourceMessage.role,
-    });
+    const branchPlan = buildBranchCreationRuntimePlan(snapshot, sourceMessage, input.data as CreateBranchInput);
 
     diagnostics.log(
       "info",
       input.data.mode === "message"
-        ? `Received branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPrompt.length} chars).`
-        : `Received branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${visibleHistory.length} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPrompt.length} chars).`,
+        ? branchPlan.strategy === "native-fork"
+          ? `Received branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} using native fork-session (${input.data.prompt.length} prompt chars, source session ${sourceMessage.sessionId ?? "unknown"}).`
+          : `Received branch-from-message request from ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${branchPlan.visibleHistoryLength} visible messages, ${input.data.prompt.length} prompt chars, replay ${branchPlan.prompt.length} chars).`
+        : branchPlan.strategy === "native-fork"
+          ? `Received branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} using native fork-session (${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, source session ${sourceMessage.sessionId ?? "unknown"}).`
+          : `Received branch-from-selection request from message ${sourceMessage.id} on ${formatMachineLabel(machine.id, machine.name)} (${branchPlan.visibleHistoryLength} visible messages, ${input.data.selectedText!.length} selected chars, prompt ${input.data.prompt.length} chars, replay ${branchPlan.prompt.length} chars).`,
     );
     const runtime = await machines.enqueueJob(
       {
@@ -753,14 +750,13 @@ app.post("/api/branches", async (request, reply) => {
       {
       kind: "branch-create",
       payload: {
-        prompt: branchPrompt,
+        prompt: branchPlan.prompt,
         workingDirectory: activeWorkspace.workingDirectory,
-        session: {
-          mode: "new",
-        },
+        session: branchPlan.session,
         metadata: {
           netchatOperation: "branch-create",
           selectedText: input.data.mode === "selection" ? input.data.selectedText ?? null : null,
+          forkSession: branchPlan.strategy === "native-fork",
         },
       } satisfies AgentTurnInput,
       },
@@ -1232,6 +1228,57 @@ function buildRootRuntimePrompt(snapshot: GraphSnapshot, prompt: string, selecte
   }
 
   return selectedText ? buildSelectionPrompt(selectedText, prompt, selectionSourceRole) : prompt;
+}
+
+function buildBranchCreationRuntimePlan(
+  snapshot: GraphSnapshot,
+  sourceMessage: MessageNode,
+  input: CreateBranchInput,
+): {
+  prompt: string;
+  session: AgentTurnInput["session"];
+  strategy: "native-fork" | "replay";
+  visibleHistoryLength: number | null;
+} {
+  if (canUseNativeBranchFork(snapshot, sourceMessage)) {
+    return {
+      prompt:
+        input.mode === "selection"
+          ? buildSelectionPrompt(input.selectedText!, input.prompt, sourceMessage.role)
+          : input.prompt,
+      session: {
+        mode: "resume",
+        handle: sourceMessage.sessionId!,
+      },
+      strategy: "native-fork",
+      visibleHistoryLength: null,
+    };
+  }
+
+  const visibleHistory = store.getVisiblePathToMessage(sourceMessage.id);
+  return {
+    prompt: buildPrefixReplayPrompt({
+      history: visibleHistory,
+      userPrompt: input.prompt,
+      selectedText: input.mode === "selection" ? input.selectedText! : null,
+      selectedTextSourceRole: sourceMessage.role,
+    }),
+    session: {
+      mode: "new",
+    },
+    strategy: "replay",
+    visibleHistoryLength: visibleHistory.length,
+  };
+}
+
+function canUseNativeBranchFork(snapshot: GraphSnapshot, sourceMessage: MessageNode) {
+  const sourceSessionId = sourceMessage.sessionId?.trim();
+  if (!sourceSessionId || sourceMessage.runtimeKind !== "claude") {
+    return false;
+  }
+
+  const branchMessages = snapshot.messages.filter((message) => message.branchId === sourceMessage.branchId);
+  return branchMessages.at(-1)?.id === sourceMessage.id;
 }
 
 function readBooleanEnv(name: string) {

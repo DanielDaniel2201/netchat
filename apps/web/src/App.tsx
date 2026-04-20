@@ -141,6 +141,8 @@ type BubbleComposerMode =
   | "branch-from-message"
   | "branch-from-selection";
 
+type TailComposerIntent = "continue" | "branch";
+
 type RootComposerMode = "conversation" | "article";
 
 type MessageNodeData = {
@@ -422,6 +424,7 @@ function NetchatApp() {
   const [activePathMessageId, setActivePathMessageId] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
+  const [tailComposerIntent, setTailComposerIntent] = useState<TailComposerIntent>("continue");
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
@@ -631,6 +634,7 @@ function NetchatApp() {
   const selectedMessageIsTail = selectedMessage
     ? selectedBranchMessages.at(-1)?.id === selectedMessage.id
     : true;
+  const showTailComposerIntentToggle = Boolean(selectedMessage && selectedMessageIsTail);
   const sendMode: BubbleComposerMode =
     !selectedMessage
       ? "root"
@@ -638,9 +642,13 @@ function NetchatApp() {
         ? selectionForSelectedMessage
           ? "branch-from-selection"
           : "branch-from-message"
-        : selectedBranch?.id === rootBranchId
-          ? "continue-root"
-          : "continue-branch";
+        : tailComposerIntent === "branch"
+          ? selectionForSelectedMessage
+            ? "branch-from-selection"
+            : "branch-from-message"
+          : selectedBranch?.id === rootBranchId
+            ? "continue-root"
+            : "continue-branch";
   const activeNetAgent =
     activeNet?.agentRuntimeId
       ? (agentOptions.find((agent) => agent.runtimeId === activeNet.agentRuntimeId) ?? null)
@@ -2029,6 +2037,15 @@ function NetchatApp() {
   }, [selectedMessageId, selectionDraft]);
 
   useEffect(() => {
+    if (!selectedMessage) {
+      setTailComposerIntent("continue");
+      return;
+    }
+
+    setTailComposerIntent(selectedMessageIsTail ? "continue" : "branch");
+  }, [selectedMessage?.id, selectedMessageIsTail]);
+
+  useEffect(() => {
     if (editingNetId && !workspaceNets.some((net) => net.id === editingNetId)) {
       cancelNetRename();
     }
@@ -2618,6 +2635,14 @@ function NetchatApp() {
       activeAgentLabel,
     runtimeKind: sendTargetAgent?.runtimeKind ?? sendTargetRuntimeKind ?? activeNet?.agentRuntimeKind ?? null,
   };
+  const bubbleComposerIntentLabel =
+    tailComposerIntent === "branch"
+      ? selectedMessage?.sessionId && selectedMessage.runtimeKind === "claude"
+        ? "Native fork when possible"
+        : "Replay branch"
+      : selectedMessage?.sessionId
+        ? "Continue current session"
+        : "Continue active lane";
   const newNetModeToggleButton = (
     <button
       type="button"
@@ -3343,6 +3368,39 @@ function NetchatApp() {
               ) : null}
 
               <div className="relative px-5 py-4">
+                {showTailComposerIntentToggle ? (
+                  <div className="mb-4 flex items-start justify-between gap-4 border-b border-[var(--node-border)] pb-4">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={cn(
+                          "editorial-meta inline-flex min-h-9 items-center border px-3 py-2 transition-colors",
+                          tailComposerIntent === "continue"
+                            ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
+                            : "border-[var(--node-border)] bg-[rgba(244,241,234,0.48)] text-[rgba(26,26,26,0.68)] hover:border-[var(--text-main)] hover:text-[var(--text-main)]",
+                        )}
+                        onClick={() => setTailComposerIntent("continue")}
+                      >
+                        Continue session
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "editorial-meta inline-flex min-h-9 items-center border px-3 py-2 transition-colors",
+                          tailComposerIntent === "branch"
+                            ? "border-[var(--block-ochre)] bg-[var(--block-ochre)] text-white"
+                            : "border-[var(--node-border)] bg-[rgba(244,241,234,0.48)] text-[rgba(26,26,26,0.68)] hover:border-[var(--block-ochre)] hover:text-[var(--block-ochre)]",
+                        )}
+                        onClick={() => setTailComposerIntent("branch")}
+                      >
+                        Start branch
+                      </button>
+                    </div>
+                    <div className="editorial-meta pt-2 text-[rgba(26,26,26,0.42)]">
+                      {bubbleComposerIntentLabel}
+                    </div>
+                  </div>
+                ) : null}
                 <Textarea
                   ref={composerRef}
                   className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[17px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"

@@ -308,10 +308,16 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
     const startedAtMs = Date.now();
     const kind = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
     const resumeHandle = input.session.mode === "resume" ? input.session.handle : undefined;
+    const sessionLabel =
+      input.session.mode === "resume"
+        ? input.metadata?.forkSession
+          ? `fork:${input.session.handle}`
+          : input.session.handle
+        : "new";
 
     logRuntime(
       "info",
-      `Starting ${kind} via Claude CLI (cwd=${workingDirectory}, resume=${resumeHandle ?? "new"}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
+      `Starting ${kind} via Claude CLI (cwd=${workingDirectory}, session=${sessionLabel}, idle-timeout=${formatDuration(this.activityTimeoutMs)}, config=${this.describeCliConfig()}).`,
     );
 
     let stdout = "";
@@ -383,6 +389,9 @@ class ClaudeCliRuntime implements AgentRuntimeAdapter {
 
     if (input.session.mode === "resume") {
       args.push("--resume", input.session.handle);
+      if (input.metadata?.forkSession) {
+        args.push("--fork-session");
+      }
     }
 
     args.push(input.prompt);
@@ -1966,17 +1975,21 @@ class MockRuntimeAdapter implements AgentRuntimeAdapter {
     options?: AgentRuntimeExecutionOptions,
   ): Promise<AgentTurnResult> {
     const workingDirectory = resolveTurnWorkingDirectory(input, this.cwd);
-    const session = this.ensureSession(input.session.mode === "resume" ? input.session.handle : null);
+    const session = this.ensureSession(
+      input.session.mode === "resume" && !input.metadata?.forkSession ? input.session.handle : null,
+    );
     session.turns.push(input.prompt);
 
     const operation = input.metadata?.netchatOperation ?? (input.session.mode === "resume" ? "branch-turn" : "root-turn");
     const outputText =
       operation === "branch-create"
         ? [
-            "Mock replay-backed branch",
+            input.metadata?.forkSession ? "Mock native-fork branch" : "Mock replay-backed branch",
             `Handle: ${session.id}`,
             "",
-            "The branch started in a fresh session with a replay prompt built from the visible path only.",
+            input.metadata?.forkSession
+              ? "The branch started from the current session handle and forked into a new session id."
+              : "The branch started in a fresh session with a replay prompt built from the visible path only.",
             "",
             `Prompt:\n${input.prompt}`,
           ].join("\n")
