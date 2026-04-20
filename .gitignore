@@ -7,7 +7,7 @@ apps/server/.netchat
 .factory
 reference
 
-.collaborator
+.tmp/
 .alma-snapshots
 
 raw/
