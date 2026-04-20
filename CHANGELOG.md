@@ -2,6 +2,11 @@
 
 ## 2026-04-20
 
+- Fixed Codex app-server reasoning ingestion to consume reasoning/plan delta notifications and structured final message content instead of stringifying empty arrays, so thinking traces no longer collapse into `[]` after the app-server migration.
+- Moved non-final assistant text updates into the existing `Thinking & Tools` trace stack and reserved the response panel for the committed final answer, so interim Codex/Claude status messages no longer flash inside the final-response area and then disappear.
+- Stopped treating normal streamed final-answer tokens as persistent trace entries, and now only keep discrete non-final assistant message items inside `Thinking & Tools`, so Codex selection-branch replies no longer show a temporary dropdown that vanishes as soon as the final answer commits.
+- Demoted any streamed assistant pre-tool status text into a persisted trace block as soon as later tool/thinking events or a different assistant message arrive, so messages like “I’m listing the directory first” now stay inside `Thinking & Tools` instead of briefly occupying the final-response panel.
+- Normalized `\(...\)` and `\[...\]` LaTeX delimiters before markdown rendering, and restored focus-view selection-branch return state so article-focus branches render those formulas correctly and `Esc`/return jumps back to the originating article passage instead of exiting focus view outright.
 - Routed daemon runtime logs into `/runtime/diagnostics` and tagged Codex app-server sourced entries with a `(Codex appServer)` prefix, so diagnostics can distinguish native runtime-origin events from server-side strategy logs.
 - Fixed root-turn runtime/session planning to respect net-scoped agent selection before legacy root-session reuse, so switching a net from Claude to Codex now starts a fresh Codex thread with replayed visible history instead of incorrectly trying to `thread/resume` a Claude session id.
 - Stopped retryable Codex app-server error notifications such as `Reconnecting... n/5` from aborting netchat turns prematurely, and now finalize successful app-server turns from streamed assistant deltas when `turn/completed` arrives without embedded items.

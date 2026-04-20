@@ -223,6 +223,8 @@ type CodexActiveTurnState = {
   onEvent?: (event: AgentTurnEvent) => void;
   responseText: string;
   responseCompleted: boolean;
+  responseTextsByItemId: Map<string, string>;
+  assistantMessageBlocksById: Map<string, { order: number; text: string }>;
   commandBlocksById: Map<string, ToolBlockState>;
   thinkingBlocksById: Map<string, ThinkingBlockState>;
   blockOrder: number;
@@ -1309,17 +1311,39 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
     this.bumpActiveTurnTimer(activeTurn);
 
     if (method === "item/agentMessage/delta") {
-      const delta = this.readString(params, "delta") ?? "";
+      const delta = this.readString(params, "delta") ?? this.readStructuredCodexDelta(params) ?? "";
       if (!delta) {
         return;
       }
 
-      activeTurn.responseText += delta;
+      const itemId = this.readResponseItemId(params);
+      const nextText = `${activeTurn.responseTextsByItemId.get(itemId) ?? ""}${delta}`;
+      activeTurn.responseTextsByItemId.set(itemId, nextText);
+      activeTurn.responseText = nextText;
       activeTurn.onEvent?.({
         type: "response.update",
-        text: activeTurn.responseText,
+        text: nextText,
         isComplete: false,
       });
+      return;
+    }
+
+    if (
+      method === "item/reasoning/textDelta" ||
+      method === "item/reasoning/summaryTextDelta" ||
+      method === "item/plan/delta"
+    ) {
+      this.handleThinkingDeltaNotification(activeTurn, method, params);
+      return;
+    }
+
+    if (method === "turn/plan/updated") {
+      this.handlePlanUpdatedNotification(activeTurn, params);
+      return;
+    }
+
+    if (method === "codex/event/agent_reasoning" || method === "codex/event/reasoning_content_delta") {
+      this.handleStructuredReasoningNotification(activeTurn, method, params);
       return;
     }
 
@@ -1388,6 +1412,122 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
     }
   }
 
+  private handleThinkingDeltaNotification(
+    activeTurn: CodexActiveTurnState,
+    method: "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" | "item/plan/delta",
+    params: unknown,
+  ) {
+    const delta = this.readString(params, "delta") ?? this.readStructuredCodexDelta(params) ?? "";
+    if (!delta) {
+      return;
+    }
+
+    this.upsertThinkingBlock(activeTurn, {
+      blockId: this.readThinkingItemId(params, method),
+      mode: "append",
+      text: delta,
+      isComplete: false,
+    });
+  }
+
+  private handlePlanUpdatedNotification(activeTurn: CodexActiveTurnState, params: unknown) {
+    const planText = formatPlanUpdateText(params);
+    if (!planText) {
+      return;
+    }
+
+    this.upsertThinkingBlock(activeTurn, {
+      blockId: `codex-plan-${activeTurn.turnId ?? activeTurn.threadId}`,
+      mode: "replace",
+      text: planText,
+      isComplete: false,
+    });
+  }
+
+  private handleStructuredReasoningNotification(
+    activeTurn: CodexActiveTurnState,
+    method: "codex/event/agent_reasoning" | "codex/event/reasoning_content_delta",
+    params: unknown,
+  ) {
+    if (method === "codex/event/agent_reasoning") {
+      const text = this.readStructuredCodexReasoningText(params);
+      if (!text) {
+        return;
+      }
+
+      this.upsertThinkingBlock(activeTurn, {
+        blockId: `codex-reasoning-${this.readStructuredCodexTurnId(params) ?? activeTurn.turnId ?? activeTurn.threadId}`,
+        mode: "replace",
+        text,
+        isComplete: false,
+      });
+      return;
+    }
+
+    const delta = this.readStructuredCodexDelta(params);
+    if (!delta) {
+      return;
+    }
+
+    this.upsertThinkingBlock(activeTurn, {
+      blockId: this.readThinkingItemId(params, method),
+      mode: "append",
+      text: delta,
+      isComplete: false,
+    });
+  }
+
+  private upsertThinkingBlock(
+    activeTurn: CodexActiveTurnState,
+    input: {
+      blockId: string;
+      mode: "append" | "replace";
+      text: string;
+      isComplete: boolean;
+    },
+  ) {
+    const existing = activeTurn.thinkingBlocksById.get(input.blockId);
+    const block =
+      existing ??
+      {
+        kind: "thinking" as const,
+        order: this.nextTurnBlockOrder(activeTurn),
+        text: "",
+      };
+    block.text = input.mode === "append" ? `${block.text}${input.text}` : input.text;
+    if (!block.text.trim()) {
+      return;
+    }
+
+    activeTurn.thinkingBlocksById.set(input.blockId, block);
+    activeTurn.onEvent?.({
+      type: "thinking.update",
+      blockId: input.blockId,
+      order: block.order,
+      text: block.text,
+      isComplete: input.isComplete,
+    });
+  }
+
+  private readThinkingItemId(
+    params: unknown,
+    method:
+      | "item/reasoning/textDelta"
+      | "item/reasoning/summaryTextDelta"
+      | "item/plan/delta"
+      | "codex/event/reasoning_content_delta",
+  ) {
+    if (method === "codex/event/reasoning_content_delta") {
+      return (
+        this.readString(this.readObject(params, "msg"), "item_id") ??
+        this.readString(params, "id") ??
+        `codex-reasoning-${this.readStructuredCodexTurnId(params) ?? this.activeTurn?.threadId ?? "current"}`
+      );
+    }
+
+    return this.readString(params, "itemId") ?? this.readString(this.readObject(params, "item"), "id") ?? `thinking-${method}`;
+  }
+
   private handleThreadItemNotification(
     activeTurn: CodexActiveTurnState,
     method: "item/started" | "item/updated" | "item/completed",
@@ -1402,46 +1542,35 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
     const itemId = this.readString(item, "id") ?? makeId("codex-item");
 
     if (itemType === "agentMessage") {
-      const text = this.readString(item, "text")?.trim() ?? "";
+      const text = this.readAppServerAgentMessageText(item);
       if (!text) {
         return;
       }
 
+      activeTurn.responseTextsByItemId.set(itemId, text);
       activeTurn.responseText = text;
-      const isComplete = method === "item/completed";
-      activeTurn.responseCompleted = isComplete;
+      activeTurn.responseCompleted = false;
       activeTurn.onEvent?.({
         type: "response.update",
         text,
-        isComplete,
+        isComplete: false,
       });
       return;
     }
 
     if (itemType === "reasoning" || itemType === "plan") {
       const text =
-        this.readString(item, "text") ??
-        this.readString(item, "summary") ??
-        formatStructuredBlock(this.readArray(item, "content") ?? this.readArray(item, "summary"));
+        this.readStructuredText(this.readValue(item, "text")) ??
+        this.readStructuredText(this.readValue(item, "summary")) ??
+        this.readStructuredText(this.readValue(item, "content"));
       if (!text || text.trim().length === 0) {
         return;
       }
 
-      const existing = activeTurn.thinkingBlocksById.get(itemId);
-      const block =
-        existing ??
-        {
-          kind: "thinking" as const,
-          order: this.nextTurnBlockOrder(activeTurn),
-          text,
-        };
-      block.text = text;
-      activeTurn.thinkingBlocksById.set(itemId, block);
-      activeTurn.onEvent?.({
-        type: "thinking.update",
+      this.upsertThinkingBlock(activeTurn, {
         blockId: itemId,
-        order: block.order,
-        text: block.text,
+        mode: "replace",
+        text,
         isComplete: method === "item/completed",
       });
       return;
@@ -1582,13 +1711,55 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
         continue;
       }
 
-      const text = this.readString(itemRecord, "text")?.trim();
+      const text = this.readAppServerAgentMessageText(itemRecord);
       if (text) {
         return text;
       }
     }
 
     return "";
+  }
+
+  private readAppServerAgentMessageText(item: Record<string, unknown>) {
+    return (
+      this.readStructuredText(this.readValue(item, "text")) ??
+      this.readStructuredText(this.readValue(item, "content")) ??
+      this.readStructuredText(this.readValue(item, "summary")) ??
+      ""
+    ).trim();
+  }
+
+  private readStructuredText(value: unknown): string | null {
+    const text = extractStructuredText(value);
+    return text.trim().length > 0 ? text : null;
+  }
+
+  private readResponseItemId(params: unknown) {
+    return (
+      this.readString(params, "itemId") ??
+      this.readString(this.readObject(params, "item"), "id") ??
+      this.readString(this.readObject(params, "msg"), "item_id") ??
+      "codex-agent-message"
+    );
+  }
+
+  private readStructuredCodexDelta(params: unknown) {
+    const msg = this.readObject(params, "msg");
+    return this.readString(msg, "delta");
+  }
+
+  private readStructuredCodexReasoningText(params: unknown) {
+    const msg = this.readObject(params, "msg");
+    return (
+      this.readStructuredText(this.readValue(msg, "text")) ??
+      this.readStructuredText(this.readValue(msg, "summary")) ??
+      null
+    );
+  }
+
+  private readStructuredCodexTurnId(params: unknown) {
+    const msg = this.readObject(params, "msg");
+    return this.readString(msg, "turn_id") ?? this.readString(params, "id");
   }
 
   private clearActiveTurnTimer(activeTurn: CodexActiveTurnState) {
@@ -1684,6 +1855,8 @@ class CodexCliRuntime implements AgentRuntimeAdapter {
         onEvent: input.onEvent,
         responseText: "",
         responseCompleted: false,
+        responseTextsByItemId: new Map(),
+        assistantMessageBlocksById: new Map(),
         commandBlocksById: new Map(),
         thinkingBlocksById: new Map(),
         blockOrder: 0,
@@ -2879,6 +3052,35 @@ function readCodexThinkingText(item: CodexItemPayload) {
   return "";
 }
 
+function extractStructuredText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value === null || typeof value === "undefined") {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => extractStructuredText(entry))
+      .filter((entry) => entry.trim().length > 0)
+      .join("\n\n");
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["text", "delta", "summary", "content", "message", "title"]) {
+      const candidate = extractStructuredText(record[key]);
+      if (candidate.trim().length > 0) {
+        return candidate;
+      }
+    }
+  }
+
+  return "";
+}
+
 function formatStructuredBlock(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -2917,6 +3119,30 @@ function formatToolResultContent(content: unknown): string {
   }
 
   return formatStructuredBlock(content);
+}
+
+function formatPlanUpdateText(value: unknown): string {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+  const explanation = typeof record?.explanation === "string" ? record.explanation.trim() : "";
+  const rawPlan = Array.isArray(record?.plan) ? record.plan : [];
+  const planLines = rawPlan
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object") {
+        return "";
+      }
+
+      const stepRecord = entry as Record<string, unknown>;
+      const stepText = typeof stepRecord.step === "string" ? stepRecord.step.trim() : "";
+      if (!stepText) {
+        return "";
+      }
+
+      const status = typeof stepRecord.status === "string" ? stepRecord.status.trim() : "";
+      return status ? `${index + 1}. [${status}] ${stepText}` : `${index + 1}. ${stepText}`;
+    })
+    .filter((entry) => entry.length > 0);
+
+  return [explanation, ...planLines].filter((entry) => entry.length > 0).join("\n");
 }
 
 async function emitMockRuntimeEvents(

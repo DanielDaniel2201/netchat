@@ -1,4 +1,4 @@
-import {
+﻿import {
   CSSProperties,
   FormEvent,
   PointerEvent as ReactPointerEvent,
@@ -50,6 +50,7 @@ import {
   AgentRuntimeKind,
   AgentRuntimeOption,
   AssistantStreamState,
+  AssistantStreamBlock,
   CreateBranchInput,
   CreateBranchTurnInput,
   CreateNetInput,
@@ -394,6 +395,90 @@ const markdownComponents: Components = {
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath];
 const markdownRehypePlugins = [rehypeKatex];
+
+function isVisibleAssistantTraceBlock(block: AssistantStreamBlock) {
+  if (block.kind === "thinking" || block.kind === "assistant_message") {
+    return block.text.trim().length > 0;
+  }
+
+  return block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error";
+}
+
+function normalizeMarkdownMathDelimiters(content: string) {
+  return content
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/g)
+    .map((segment) => {
+      if (segment.startsWith("```") || (segment.startsWith("`") && segment.endsWith("`"))) {
+        return segment;
+      }
+
+      return segment
+        .replace(/\\\[((?:.|\r?\n)*?)\\\]/g, (match, expression: string) =>
+          shouldNormalizeMathExpression(expression) ? `\n$$\n${expression.trim()}\n$$\n` : match,
+        )
+        .replace(/\\\(((?:.|\r?\n)*?)\\\)/g, (match, expression: string) =>
+          shouldNormalizeMathExpression(expression) ? `$${expression.trim()}$` : match,
+        );
+    })
+    .join("");
+}
+
+function shouldNormalizeMathExpression(expression: string) {
+  const trimmedExpression = expression.trim();
+  if (!trimmedExpression) {
+    return false;
+  }
+
+  return /\\[a-zA-Z]+|[_^=]|\{|\}/.test(trimmedExpression);
+}
+
+function renderAssistantTraceBlock(block: AssistantStreamBlock, assistantLabel: string) {
+  if (block.kind === "thinking" || block.kind === "assistant_message") {
+    return (
+      <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
+        {block.text || (block.kind === "thinking" ? `${assistantLabel} is thinking...` : `${assistantLabel} is drafting...`)}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div>
+        <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
+        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[13px] leading-6 text-[rgba(26,26,26,0.78)]">
+          {block.inputText || "Waiting for tool arguments..."}
+        </pre>
+      </div>
+      {block.outputText ? (
+        <div>
+          <div className="editorial-meta text-[rgba(26,26,26,0.44)]">{block.isError ? "Tool error" : "Tool result"}</div>
+          <pre
+            className={cn(
+              "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[13px] leading-6",
+              block.isError
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
+            )}
+          >
+            {block.outputText}
+          </pre>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function resolveAssistantTraceBlockLabel(block: AssistantStreamBlock) {
+  if (block.kind === "thinking") {
+    return "Thinking";
+  }
+
+  if (block.kind === "assistant_message") {
+    return "Assistant update";
+  }
+
+  return `Tool: ${block.toolName}`;
+}
 
 export default function App() {
   return (
@@ -2487,6 +2572,17 @@ function NetchatApp() {
           setExpandedBranchIds((current) =>
             current.includes(optimisticTurn.branchId!) ? current : [...current, optimisticTurn.branchId!],
           );
+          if (isFocusViewActive && articleFocusMessage && selectedMessage.role === "article") {
+            setFocusReturnState({
+              kind: "selection-anchor",
+              returnFocusMessageId: articleFocusMessage.id,
+              sourceMessageId: selectedMessage.id,
+              branchId: optimisticTurn.branchId,
+            });
+            skipNextFocusTargetAutoScrollRef.current = false;
+            nextFocusTargetScrollBehaviorRef.current = "auto";
+            setPendingFocusAnchorScroll(null);
+          }
         }
         beginOptimisticTurn(optimisticTurn);
       }
@@ -3764,6 +3860,7 @@ function WorkspaceFilePreviewPanel({
   const fileName = file?.name ?? filePath.split("/").at(-1) ?? filePath;
   const fileLines = useMemo(() => splitWorkspaceFileContentLines(file?.content ?? ""), [file?.content]);
   const isMarkdownPreview = isMarkdownFilePath(file?.path ?? filePath);
+  const markdownPreviewContent = useMemo(() => normalizeMarkdownMathDelimiters(file?.content ?? ""), [file?.content]);
 
   return (
     <aside className="flex h-full w-full min-w-0 flex-col border-l border-[var(--text-main)] bg-white shadow-[-10px_0_0_rgba(26,26,26,0.04)]">
@@ -3800,7 +3897,7 @@ function WorkspaceFilePreviewPanel({
         ) : isMarkdownPreview ? (
           <div className="px-6 py-5 text-[15px] leading-7 text-[var(--text-main)]">
             <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
-              {file.content}
+              {markdownPreviewContent}
             </ReactMarkdown>
           </div>
         ) : (
@@ -4145,12 +4242,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
     isAssistant && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
   const renderStreamingResponseAsMarkdown = !showPendingAssistantState;
   const shouldFreezeMeasuredHeight = showPendingAssistantState;
-  const visibleAssistantBlocks =
-    liveAssistantState?.blocks.filter((block) =>
-      block.kind === "thinking"
-        ? block.text.trim().length > 0
-        : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
-    ) ?? [];
+  const visibleAssistantBlocks = liveAssistantState?.blocks.filter(isVisibleAssistantTraceBlock) ?? [];
   const selectedPassage = isUser ? data.message.selectedText?.trim() ?? "" : "";
   const viewport = useViewport();
   const selectionAnchorSignature = useMemo(
@@ -4448,13 +4540,11 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                         className="border border-[var(--node-border)] bg-[rgba(244,241,234,0.5)]"
                       >
                         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-3 py-2.5">
-                          <span className="editorial-meta text-[rgba(26,26,26,0.66)]">
-                            {block.kind === "thinking" ? "Thinking" : `Tool · ${block.toolName}`}
-                          </span>
+                          <span className="editorial-meta text-[rgba(26,26,26,0.66)]">{resolveAssistantTraceBlockLabel(block)}</span>
                           <span
                             className={cn(
                               "editorial-meta",
-                              block.kind === "thinking"
+                              block.kind === "thinking" || block.kind === "assistant_message"
                                 ? block.status === "complete"
                                   ? "text-[rgba(26,26,26,0.44)]"
                                   : "text-[var(--block-ochre)]"
@@ -4472,39 +4562,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                                 : "Streaming"}
                           </span>
                         </summary>
-                        <div className="space-y-3 px-3 py-3">
-                          {block.kind === "thinking" ? (
-                            <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
-                              {block.text || `${data.assistantLabel} is thinking...`}
-                            </div>
-                          ) : (
-                            <>
-                              <div>
-                                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
-                                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[13px] leading-6 text-[rgba(26,26,26,0.78)]">
-                                  {block.inputText || "Waiting for tool arguments..."}
-                                </pre>
-                              </div>
-                              {block.outputText ? (
-                                <div>
-                                  <div className="editorial-meta text-[rgba(26,26,26,0.44)]">
-                                    {block.isError ? "Tool error" : "Tool result"}
-                                  </div>
-                                  <pre
-                                    className={cn(
-                                      "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[13px] leading-6",
-                                      block.isError
-                                        ? "border-rose-200 bg-rose-50 text-rose-700"
-                                        : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
-                                    )}
-                                  >
-                                    {block.outputText}
-                                  </pre>
-                                </div>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
+                        <div className="space-y-3 px-3 py-3">{renderAssistantTraceBlock(block, data.assistantLabel)}</div>
                       </details>
                     ))}
                   </div>
@@ -4521,7 +4579,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                       : "border-[var(--node-border)] bg-white",
                 )}
               >
-                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Response</div>
+                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Final response</div>
                 <div className="mt-3">
                   {responseContent ? (
                     <SelectableMessage
@@ -4599,12 +4657,7 @@ function FocusMessageBubble({
   const showPendingAssistantState =
     isAssistant && liveAssistantState && (liveAssistantState.status === "pending" || liveAssistantState.status === "streaming");
   const renderStreamingResponseAsMarkdown = !showPendingAssistantState;
-  const visibleAssistantBlocks =
-    liveAssistantState?.blocks.filter((block) =>
-      block.kind === "thinking"
-        ? block.text.trim().length > 0
-        : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
-    ) ?? [];
+  const visibleAssistantBlocks = liveAssistantState?.blocks.filter(isVisibleAssistantTraceBlock) ?? [];
   const selectedPassage = isUser ? message.selectedText?.trim() ?? "" : "";
 
   return (
@@ -4746,12 +4799,12 @@ function FocusMessageBubble({
                       >
                         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-[var(--node-border)] px-3 py-2.5">
                           <span className="editorial-meta text-[rgba(26,26,26,0.66)]">
-                            {block.kind === "thinking" ? "Thinking" : `Tool 路 ${block.toolName}`}
+                            {resolveAssistantTraceBlockLabel(block)}
                           </span>
                           <span
                             className={cn(
                               "editorial-meta",
-                              block.kind === "thinking"
+                              block.kind === "thinking" || block.kind === "assistant_message"
                                 ? block.status === "complete"
                                   ? "text-[rgba(26,26,26,0.44)]"
                                   : "text-[var(--block-ochre)]"
@@ -4765,39 +4818,7 @@ function FocusMessageBubble({
                             {block.status === "error" ? "Error" : block.status === "complete" ? "Complete" : "Streaming"}
                           </span>
                         </summary>
-                        <div className="space-y-3 px-3 py-3">
-                          {block.kind === "thinking" ? (
-                            <div className="message-copy whitespace-pre-wrap text-[15px] leading-7 text-[rgba(26,26,26,0.78)]">
-                              {block.text || `${assistantLabel} is thinking...`}
-                            </div>
-                          ) : (
-                            <>
-                              <div>
-                                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Tool input</div>
-                                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap border border-[var(--node-border)] bg-white px-3 py-3 text-[13px] leading-6 text-[rgba(26,26,26,0.78)]">
-                                  {block.inputText || "Waiting for tool arguments..."}
-                                </pre>
-                              </div>
-                              {block.outputText ? (
-                                <div>
-                                  <div className="editorial-meta text-[rgba(26,26,26,0.44)]">
-                                    {block.isError ? "Tool error" : "Tool result"}
-                                  </div>
-                                  <pre
-                                    className={cn(
-                                      "mt-2 overflow-x-auto whitespace-pre-wrap border px-3 py-3 text-[13px] leading-6",
-                                      block.isError
-                                        ? "border-rose-200 bg-rose-50 text-rose-700"
-                                        : "border-[var(--node-border)] bg-white text-[rgba(26,26,26,0.78)]",
-                                    )}
-                                  >
-                                    {block.outputText}
-                                  </pre>
-                                </div>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
+                        <div className="space-y-3 px-3 py-3">{renderAssistantTraceBlock(block, assistantLabel)}</div>
                       </details>
                     ))}
                   </div>
@@ -4814,7 +4835,7 @@ function FocusMessageBubble({
                       : "border-[var(--node-border)] bg-white",
                 )}
               >
-                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Response</div>
+                <div className="editorial-meta text-[rgba(26,26,26,0.44)]">Final response</div>
                 <div className="mt-3">
                   {responseContent ? (
                     <SelectableMessage
@@ -4941,6 +4962,10 @@ function SelectableMessage({
   const contentRef = useRef<HTMLDivElement>(null);
   const updateNodeInternals = useUpdateNodeInternals();
   const renderableAnchors = useMemo(() => getRenderableSelectionAnchors(content, anchors), [anchors, content]);
+  const normalizedMarkdownContent = useMemo(
+    () => (renderMarkdown ? normalizeMarkdownMathDelimiters(content) : content),
+    [content, renderMarkdown],
+  );
   const hasAnchors = renderableAnchors.length > 0;
   const [positionedAnchors, setPositionedAnchors] = useState<PositionedSelectionAnchor[]>([]);
 
@@ -5157,7 +5182,7 @@ function SelectableMessage({
             ? (
               <div className="message-markdown">
                 <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
-                  {content}
+                  {normalizedMarkdownContent}
                 </ReactMarkdown>
               </div>
             )
@@ -6498,11 +6523,7 @@ function projectAssistantStateForRender(state: AssistantStreamState | null | und
 
   return {
     ...state,
-    blocks: state.blocks.filter((block) =>
-      block.kind === "thinking"
-        ? block.text.trim().length > 0
-        : block.inputText.trim().length > 0 || block.outputText.trim().length > 0 || block.status === "error",
-    ),
+    blocks: state.blocks.filter(isVisibleAssistantTraceBlock),
     responseText: state.responseText,
   };
 }
@@ -6542,7 +6563,10 @@ function assistantStatesEqual(left: AssistantStreamState | null, right: Assistan
       return false;
     }
 
-    if (leftBlock.kind === "thinking" && rightBlock.kind === "thinking") {
+    if (
+      (leftBlock.kind === "thinking" || leftBlock.kind === "assistant_message") &&
+      (rightBlock.kind === "thinking" || rightBlock.kind === "assistant_message")
+    ) {
       if (leftBlock.text !== rightBlock.text) {
         return false;
       }
@@ -6550,8 +6574,8 @@ function assistantStatesEqual(left: AssistantStreamState | null, right: Assistan
     }
 
     if (
-      leftBlock.kind !== "thinking" &&
-      rightBlock.kind !== "thinking" &&
+      leftBlock.kind === "tool_call" &&
+      rightBlock.kind === "tool_call" &&
       (leftBlock.toolCallId !== rightBlock.toolCallId ||
         leftBlock.toolName !== rightBlock.toolName ||
         leftBlock.inputText !== rightBlock.inputText ||

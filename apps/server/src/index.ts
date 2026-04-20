@@ -846,19 +846,113 @@ function applyRuntimeEventToAssistantState(
   event: AgentTurnEvent,
 ): AssistantStreamState {
   if (event.type === "response.update") {
-    return {
-      ...current,
-      status: event.isComplete ? "complete" : "streaming",
-      responseText: event.text,
-    };
+    const nextState = demoteStreamingResponseTextToAssistantBlockIfNeeded(current, event.text);
+    return event.isComplete
+      ? finalizeAssistantState(nextState, event.text)
+      : {
+          ...nextState,
+          status: "streaming",
+          responseText: event.text,
+        };
   }
 
-  const nextBlocks = upsertAssistantBlock(current.blocks, event);
+  const nextState = demoteStreamingResponseTextToAssistantBlockIfNeeded(closeActiveResponsePreview(current), null);
+  const nextBlocks = upsertAssistantBlock(nextState.blocks, event);
   return {
-    ...current,
+    ...nextState,
     status: "streaming",
     blocks: nextBlocks,
   };
+}
+
+function demoteStreamingResponseTextToAssistantBlockIfNeeded(
+  current: AssistantStreamState,
+  nextResponseText: string | null,
+): AssistantStreamState {
+  const currentResponseText = current.responseText.trim();
+  if (!currentResponseText) {
+    return current;
+  }
+
+  if (nextResponseText !== null) {
+    const trimmedNextResponseText = nextResponseText.trim();
+    if (!trimmedNextResponseText) {
+      return current;
+    }
+
+    if (
+      trimmedNextResponseText.startsWith(currentResponseText) ||
+      currentResponseText.startsWith(trimmedNextResponseText)
+    ) {
+      return current;
+    }
+  }
+
+  const nextBlocks = [...current.blocks];
+  const existingAssistantMessageIndex = nextBlocks.findIndex(
+    (block) => block.kind === "assistant_message" && block.text.trim() === currentResponseText,
+  );
+  if (existingAssistantMessageIndex < 0) {
+    nextBlocks.push({
+      id: buildAssistantUpdateBlockId(nextBlocks),
+      order: resolveNextAssistantBlockOrder(nextBlocks),
+      kind: "assistant_message",
+      text: current.responseText,
+      status: "complete",
+    });
+    nextBlocks.sort(compareAssistantBlocks);
+  }
+
+  return {
+    ...current,
+    blocks: nextBlocks,
+    responseText: "",
+    activeResponseBlockId: null,
+  };
+}
+
+function closeActiveResponsePreview(current: AssistantStreamState): AssistantStreamState {
+  if (!current.activeResponseBlockId) {
+    return current;
+  }
+
+  let changed = false;
+  const nextBlocks = current.blocks.map((block) => {
+    if (block.id !== current.activeResponseBlockId || block.kind !== "assistant_message" || block.status === "complete") {
+      return block;
+    }
+
+    changed = true;
+    return {
+      ...block,
+      status: "complete" as const,
+    };
+  });
+
+  return changed || current.activeResponseBlockId !== null
+    ? {
+        ...current,
+        blocks: nextBlocks,
+        activeResponseBlockId: null,
+      }
+    : current;
+}
+
+function buildAssistantUpdateBlockId(blocks: AssistantStreamBlock[]) {
+  const currentMax = blocks.reduce((maxValue, block) => {
+    if (!block.id.startsWith("assistant-update-")) {
+      return maxValue;
+    }
+
+    const parsedValue = Number(block.id.slice("assistant-update-".length));
+    return Number.isFinite(parsedValue) ? Math.max(maxValue, parsedValue) : maxValue;
+  }, 0);
+
+  return `assistant-update-${currentMax + 1}`;
+}
+
+function resolveNextAssistantBlockOrder(blocks: AssistantStreamBlock[]) {
+  return blocks.reduce((maxValue, block) => Math.max(maxValue, block.order), 0) + 1;
 }
 
 function upsertAssistantBlock(
@@ -873,6 +967,24 @@ function upsertAssistantBlock(
       id: event.blockId,
       order: event.order,
       kind: "thinking",
+      text: event.text,
+      status: event.isComplete ? "complete" : "streaming",
+    };
+
+    if (index >= 0) {
+      nextBlocks[index] = nextBlock;
+    } else {
+      nextBlocks.push(nextBlock);
+    }
+
+    return nextBlocks.sort(compareAssistantBlocks);
+  }
+
+  if (event.type === "assistant_message.update") {
+    const nextBlock: AssistantStreamBlock = {
+      id: event.blockId,
+      order: event.order,
+      kind: "assistant_message",
       text: event.text,
       status: event.isComplete ? "complete" : "streaming",
     };

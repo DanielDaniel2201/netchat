@@ -274,6 +274,13 @@ export type AgentTurnEvent =
       isComplete: boolean;
     }
   | {
+      type: "assistant_message.update";
+      blockId: string;
+      order: number;
+      text: string;
+      isComplete: boolean;
+    }
+  | {
       type: "tool.update";
       blockId: string;
       order: number;
@@ -487,6 +494,13 @@ export type AssistantStreamBlock =
   | {
       id: string;
       order: number;
+      kind: "assistant_message";
+      text: string;
+      status: "streaming" | "complete";
+    }
+  | {
+      id: string;
+      order: number;
       kind: "tool_call";
       toolCallId: string;
       toolName: string;
@@ -500,6 +514,7 @@ export type AssistantStreamState = {
   status: "pending" | "streaming" | "complete" | "error";
   blocks: AssistantStreamBlock[];
   responseText: string;
+  activeResponseBlockId: string | null;
   errorMessage: string | null;
 };
 
@@ -508,6 +523,7 @@ export function createPendingAssistantState(): AssistantStreamState {
     status: "pending",
     blocks: [],
     responseText: "",
+    activeResponseBlockId: null,
     errorMessage: null,
   };
 }
@@ -527,9 +543,39 @@ export function resolveAgentRuntimeLabel(runtimeKind: AgentRuntimeKind) {
   }
 }
 
-function finalizeAssistantBlocks(blocks: AssistantStreamBlock[] | null | undefined): AssistantStreamBlock[] {
-  return (blocks ?? []).map((block) =>
-    block.kind === "thinking"
+function stripFinalResponsePreviewBlock(
+  blocks: AssistantStreamBlock[] | null | undefined,
+  responseText: string,
+): AssistantStreamBlock[] {
+  const normalizedResponseText = responseText.trim();
+  if (!normalizedResponseText) {
+    return [...(blocks ?? [])];
+  }
+
+  const nextBlocks = [...(blocks ?? [])];
+  for (let index = nextBlocks.length - 1; index >= 0; index -= 1) {
+    const block = nextBlocks[index];
+    if (block.kind !== "assistant_message" || !block.id.startsWith("response-preview-")) {
+      continue;
+    }
+
+    if (block.text.trim() !== normalizedResponseText) {
+      continue;
+    }
+
+    nextBlocks.splice(index, 1);
+    break;
+  }
+
+  return nextBlocks;
+}
+
+function finalizeAssistantBlocks(
+  blocks: AssistantStreamBlock[] | null | undefined,
+  responseText: string,
+): AssistantStreamBlock[] {
+  return stripFinalResponsePreviewBlock(blocks, responseText).map((block) =>
+    block.kind === "thinking" || block.kind === "assistant_message"
       ? {
           ...block,
           status: "complete",
@@ -545,10 +591,12 @@ export function finalizeAssistantState(
   current: AssistantStreamState | null | undefined,
   responseText: string,
 ): AssistantStreamState {
+  const finalResponseText = responseText || current?.responseText || "";
   return {
     status: current?.errorMessage ? "error" : "complete",
-    blocks: finalizeAssistantBlocks(current?.blocks),
-    responseText: responseText || current?.responseText || "",
+    blocks: finalizeAssistantBlocks(current?.blocks, finalResponseText),
+    responseText: finalResponseText,
+    activeResponseBlockId: null,
     errorMessage: current?.errorMessage ?? null,
   };
 }
