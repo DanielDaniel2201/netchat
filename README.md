@@ -1,56 +1,40 @@
-# @danielwyq/netchat
+# NetChat
 
-Local-first graph chat interface for Claude Code.
+NetChat turns linear AI chat into a branching workspace for learning, deep dives, brainstorming, or any parallel exploration using your local agent harness.
 
-The packaged app now assumes a single local controller + daemon flow on `localhost`; no pairing step or machine-state file is required.
+```bash
+npm install -g @danielwyq/netchat
+```
+
+![Branching from an article](./assets/branch-from-article-reading.png)
+
+## How it works
+
+NetChat connects your local Claude Code and Codex to a web interface.
+
+You keep your own agent setup. NetChat gives it a clearer surface for thinking and exploring.
+
+Branching from a tail AI message uses native branch capability of Claude Code and Codex, while branching from a non-tail AI message, for now, is pseudo-branching, replaying previous conversations without cache.
 
 ## Quick start
 
-Use the latest stable release:
+### Install @danielwyq/netchat
 
 ```bash
-npx @danielwyq/netchat@latest
+npm install -g @danielwyq/netchat
 ```
 
-Run daemon-only mode:
+Run `netchat` under your desired path in terminal.
+
+### Start without installing
+
+Run under your desired path in terminal:
 
 ```bash
-npx @danielwyq/netchat@latest daemon --server http://localhost:3001
+npx @danielwyq/netchat
 ```
-
-Show local help:
-
-```bash
-npx @danielwyq/netchat@latest --help
-npx @danielwyq/netchat@latest local --help
-npx @danielwyq/netchat@latest daemon --help
-```
-
-## Why `@latest`
-
-If you update frequently, always documenting and using `@latest` helps avoid stale cached resolutions:
-
-```bash
-npx @danielwyq/netchat@latest
-```
-
-If users still suspect cache issues, they can run:
-
-```bash
-npm cache clean --force
-npx @danielwyq/netchat@latest
-```
-
-## Environment variables
-
-- `PORT`: local controller port (default `3001`)
-- `DAEMON_PORT`: local daemon port (default `4318`)
-- `NETCHAT_NO_BROWSER=true`: do not auto-open browser
-- `NETCHAT_SKIP_WEB_BUILD=true`: skip rebuilding web assets during local runs
-- `NETCHAT_APP_DB_PATH`: custom SQLite path
-- `NETCHAT_RUNTIME_TIMEOUT_MS`: global runtime inactivity timeout in milliseconds
-- `NETCHAT_CODEX_TIMEOUT_MS`: Codex-specific inactivity timeout in milliseconds (default `300000`)
 
 ## Requirements
 
 - Node.js `>=20`
+- Claude Code or Codex installed and configured
