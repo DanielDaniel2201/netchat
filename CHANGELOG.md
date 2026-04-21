@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-21
+
+- Replaced the tail-composer `Continue session / Start branch / Replay branch` strip with a single `Continue`/`Branch` toggle button beside send, so mode switching is now one-click inline without extra selector chrome.
+- Persisted tail-composer mode by last successful send (`continue` or `branch`) and wired placeholder copy to the active mode, so reopening composer restores prior intent while first-open in existing nets still defaults to `continue`.
+
 ## 2026-04-20
 
 - Fixed Codex app-server reasoning ingestion to consume reasoning/plan delta notifications and structured final message content instead of stringifying empty arrays, so thinking traces no longer collapse into `[]` after the app-server migration.

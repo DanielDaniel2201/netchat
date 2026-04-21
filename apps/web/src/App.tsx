@@ -109,6 +109,7 @@ const sidebarCollapsedStorageKey = "netchat.sidebar.collapsed";
 const workspaceOrderStorageKey = "netchat.workspace.order";
 const workspacePanelsWidthStorageKey = "netchat.workspace.panels.width";
 const workspaceExplorerWidthStorageKey = "netchat.workspace.explorer.width";
+const tailComposerIntentStorageKey = "netchat.composer.tail.intent";
 const desktopCanvasLayoutBreakpoint = 1024;
 const expandedSidebarWidth = 288;
 const collapsedSidebarWidth = 80;
@@ -509,7 +510,9 @@ function NetchatApp() {
   const [activePathMessageId, setActivePathMessageId] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
-  const [tailComposerIntent, setTailComposerIntent] = useState<TailComposerIntent>("continue");
+  const [tailComposerIntent, setTailComposerIntent] = useState<TailComposerIntent>(() =>
+    readTailComposerIntentFromLocalStorage(tailComposerIntentStorageKey, "continue"),
+  );
   const [composerAnchor, setComposerAnchor] = useState<ComposerAnchor | null>(null);
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
@@ -2122,15 +2125,6 @@ function NetchatApp() {
   }, [selectedMessageId, selectionDraft]);
 
   useEffect(() => {
-    if (!selectedMessage) {
-      setTailComposerIntent("continue");
-      return;
-    }
-
-    setTailComposerIntent(selectedMessageIsTail ? "continue" : "branch");
-  }, [selectedMessage?.id, selectedMessageIsTail]);
-
-  useEffect(() => {
     if (editingNetId && !workspaceNets.some((net) => net.id === editingNetId)) {
       cancelNetRename();
     }
@@ -2403,6 +2397,7 @@ function NetchatApp() {
   const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
   const sendDisabled =
     composerValue.trim().length === 0 || isThinking || isSwitchingNet || isUpdatingActiveNetAgent || !canSendOnActiveLane;
+  const tailIntentToggleDisabled = isThinking || isSwitchingNet || isUpdatingActiveNetAgent;
 
   useEffect(() => {
     if (!isOnNewNetScreen && isAgentDropdownOpen) {
@@ -2462,6 +2457,10 @@ function NetchatApp() {
     const prompt = composerValue.trim();
     if (prompt.length === 0) {
       return;
+    }
+
+    if (selectedMessage && selectedMessageIsTail) {
+      writeTailComposerIntentToLocalStorage(tailComposerIntentStorageKey, tailComposerIntent);
     }
 
     if (isOnNewNetScreen && sendMode === "root") {
@@ -2731,15 +2730,6 @@ function NetchatApp() {
       activeAgentLabel,
     runtimeKind: sendTargetAgent?.runtimeKind ?? sendTargetRuntimeKind ?? activeNet?.agentRuntimeKind ?? null,
   };
-  const bubbleComposerIntentLabel =
-    tailComposerIntent === "branch"
-      ? selectedMessage?.sessionId &&
-        (selectedMessage.runtimeKind === "claude" || selectedMessage.runtimeKind === "codex")
-        ? "Native fork when possible"
-        : "Replay branch"
-      : selectedMessage?.sessionId
-        ? "Continue current session"
-        : "Continue active lane";
   const newNetModeToggleButton = (
     <button
       type="button"
@@ -3465,42 +3455,9 @@ function NetchatApp() {
               ) : null}
 
               <div className="relative px-5 py-4">
-                {showTailComposerIntentToggle ? (
-                  <div className="mb-4 flex items-start justify-between gap-4 border-b border-[var(--node-border)] pb-4">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className={cn(
-                          "editorial-meta inline-flex min-h-9 items-center border px-3 py-2 transition-colors",
-                          tailComposerIntent === "continue"
-                            ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
-                            : "border-[var(--node-border)] bg-[rgba(244,241,234,0.48)] text-[rgba(26,26,26,0.68)] hover:border-[var(--text-main)] hover:text-[var(--text-main)]",
-                        )}
-                        onClick={() => setTailComposerIntent("continue")}
-                      >
-                        Continue session
-                      </button>
-                      <button
-                        type="button"
-                        className={cn(
-                          "editorial-meta inline-flex min-h-9 items-center border px-3 py-2 transition-colors",
-                          tailComposerIntent === "branch"
-                            ? "border-[var(--block-ochre)] bg-[var(--block-ochre)] text-white"
-                            : "border-[var(--node-border)] bg-[rgba(244,241,234,0.48)] text-[rgba(26,26,26,0.68)] hover:border-[var(--block-ochre)] hover:text-[var(--block-ochre)]",
-                        )}
-                        onClick={() => setTailComposerIntent("branch")}
-                      >
-                        Start branch
-                      </button>
-                    </div>
-                    <div className="editorial-meta pt-2 text-[rgba(26,26,26,0.42)]">
-                      {bubbleComposerIntentLabel}
-                    </div>
-                  </div>
-                ) : null}
                 <Textarea
                   ref={composerRef}
-                  className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-18 text-[17px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
+                  className="!min-h-[112px] resize-none !rounded-none !border-0 !bg-transparent !px-0 !py-0 !pb-18 !pr-32 text-[17px] font-medium leading-9 text-[var(--text-main)] shadow-none placeholder:font-normal placeholder:text-[rgba(26,26,26,0.34)] focus-visible:ring-0"
                   placeholder={composerPlaceholder}
                   value={composerValue}
                   onChange={(event) => setComposerValue(event.target.value)}
@@ -3514,7 +3471,7 @@ function NetchatApp() {
                     }
                   }}
                 />
-                <div className="pointer-events-none absolute bottom-0 left-0 flex h-11 max-w-[calc(100%-6rem)] items-center px-5">
+                <div className="pointer-events-none absolute bottom-0 left-0 flex h-11 max-w-[calc(100%-12rem)] items-center px-5">
                   <AgentRuntimeBadge
                     className="max-w-full"
                     iconWrapperClassName="size-5"
@@ -3524,6 +3481,17 @@ function NetchatApp() {
                     runtimeKind={bubbleComposerAgentDisplay.runtimeKind}
                   />
                 </div>
+                <button
+                  className={cn(
+                    "absolute bottom-0 right-12 h-11 border-0 bg-transparent px-2 text-[13px] font-medium text-[var(--text-main)] underline decoration-[rgba(26,26,26,0.38)] decoration-1 underline-offset-4 outline-none transition-colors hover:bg-transparent hover:decoration-[var(--text-main)] focus-visible:bg-transparent",
+                    !showTailComposerIntentToggle ? "hidden" : "",
+                  )}
+                  disabled={tailIntentToggleDisabled}
+                  type="button"
+                  onClick={() => setTailComposerIntent((current) => (current === "continue" ? "branch" : "continue"))}
+                >
+                  {tailComposerIntent === "continue" ? "Continue" : "Branch"}
+                </button>
                 <Button
                   className="absolute bottom-0 right-0 h-11 w-11 rounded-none border border-[var(--text-main)] bg-[var(--text-main)] px-0 text-white shadow-none hover:bg-[var(--block-slate)]"
                   disabled={sendDisabled}
@@ -6231,6 +6199,31 @@ function readBooleanFromLocalStorage(key: string, fallback: boolean) {
     return storedValue === null ? fallback : storedValue === "true";
   } catch {
     return fallback;
+  }
+}
+
+function readTailComposerIntentFromLocalStorage(key: string, fallback: TailComposerIntent): TailComposerIntent {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(key);
+    return storedValue === "branch" || storedValue === "continue" ? storedValue : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeTailComposerIntentToLocalStorage(key: string, value: TailComposerIntent) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage write failures and keep the in-memory UI state.
   }
 }
 
