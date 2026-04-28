@@ -34,15 +34,16 @@ import {
   FolderOpen,
   FolderPlus,
   LoaderCircle,
+  LocateFixed,
   MessageSquare,
   MoreHorizontal,
   Newspaper,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  Scan,
   Trash2,
   X,
-  ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -119,8 +120,10 @@ const desktopWorkspaceExplorerMinWidth = 220;
 const desktopWorkspaceFilePreviewMinWidth = 320;
 const desktopWorkspacePanelsMinCanvasWidth = 360;
 const desktopWorkspacePanelsMaxWidthRatio = 0.72;
-const focusViewTopPadding = 144;
-const focusViewScrollTopInset = 152;
+const focusViewTopPadding = 0;
+const focusViewScrollTopInset = 0;
+const uiToastVisibleDurationMs = 2200;
+const uiToastExitDurationMs = 320;
 const webLogPrefix = "[netchat-web]";
 
 type SelectionDraft = {
@@ -230,32 +233,22 @@ type FocusBranchContinuation = {
   isActive: boolean;
 };
 
-type FocusReturnState =
-  | {
-    kind: "selection-anchor";
-    returnFocusMessageId: string;
-    sourceMessageId: string;
-    branchId: string;
-  }
-  | {
-    kind: "continuation-chooser";
-    returnFocusMessageId: string;
-    sourceMessageId: string;
-    branchId: string;
-  };
+type FocusReturnFrame = {
+  branchId: string;
+  returnFocusMessageId: string;
+  returnScrollTop: number;
+};
 
-type PendingFocusReturnScroll =
-  | {
-    kind: "selection-anchor";
-    sourceMessageId: string;
-    branchId: string;
-    behavior: ScrollBehavior;
-  }
-  | {
-    kind: "continuation-chooser";
-    sourceMessageId: string;
-    behavior: ScrollBehavior;
-  };
+type PendingFocusScrollRestore = {
+  targetMessageId: string;
+  scrollTop: number;
+};
+
+type UiToast = {
+  id: string;
+  message: string;
+  isVisible: boolean;
+};
 
 type WorkspacePaneDragState =
   | {
@@ -499,6 +492,7 @@ function NetchatApp() {
   const focusViewScrollRef = useRef<HTMLDivElement>(null);
   const skipNextFocusTargetAutoScrollRef = useRef(false);
   const nextFocusTargetScrollBehaviorRef = useRef<ScrollBehavior>("smooth");
+  const toastTimeoutIdsRef = useRef<number[]>([]);
   const workspacePanelsHostRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const agentDropdownRef = useRef<HTMLDivElement>(null);
@@ -517,11 +511,12 @@ function NetchatApp() {
   const [expandedBranchIds, setExpandedBranchIds] = useState<string[]>([]);
   const [pendingViewportAction, setPendingViewportAction] = useState<PendingViewportAction | null>(null);
   const [focusViewTargetMessageId, setFocusViewTargetMessageId] = useState<string | null>(null);
-  const [focusReturnState, setFocusReturnState] = useState<FocusReturnState | null>(null);
-  const [pendingFocusAnchorScroll, setPendingFocusAnchorScroll] = useState<PendingFocusReturnScroll | null>(null);
+  const [focusReturnStack, setFocusReturnStack] = useState<FocusReturnFrame[]>([]);
+  const [pendingFocusScrollRestore, setPendingFocusScrollRestore] = useState<PendingFocusScrollRestore | null>(null);
   const [measuredSelectionAnchorLayoutsByMessageId, setMeasuredSelectionAnchorLayoutsByMessageId] = useState<
     Record<string, MeasuredSelectionAnchorLayout[]>
   >({});
+  const [uiToasts, setUiToasts] = useState<UiToast[]>([]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [isSidebarTransitionReady, setIsSidebarTransitionReady] = useState(false);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => readStringArrayFromLocalStorage(workspaceOrderStorageKey));
@@ -557,6 +552,7 @@ function NetchatApp() {
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
+  const liveAssistantStatesByMessageId = useLiveAssistantStateStore((state) => state.statesByMessageId);
   const clearLiveAssistantStates = useLiveAssistantStateStore((state) => state.clearStates);
   const pruneLiveAssistantStates = useLiveAssistantStateStore((state) => state.pruneStates);
   const setLiveAssistantState = useLiveAssistantStateStore((state) => state.setState);
@@ -710,10 +706,6 @@ function NetchatApp() {
       : null;
   const selectedBranch = selectedMessage ? (branchesById.get(selectedMessage.branchId) ?? null) : null;
   const rootBranch = branchesById.get(rootBranchId) ?? null;
-  const rootConversationMessage = useMemo(() => (snapshot ? getRootBranchFirstConversationMessage(snapshot) : null), [snapshot]);
-  const articleFocusMessage =
-    rootConversationMessage && rootConversationMessage.role === "article" ? rootConversationMessage : null;
-  const isArticleModeNet = articleFocusMessage !== null;
   const selectedBranchMessages = selectedMessage ? messagesByBranch.get(selectedMessage.branchId) ?? [] : [];
   const selectionForSelectedMessage =
     selectedMessage && selectionDraft?.sourceMessageId === selectedMessage.id ? selectionDraft : null;
@@ -1153,6 +1145,7 @@ function NetchatApp() {
     },
   });
   const isThinking = activeStreamedTurn?.isPending ?? false;
+  const focusReturnState = focusReturnStack.at(-1) ?? null;
 
   function focusComposer() {
     window.requestAnimationFrame(() => {
@@ -1160,13 +1153,33 @@ function NetchatApp() {
     });
   }
 
-  const exitFocusView = useCallback(() => {
+  const showUiToast = useCallback((message: string) => {
+    const id = makeId("toast");
+    setUiToasts((current) => [...current, { id, message, isVisible: false }]);
+
+    const enterTimeoutId = window.setTimeout(() => {
+      setUiToasts((current) => current.map((toast) => (toast.id === id ? { ...toast, isVisible: true } : toast)));
+    }, 10);
+    const exitTimeoutId = window.setTimeout(() => {
+      setUiToasts((current) => current.map((toast) => (toast.id === id ? { ...toast, isVisible: false } : toast)));
+    }, uiToastVisibleDurationMs);
+    const removeTimeoutId = window.setTimeout(() => {
+      setUiToasts((current) => current.filter((toast) => toast.id !== id));
+    }, uiToastVisibleDurationMs + uiToastExitDurationMs);
+
+    toastTimeoutIdsRef.current.push(enterTimeoutId, exitTimeoutId, removeTimeoutId);
+  }, []);
+
+  const clearFocusView = useCallback(() => {
     skipNextFocusTargetAutoScrollRef.current = false;
     nextFocusTargetScrollBehaviorRef.current = "smooth";
-    setFocusReturnState(null);
-    setPendingFocusAnchorScroll(null);
+    setFocusReturnStack([]);
+    setPendingFocusScrollRestore(null);
     setFocusViewTargetMessageId(null);
-  }, []);
+    setSelectedMessageId(null);
+    setSelectionDraft(null);
+    clearBrowserSelection();
+  }, [setSelectedMessageId]);
 
   const openFocusView = useCallback(
     (messageId: string) => {
@@ -1178,6 +1191,15 @@ function NetchatApp() {
       setFocusViewTargetMessageId(messageId);
     },
     [setSelectedMessageId],
+  );
+  const enterFocusView = useCallback(
+    (messageId: string) => {
+      setFocusReturnStack([]);
+      setPendingFocusScrollRestore(null);
+      nextFocusTargetScrollBehaviorRef.current = "auto";
+      openFocusView(messageId);
+    },
+    [openFocusView],
   );
   const collapseBranchAndDescendants = useCallback(
     (branchId: string) => {
@@ -1192,31 +1214,39 @@ function NetchatApp() {
     [snapshot],
   );
 
-  const returnToArticleFocusView = useCallback(() => {
+  const pushFocusReturnFrame = useCallback(
+    (branchId: string) => {
+      if (!focusViewTargetMessageId) {
+        return;
+      }
+
+      const currentScrollTop = focusViewScrollRef.current?.scrollTop ?? 0;
+      setFocusReturnStack((current) => [
+        ...current,
+        {
+          branchId,
+          returnFocusMessageId: focusViewTargetMessageId,
+          returnScrollTop: currentScrollTop,
+        },
+      ]);
+    },
+    [focusViewTargetMessageId],
+  );
+
+  const returnFromFocusView = useCallback(() => {
     if (!focusReturnState) {
       return;
     }
 
-    const targetReturnState = focusReturnState;
-
-    collapseBranchAndDescendants(targetReturnState.branchId);
-    setPendingFocusAnchorScroll(
-      targetReturnState.kind === "selection-anchor"
-        ? {
-          kind: "selection-anchor",
-          sourceMessageId: targetReturnState.sourceMessageId,
-          branchId: targetReturnState.branchId,
-          behavior: "auto",
-        }
-        : {
-          kind: "continuation-chooser",
-          sourceMessageId: targetReturnState.sourceMessageId,
-          behavior: "auto",
-        },
-    );
-    setFocusReturnState(null);
+    collapseBranchAndDescendants(focusReturnState.branchId);
+    setPendingFocusScrollRestore({
+      targetMessageId: focusReturnState.returnFocusMessageId,
+      scrollTop: focusReturnState.returnScrollTop,
+    });
+    setFocusReturnStack((current) => current.slice(0, -1));
     skipNextFocusTargetAutoScrollRef.current = true;
-    openFocusView(targetReturnState.returnFocusMessageId);
+    nextFocusTargetScrollBehaviorRef.current = "auto";
+    openFocusView(focusReturnState.returnFocusMessageId);
   }, [collapseBranchAndDescendants, focusReturnState, openFocusView]);
 
   const applyViewport = useCallback(
@@ -1253,14 +1283,13 @@ function NetchatApp() {
   }
 
   const syncBubbleComposerAnchor = useCallback(() => {
-    if (!selectedMessage) {
+    if (!selectedMessage || !isFocusViewActive) {
       setComposerAnchor((current) => (current === null ? current : null));
       return;
     }
 
-    const nodeElement = isFocusViewActive
-      ? focusViewScrollRef.current?.querySelector<HTMLElement>(`[data-focus-message-id="${selectedMessage.id}"]`) ?? null
-      : document.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectedMessage.id}"]`);
+    const nodeElement =
+      focusViewScrollRef.current?.querySelector<HTMLElement>(`[data-focus-message-id="${selectedMessage.id}"]`) ?? null;
     if (!nodeElement) {
       setComposerAnchor((current) => (current === null ? current : null));
       return;
@@ -1289,6 +1318,14 @@ function NetchatApp() {
   }, [isFocusViewActive, selectedMessage]);
 
   function pickMessage(messageId: string) {
+    if (!isFocusViewActive) {
+      setSelectedMessageId(null);
+      setSelectionDraft(null);
+      clearBrowserSelection();
+      showUiToast("Enter Focus View to open the composer.");
+      return;
+    }
+
     if (selectedMessageId === messageId) {
       activateMessagePath(null);
       setSelectedMessageId(null);
@@ -1305,6 +1342,10 @@ function NetchatApp() {
   }
 
   function applySelectionDraft(draft: SelectionDraft) {
+    if (!isFocusViewActive) {
+      return;
+    }
+
     activateMessagePath(draft.sourceMessageId);
     setSelectedMessageId(draft.sourceMessageId);
     setSelectionDraft(draft);
@@ -1550,7 +1591,7 @@ function NetchatApp() {
 
       if (anchor.isExpanded) {
         if (isFocusViewActive && focusReturnState?.branchId === anchor.id) {
-          returnToArticleFocusView();
+          returnFromFocusView();
           return;
         }
 
@@ -1568,18 +1609,13 @@ function NetchatApp() {
         return;
       }
 
-      if (isFocusViewActive && articleFocusMessage) {
+      if (isFocusViewActive && focusViewTargetMessageId) {
         setExpandedBranchIds((current) => (current.includes(anchor.id) ? current : [...current, anchor.id]));
         activateMessagePath(anchor.targetMessageId);
-        setFocusReturnState({
-          kind: "selection-anchor",
-          returnFocusMessageId: articleFocusMessage.id,
-          sourceMessageId: anchor.sourceMessageId,
-          branchId: anchor.id,
-        });
+        pushFocusReturnFrame(anchor.id);
         skipNextFocusTargetAutoScrollRef.current = false;
         nextFocusTargetScrollBehaviorRef.current = "auto";
-        setPendingFocusAnchorScroll(null);
+        setPendingFocusScrollRestore(null);
         openFocusView(anchor.targetMessageId);
         setPendingViewportAction(null);
         return;
@@ -1598,12 +1634,13 @@ function NetchatApp() {
       }
     },
     [
-      articleFocusMessage,
       collapseBranchAndDescendants,
       focusReturnState,
+      focusViewTargetMessageId,
+      pushFocusReturnFrame,
       openFocusView,
       isFocusViewActive,
-      returnToArticleFocusView,
+      returnFromFocusView,
       snapshot,
       setSelectedMessageId,
     ],
@@ -1622,7 +1659,7 @@ function NetchatApp() {
       persistedAssistantStatesByMessageId,
       onPickMessage: pickMessage,
       onToggleSelectionAnchor: toggleSelectionAnchor,
-      onEnterFocusView: openFocusView,
+      onEnterFocusView: enterFocusView,
       selectionDraft,
       measuredNodeHeights,
       measuredSelectionAnchorLayoutsByMessageId,
@@ -1634,9 +1671,9 @@ function NetchatApp() {
   }, [
     activeAgentLabel,
     expandedBranchIdSet,
+    enterFocusView,
     measuredNodeHeights,
     measuredSelectionAnchorLayoutsByMessageId,
-    openFocusView,
     pathViewportMessageId,
     persistedAssistantStatesByMessageId,
     reportMessageNodeHeight,
@@ -1671,6 +1708,19 @@ function NetchatApp() {
       snapshot && focusViewTargetMessageId ? buildFocusViewMessages(snapshot, focusViewTargetMessageId) : [],
     [focusViewTargetMessageId, snapshot],
   );
+  const focusViewHasInProgressBubble = useMemo(
+    () =>
+      focusPathMessages.some((message) => {
+        if (message.role !== "assistant") {
+          return false;
+        }
+
+        const assistantState =
+          liveAssistantStatesByMessageId[message.id] ?? persistedAssistantStatesByMessageId[message.id] ?? null;
+        return assistantState?.status === "pending" || assistantState?.status === "streaming";
+      }),
+    [focusPathMessages, liveAssistantStatesByMessageId, persistedAssistantStatesByMessageId],
+  );
   const focusPathSignature = useMemo(() => focusPathMessages.map((message) => message.id).join("|"), [focusPathMessages]);
   const focusPathMessageIdSet = useMemo(() => new Set(focusPathMessages.map((message) => message.id)), [focusPathMessages]);
   const focusWholeMessageContinuationsBySourceMessageId = useMemo(
@@ -1680,6 +1730,71 @@ function NetchatApp() {
         : new Map<string, FocusBranchContinuation[]>(),
     [focusPathMessageIdSet, focusViewTargetMessageId, snapshot],
   );
+  const exitFocusView = useCallback(() => {
+    if (focusViewHasInProgressBubble) {
+      showUiToast("Wait for the in-progress reply to finish before leaving Focus View.");
+      return;
+    }
+
+    clearFocusView();
+  }, [clearFocusView, focusViewHasInProgressBubble, showUiToast]);
+
+  const handleFocusReturn = useCallback(() => {
+    if (focusViewHasInProgressBubble) {
+      showUiToast("Wait for the in-progress reply to finish before leaving Focus View.");
+      return;
+    }
+
+    returnFromFocusView();
+  }, [focusViewHasInProgressBubble, returnFromFocusView, showUiToast]);
+
+  const focusNearestVisibleBubble = useCallback(() => {
+    const hostElement = canvasHostRef.current;
+    if (!hostElement) {
+      return;
+    }
+
+    const nodeElements = Array.from(hostElement.querySelectorAll<HTMLElement>(".react-flow__node[data-id]"));
+    if (nodeElements.length === 0) {
+      showUiToast("No visible bubble can be focused right now.");
+      return;
+    }
+
+    const hostRect = hostElement.getBoundingClientRect();
+    const centerX = hostRect.left + hostRect.width / 2;
+    const centerY = hostRect.top + hostRect.height / 2;
+    const intersectingNodeElements = nodeElements.filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.right > hostRect.left && rect.left < hostRect.right && rect.bottom > hostRect.top && rect.top < hostRect.bottom;
+    });
+    const candidates = intersectingNodeElements.length > 0 ? intersectingNodeElements : nodeElements;
+
+    let closestMessageId: string | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    candidates.forEach((element) => {
+      const messageId = element.dataset.id?.trim() ?? "";
+      if (!messageId || !messagesById.has(messageId)) {
+        return;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const deltaX = centerX < rect.left ? rect.left - centerX : centerX > rect.right ? centerX - rect.right : 0;
+      const deltaY = centerY < rect.top ? rect.top - centerY : centerY > rect.bottom ? centerY - rect.bottom : 0;
+      const distance = deltaX ** 2 + deltaY ** 2;
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestMessageId = messageId;
+      }
+    });
+
+    if (!closestMessageId) {
+      showUiToast("No visible bubble can be focused right now.");
+      return;
+    }
+
+    enterFocusView(closestMessageId);
+  }, [enterFocusView, messagesById, showUiToast]);
 
   const handleFocusContinuationSelect = useCallback(
     (continuation: FocusBranchContinuation) => {
@@ -1687,18 +1802,15 @@ function NetchatApp() {
       setSelectedMessageId(null);
       setSelectionDraft(null);
       clearBrowserSelection();
-      if (continuation.kind === "branch") {
-        setFocusReturnState({
-          kind: "continuation-chooser",
-          returnFocusMessageId: continuation.sourceMessageId,
-          sourceMessageId: continuation.sourceMessageId,
-          branchId: continuation.branchId,
-        });
+      if (continuation.kind === "branch" && focusViewTargetMessageId) {
+        pushFocusReturnFrame(continuation.branchId);
       }
-      skipNextFocusTargetAutoScrollRef.current = true;
+      skipNextFocusTargetAutoScrollRef.current = false;
+      nextFocusTargetScrollBehaviorRef.current = "auto";
+      setPendingFocusScrollRestore(null);
       setFocusViewTargetMessageId(continuation.focusTargetMessageId);
     },
-    [setSelectedMessageId],
+    [focusViewTargetMessageId, pushFocusReturnFrame, setSelectedMessageId],
   );
 
   const handleViewportChange = useCallback(
@@ -1742,8 +1854,8 @@ function NetchatApp() {
   useEffect(() => {
     lastAutoFitNetIdRef.current = null;
     lastViewportResetNetIdRef.current = null;
-    setFocusReturnState(null);
-    setPendingFocusAnchorScroll(null);
+    setFocusReturnStack([]);
+    setPendingFocusScrollRestore(null);
   }, [activeNetId]);
 
   useEffect(() => {
@@ -2033,18 +2145,9 @@ function NetchatApp() {
     }
 
     if (!snapshot || !snapshot.messages.some((message) => message.id === focusViewTargetMessageId)) {
-      exitFocusView();
+      clearFocusView();
     }
-  }, [exitFocusView, focusViewTargetMessageId, snapshot]);
-
-  useEffect(() => {
-    if (isArticleModeNet) {
-      return;
-    }
-
-    setFocusReturnState(null);
-    setPendingFocusAnchorScroll(null);
-  }, [isArticleModeNet]);
+  }, [clearFocusView, focusViewTargetMessageId, snapshot]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -2092,12 +2195,22 @@ function NetchatApp() {
     pruneLiveAssistantStates(snapshot.messages.map((message) => message.id));
   }, [clearLiveAssistantStates, pruneLiveAssistantStates, snapshot]);
 
+  useEffect(
+    () => () => {
+      toastTimeoutIdsRef.current.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+      toastTimeoutIdsRef.current = [];
+    },
+    [],
+  );
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         if (isFocusViewActive) {
           if (focusReturnState) {
-            returnToArticleFocusView();
+            handleFocusReturn();
             return;
           }
 
@@ -2116,7 +2229,7 @@ function NetchatApp() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [exitFocusView, focusReturnState, isFocusViewActive, returnToArticleFocusView, setSelectedMessageId]);
+  }, [exitFocusView, focusReturnState, handleFocusReturn, isFocusViewActive, setSelectedMessageId]);
 
   useEffect(() => {
     if (selectionDraft && selectionDraft.sourceMessageId !== selectedMessageId) {
@@ -2321,65 +2434,37 @@ function NetchatApp() {
   }, [focusPathSignature, focusViewTargetMessageId, isFocusViewActive]);
 
   useEffect(() => {
-    if (!isFocusViewActive || !pendingFocusAnchorScroll) {
+    if (!isFocusViewActive || !pendingFocusScrollRestore || focusViewTargetMessageId !== pendingFocusScrollRestore.targetMessageId) {
       return;
     }
 
     let frameId = 0;
     let attempts = 0;
-    const targetAnchor = pendingFocusAnchorScroll;
+    const targetRestore = pendingFocusScrollRestore;
 
-    const scrollAnchorIntoView = () => {
+    const restoreFocusScrollTop = () => {
       const container = focusViewScrollRef.current;
-      const targetElement =
-        targetAnchor.kind === "selection-anchor"
-          ? container?.querySelector<HTMLElement>(
-            `[data-focus-message-id="${targetAnchor.sourceMessageId}"] [data-selection-anchor-id="${targetAnchor.branchId}"]`,
-          ) ?? null
-          : container?.querySelector<HTMLElement>(
-            `[data-focus-continuation-source-message-id="${targetAnchor.sourceMessageId}"]`,
-          ) ?? null;
-      if (!container || !targetElement) {
+      if (!container) {
         if (attempts < 12) {
           attempts += 1;
-          frameId = window.requestAnimationFrame(scrollAnchorIntoView);
+          frameId = window.requestAnimationFrame(restoreFocusScrollTop);
         }
         return;
       }
 
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = targetElement.getBoundingClientRect();
-      const desiredTop =
-        targetAnchor.kind === "selection-anchor"
-          ? container.clientHeight / 3
-          : Math.max(24, container.clientHeight - targetRect.height - 48);
-      const targetOffset = container.scrollTop + (targetRect.top - containerRect.top);
-      const nextScrollTop = Math.max(0, Math.round(targetOffset - desiredTop));
-      if (targetAnchor.behavior === "smooth") {
-        container.scrollTo({
-          top: nextScrollTop,
-          behavior: "smooth",
-        });
-      } else {
-        container.scrollTop = nextScrollTop;
-      }
-
-      setPendingFocusAnchorScroll((current) =>
-        current?.kind === targetAnchor.kind &&
-          current.sourceMessageId === targetAnchor.sourceMessageId &&
-          (current.kind === "continuation-chooser" ||
-            (targetAnchor.kind === "selection-anchor" && current.branchId === targetAnchor.branchId))
-          ? null
-          : current,
+      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      container.scrollTop = clamp(Math.round(targetRestore.scrollTop), 0, maxScrollTop);
+      setPendingFocusScrollRestore((current) =>
+        current?.targetMessageId === targetRestore.targetMessageId && current.scrollTop === targetRestore.scrollTop ? null : current,
       );
     };
 
-    frameId = window.requestAnimationFrame(scrollAnchorIntoView);
+    frameId = window.requestAnimationFrame(restoreFocusScrollTop);
 
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [focusPathSignature, isFocusViewActive, pendingFocusAnchorScroll]);
+  }, [focusPathSignature, focusViewTargetMessageId, isFocusViewActive, pendingFocusScrollRestore]);
 
   const isSwitchingNet =
     createNetMutation.isPending ||
@@ -2394,7 +2479,7 @@ function NetchatApp() {
     updateNetAgentMutation.isPending && updateNetAgentMutation.variables?.netId === activeNetId;
   const hasMessages = Boolean(snapshot && snapshot.messages.length > 0);
   const isOnNewNetScreen = !graphQuery.isLoading && !hasMessages;
-  const showBubbleComposer = Boolean(selectedMessage && composerAnchor);
+  const showBubbleComposer = Boolean(isFocusViewActive && selectedMessage && composerAnchor);
   const sendDisabled =
     composerValue.trim().length === 0 || isThinking || isSwitchingNet || isUpdatingActiveNetAgent || !canSendOnActiveLane;
   const tailIntentToggleDisabled = isThinking || isSwitchingNet || isUpdatingActiveNetAgent;
@@ -2571,16 +2656,11 @@ function NetchatApp() {
           setExpandedBranchIds((current) =>
             current.includes(optimisticTurn.branchId!) ? current : [...current, optimisticTurn.branchId!],
           );
-          if (isFocusViewActive && articleFocusMessage && selectedMessage.role === "article") {
-            setFocusReturnState({
-              kind: "selection-anchor",
-              returnFocusMessageId: articleFocusMessage.id,
-              sourceMessageId: selectedMessage.id,
-              branchId: optimisticTurn.branchId,
-            });
+          if (isFocusViewActive && focusViewTargetMessageId) {
+            pushFocusReturnFrame(optimisticTurn.branchId);
             skipNextFocusTargetAutoScrollRef.current = false;
             nextFocusTargetScrollBehaviorRef.current = "auto";
-            setPendingFocusAnchorScroll(null);
+            setPendingFocusScrollRestore(null);
           }
         }
         beginOptimisticTurn(optimisticTurn);
@@ -2628,6 +2708,12 @@ function NetchatApp() {
         })
         : null;
       if (optimisticTurn) {
+        if (optimisticTurn.branchId && isFocusViewActive && focusViewTargetMessageId) {
+          pushFocusReturnFrame(optimisticTurn.branchId);
+          skipNextFocusTargetAutoScrollRef.current = false;
+          nextFocusTargetScrollBehaviorRef.current = "auto";
+          setPendingFocusScrollRestore(null);
+        }
         beginOptimisticTurn(optimisticTurn);
       }
       void runStreamedTurn(
@@ -3202,7 +3288,16 @@ function NetchatApp() {
           <div ref={canvasHostRef} className="relative min-h-0 flex-1 overflow-hidden">
             <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.92)_0%,rgba(244,241,234,0)_100%)]" />
             {!isFocusViewActive ? (
-              <div className="absolute right-4 top-4 z-20">
+              <div className="absolute right-4 top-4 z-20 flex items-center gap-3">
+                <button
+                  type="button"
+                  className="inline-flex h-10 w-10 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.34)]"
+                  disabled={graph.nodes.length === 0}
+                  title="Focus the bubble nearest the center of the current view"
+                  onClick={focusNearestVisibleBubble}
+                >
+                  <Scan className="size-4" />
+                </button>
                 <button
                   type="button"
                   className={cn(
@@ -3379,6 +3474,22 @@ function NetchatApp() {
           ) : null}
         </div>
 
+        {uiToasts.length > 0 ? (
+          <div className="pointer-events-none fixed inset-x-0 top-5 z-[60] flex flex-col items-center gap-2 px-4">
+            {uiToasts.map((toast) => (
+              <div
+                key={toast.id}
+                className={cn(
+                  "max-w-[min(36rem,calc(100vw-2rem))] border border-[var(--text-main)] bg-white px-4 py-3 text-center text-[14px] leading-6 text-[var(--text-main)] shadow-[10px_10px_0_rgba(26,26,26,0.08)] transition-all duration-300",
+                  toast.isVisible ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0",
+                )}
+              >
+                {toast.message}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         {isFocusViewActive ? (
           <div className="fixed inset-0 z-40 bg-[var(--bg-cream)]">
             <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(244,241,234,0.96)_0%,rgba(244,241,234,0)_100%)]" />
@@ -3388,7 +3499,7 @@ function NetchatApp() {
                   type="button"
                   className="inline-flex h-10 w-10 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[8px_8px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
                   title="Return to the previous focus position"
-                  onClick={returnToArticleFocusView}
+                  onClick={handleFocusReturn}
                 >
                   <CornerUpLeft className="size-4" />
                 </button>
@@ -4448,30 +4559,8 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
               </div>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <div className="editorial-meta text-[rgba(26,26,26,0.42)]">
-              {formatMessageTime(data.message.createdAt)}
-            </div>
-            {isArticle ? (
-              <button
-                type="button"
-                data-focus-trigger="true"
-                className="inline-flex h-8 min-w-[2rem] items-center justify-center border border-[var(--text-main)] bg-white px-2 text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)]"
-                title="Open focus view"
-                onMouseDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  data.onEnterFocusView(data.message.id);
-                }}
-              >
-                <ZoomIn className="size-3.5" />
-              </button>
-            ) : null}
+          <div className="shrink-0 editorial-meta text-[rgba(26,26,26,0.42)]">
+            {formatMessageTime(data.message.createdAt)}
           </div>
         </div>
 
@@ -5770,6 +5859,10 @@ function buildFocusViewMessages(snapshot: GraphSnapshot, targetMessageId: string
 
   if (targetMessage.branchId !== rootBranchId) {
     return snapshot.messages.filter((message) => message.branchId === targetMessage.branchId);
+  }
+
+  if (targetMessage.role !== "article") {
+    return snapshot.messages.filter((message) => message.branchId === rootBranchId);
   }
 
   const rootArticleContinuations =

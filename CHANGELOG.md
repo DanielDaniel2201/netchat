@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-28
+
+- Replaced the per-article bubble Focus trigger with a global top-right `Focus` action that picks the bubble nearest the current canvas viewport center, opens Focus View on that bubble, and aligns the target bubble flush to the top of the reading surface.
+- Locked inline replying to Focus View only, turning the canvas into a stable read-only browse mode, and added an in-app top-center toast for blocked actions such as trying to reply outside Focus View or trying to leave Focus View while a reply is still streaming.
+- Reworked Focus View branch return handling from a single article-only jump target into a nested return stack with parent scroll restoration, so second-level and deeper branch returns now collapse only the child branch and step back to the immediate parent view instead of snapping all the way back to the root article.
+
 ## 2026-04-21
 
 - Replaced the tail-composer `Continue session / Start branch / Replay branch` strip with a single `Continue`/`Branch` toggle button beside send, so mode switching is now one-click inline without extra selector chrome.
