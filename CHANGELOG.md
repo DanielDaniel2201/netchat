@@ -7,6 +7,8 @@
 - Added server-side app settings storage plus a new MinerU-backed workspace PDF-to-Markdown API, so PDF article imports can upload through MinerU, poll parse status, download `full.md`, and write the generated Markdown beside the source PDF inside the active workspace.
 - Wired Article Mode PDF selection to require a configured MinerU token, surface MinerU parse/load progress and errors in the UI, and automatically continue by loading the generated Markdown as the root article once parsing finishes.
 - Fixed MinerU PDF upload signing by removing the extra `Content-Type` header from the presigned OSS `PUT`, so article-mode PDF imports no longer fail immediately with `SignatureDoesNotMatch`.
+- Started copying MinerU's extracted `images/` directory beside the generated Markdown file, so the relative image links in `full.md` can resolve locally after a PDF import.
+- Resolved article-mode relative Markdown assets against each article file's `sourcePath` through a workspace asset route, so local links like `images/...` now render correctly inside netchat instead of only working in external Markdown previews.
 
 ## 2026-04-28
 

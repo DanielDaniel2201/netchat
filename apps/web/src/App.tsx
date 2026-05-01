@@ -261,6 +261,10 @@ type PendingMineruPdfImport = {
   sourcePdfPath: string;
 };
 
+type MarkdownRenderContext = {
+  sourcePath: string | null;
+};
+
 type WorkspacePaneDragState =
   | {
     kind: "canvas-explorer";
@@ -397,6 +401,37 @@ const markdownComponents: Components = {
     );
   },
 };
+
+function createMarkdownComponents(context: MarkdownRenderContext): Components {
+  return {
+    ...markdownComponents,
+    a: ({ children, href }) => {
+      const resolvedHref = resolveMarkdownAssetUrl(href, context.sourcePath);
+      if (!resolvedHref) {
+        return <>{children}</>;
+      }
+
+      return (
+        <a
+          href={resolvedHref}
+          target={resolvedHref?.startsWith("#") ? undefined : "_blank"}
+          rel={resolvedHref?.startsWith("#") ? undefined : "noreferrer"}
+          className="break-words text-[var(--block-ochre)] underline decoration-[rgba(194,142,85,0.4)] underline-offset-4"
+        >
+          {children}
+        </a>
+      );
+    },
+    img: ({ src, alt }) => {
+      const resolvedSrc = resolveMarkdownAssetUrl(src, context.sourcePath);
+      if (!resolvedSrc) {
+        return null;
+      }
+
+      return <img alt={alt ?? ""} className="mb-4 max-w-full last:mb-0" loading="lazy" src={resolvedSrc} />;
+    },
+  };
+}
 
 const markdownRemarkPlugins = [remarkGfm, remarkMath];
 const markdownRehypePlugins = [rehypeKatex];
@@ -4890,6 +4925,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
                     <SelectableMessage
                       nodeId={data.message.id}
                       content={responseContent}
+                      sourcePath={data.message.sourcePath}
                       anchors={data.selectionAnchors}
                       disabled={!canSelectMessage}
                       renderMarkdown={renderStreamingResponseAsMarkdown}
@@ -4915,6 +4951,7 @@ function MessageGraphNode({ data }: NodeProps<Node<MessageNodeData>>) {
             <SelectableMessage
               nodeId={data.message.id}
               content={responseContent}
+              sourcePath={data.message.sourcePath}
               anchors={data.selectionAnchors}
               disabled={!canSelectMessage}
               renderMarkdown={isArticle && isMarkdownFilePath(data.message.sourcePath ?? "")}
@@ -5147,6 +5184,7 @@ function FocusMessageBubble({
                       nodeId={message.id}
                       anchors={selectionAnchors}
                       content={responseContent}
+                      sourcePath={message.sourcePath}
                       disabled={!canSelectMessage}
                       renderAnchorHandles={false}
                       renderMarkdown={renderStreamingResponseAsMarkdown}
@@ -5174,6 +5212,7 @@ function FocusMessageBubble({
               nodeId={message.id}
               anchors={selectionAnchors}
               content={responseContent}
+              sourcePath={message.sourcePath}
               disabled={!canSelectMessage}
               renderAnchorHandles={false}
               renderMarkdown={isArticle && isMarkdownFilePath(message.sourcePath ?? "")}
@@ -5246,6 +5285,7 @@ function FocusBranchContinuationChooser({
 function SelectableMessage({
   nodeId,
   content,
+  sourcePath,
   anchors,
   disabled,
   renderAnchorHandles = true,
@@ -5256,6 +5296,7 @@ function SelectableMessage({
 }: {
   nodeId: string;
   content: string;
+  sourcePath: string | null;
   anchors: MessageSelectionAnchor[];
   disabled: boolean;
   renderAnchorHandles?: boolean;
@@ -5271,6 +5312,7 @@ function SelectableMessage({
     () => (renderMarkdown ? normalizeMarkdownMathDelimiters(content) : content),
     [content, renderMarkdown],
   );
+  const scopedMarkdownComponents = useMemo(() => createMarkdownComponents({ sourcePath }), [sourcePath]);
   const hasAnchors = renderableAnchors.length > 0;
   const [positionedAnchors, setPositionedAnchors] = useState<PositionedSelectionAnchor[]>([]);
 
@@ -5486,7 +5528,11 @@ function SelectableMessage({
           {renderMarkdown
             ? (
               <div className="message-markdown">
-                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+                <ReactMarkdown
+                  remarkPlugins={markdownRemarkPlugins}
+                  rehypePlugins={markdownRehypePlugins}
+                  components={scopedMarkdownComponents}
+                >
                   {normalizedMarkdownContent}
                 </ReactMarkdown>
               </div>
@@ -7200,6 +7246,41 @@ function splitWorkspaceFileContentLines(content: string) {
   }
 
   return content.replace(/\r\n/g, "\n").split("\n");
+}
+
+function resolveMarkdownAssetUrl(rawUrl: string | null | undefined, sourcePath: string | null) {
+  const normalizedUrl = rawUrl?.trim() ?? "";
+  if (!normalizedUrl) {
+    return null;
+  }
+
+  if (
+    normalizedUrl.startsWith("#") ||
+    normalizedUrl.startsWith("/") ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(normalizedUrl)
+  ) {
+    return normalizedUrl;
+  }
+
+  if (!sourcePath || !isMarkdownFilePath(sourcePath)) {
+    return normalizedUrl;
+  }
+
+  const sourceDirectoryPath = sourcePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+  const combinedPath = sourceDirectoryPath ? `${sourceDirectoryPath}/${normalizedUrl}` : normalizedUrl;
+  const normalizedPath = normalizeWorkspaceAssetPath(combinedPath);
+  const query = new URLSearchParams({ path: normalizedPath }).toString();
+  return `/api/workspace/asset?${query}`;
+}
+
+function normalizeWorkspaceAssetPath(value: string) {
+  const normalized = value.replace(/\\/g, "/");
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    return value;
+  }
+
+  return segments.join("/");
 }
 
 function isMarkdownFilePath(filePath: string) {

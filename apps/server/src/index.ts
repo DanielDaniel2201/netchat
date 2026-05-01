@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
@@ -67,7 +69,7 @@ import { MachineStore } from "./machine-store.js";
 import { loadLocalEnv } from "./load-env.js";
 import { WorkspaceManagerStore } from "./workspace-manager.js";
 import { pickWorkspaceFolder } from "./workspace-picker.js";
-import { registerLocalWebUi } from "./web-ui.js";
+import { getContentType, registerLocalWebUi } from "./web-ui.js";
 
 loadLocalEnv();
 
@@ -120,6 +122,19 @@ app.get("/api/workspace/file", async (request, reply): Promise<WorkspaceFileCont
     return store.getWorkspaceFileContent(filePath);
   } catch (error) {
     diagnostics.log("warn", `Reading workspace file ${filePath || "."} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.get("/api/workspace/asset", async (request, reply) => {
+  const filePath = typeof (request.query as { path?: unknown }).path === "string" ? (request.query as { path?: string }).path ?? "" : "";
+
+  try {
+    const asset = store.getWorkspaceAssetFile(filePath);
+    reply.type(getContentType(asset.absolutePath));
+    return reply.send(readFileSync(asset.absolutePath));
+  } catch (error) {
+    diagnostics.log("warn", `Reading workspace asset ${filePath || "."} failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });

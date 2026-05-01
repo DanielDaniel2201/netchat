@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -29,6 +29,12 @@ type MineruExtractResult = {
   full_zip_url: string | null;
   err_msg: string | null;
   data_id: string | null;
+};
+
+type DownloadedMineruArchive = {
+  tempDirectory: string;
+  outputDirectory: string;
+  extractedEntries: string[];
 };
 
 const mineruApiBaseUrl = "https://mineru.net/api/v4";
@@ -79,13 +85,33 @@ export async function convertPdfToMarkdownWithMineru(input: {
     throw new Error("MinerU completed without returning a result archive.");
   }
 
-  const markdownContent = await downloadFullMarkdown(extractResult.full_zip_url);
-  const markdownFilePath = await buildSiblingMarkdownPath(absolutePdfPath);
-  await writeFile(markdownFilePath, markdownContent, "utf8");
+  const downloadedArchive = await downloadMineruArchive(extractResult.full_zip_url);
 
-  return {
-    markdownFilePath,
-  };
+  try {
+    const markdownEntry = downloadedArchive.extractedEntries.find((entry) => path.basename(entry).toLowerCase() === "full.md") ?? null;
+    if (!markdownEntry) {
+      throw new Error("MinerU result archive did not contain full.md.");
+    }
+
+    const markdownContent = await readFile(markdownEntry, "utf8");
+    if (!markdownContent.trim()) {
+      throw new Error("MinerU generated an empty markdown file.");
+    }
+
+    const markdownFilePath = await buildSiblingMarkdownPath(absolutePdfPath);
+    await writeFile(markdownFilePath, markdownContent, "utf8");
+    await copyExtractedImagesToSiblingDirectory({
+      extractedEntries: downloadedArchive.extractedEntries,
+      archiveOutputDirectory: downloadedArchive.outputDirectory,
+      markdownFilePath,
+    });
+
+    return {
+      markdownFilePath,
+    };
+  } finally {
+    await rm(downloadedArchive.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
+  }
 }
 
 async function reserveUploadUrl(input: {
@@ -234,9 +260,10 @@ function normalizeExtractResult(value: unknown): MineruExtractResult | null {
   };
 }
 
-async function downloadFullMarkdown(archiveUrl: string) {
+async function downloadMineruArchive(archiveUrl: string): Promise<DownloadedMineruArchive> {
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "netchat-mineru-"));
   const archivePath = path.join(tempDirectory, "result.zip");
+  const outputDirectory = path.join(tempDirectory, "unzipped");
 
   try {
     const response = await fetch(archiveUrl);
@@ -248,21 +275,16 @@ async function downloadFullMarkdown(archiveUrl: string) {
     await writeFile(archivePath, archiveBuffer);
     const extractedEntries = await unzipArchiveToDirectory({
       archivePath,
-      outputDirectory: path.join(tempDirectory, "unzipped"),
+      outputDirectory,
     });
-    const markdownEntry = extractedEntries.find((entry) => path.basename(entry).toLowerCase() === "full.md") ?? null;
-    if (!markdownEntry) {
-      throw new Error("MinerU result archive did not contain full.md.");
-    }
-
-    const markdownContent = await readFile(markdownEntry, "utf8");
-    if (!markdownContent.trim()) {
-      throw new Error("MinerU generated an empty markdown file.");
-    }
-
-    return markdownContent;
-  } finally {
+    return {
+      tempDirectory,
+      outputDirectory,
+      extractedEntries,
+    };
+  } catch (error) {
     await rm(tempDirectory, { force: true, recursive: true }).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -347,6 +369,28 @@ function buildMineruHeaders(token: string) {
 function resolveMineruErrorMessage(message: string | undefined, fallback: string) {
   const normalized = message?.trim();
   return normalized && normalized.length > 0 ? normalized : fallback;
+}
+
+async function copyExtractedImagesToSiblingDirectory(input: {
+  extractedEntries: string[];
+  archiveOutputDirectory: string;
+  markdownFilePath: string;
+}) {
+  const imageEntries = input.extractedEntries.filter((entry) => {
+    const relativeEntryPath = path.relative(input.archiveOutputDirectory, entry).replace(/\\/g, "/");
+    return relativeEntryPath.startsWith("images/");
+  });
+  if (imageEntries.length === 0) {
+    return;
+  }
+
+  const extractedImagesDirectoryPath = path.join(input.archiveOutputDirectory, "images");
+  const siblingImagesDirectoryPath = path.join(path.dirname(input.markdownFilePath), "images");
+  await mkdir(siblingImagesDirectoryPath, { recursive: true });
+  await cp(extractedImagesDirectoryPath, siblingImagesDirectoryPath, {
+    force: true,
+    recursive: true,
+  });
 }
 
 async function buildSiblingMarkdownPath(pdfPath: string) {

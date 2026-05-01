@@ -98,7 +98,7 @@ function sendFile(reply: FastifyReply, filePath: string) {
   return reply.send(readFileSync(filePath));
 }
 
-function getContentType(filePath: string) {
+export function getContentType(filePath: string) {
   switch (path.extname(filePath).toLowerCase()) {
     case ".css":
       return "text/css; charset=utf-8";

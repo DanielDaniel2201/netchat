@@ -141,6 +141,20 @@ export class WorkspaceManagerStore {
     };
   }
 
+  getWorkspaceAssetFile(filePath: string) {
+    const workspaceRootPath = this.activeStore.getWorkspaceState().workingDirectory;
+    const resolvedTarget = resolveWorkspaceTargetPath(workspaceRootPath, filePath);
+    const targetStats = statSync(resolvedTarget.absolutePath);
+    if (!targetStats.isFile()) {
+      throw new Error("The requested workspace path is not a file.");
+    }
+
+    return {
+      path: resolvedTarget.relativePath,
+      absolutePath: resolvedTarget.absolutePath,
+    };
+  }
+
   async convertWorkspacePdfToMarkdown(filePath: string, token: string) {
     const workspaceRootPath = this.activeStore.getWorkspaceState().workingDirectory;
     const resolvedTarget = resolveWorkspaceTargetPath(workspaceRootPath, filePath);
