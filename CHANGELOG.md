@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-05-01
+
+- Added a sidebar `Settings` action and modal with a persisted MinerU API token field, and rearranged the sidebar header so `Collapse`, `New workspace`, and `Settings` stay left-aligned while `New net` moves to the far right in expanded mode and becomes the fourth stacked icon in collapsed mode.
+- Let the MinerU token field reopen with the saved token already loaded under password masking, and added an inline eye toggle so users can reveal or hide the saved value without retyping it.
+- Added server-side app settings storage plus a new MinerU-backed workspace PDF-to-Markdown API, so PDF article imports can upload through MinerU, poll parse status, download `full.md`, and write the generated Markdown beside the source PDF inside the active workspace.
+- Wired Article Mode PDF selection to require a configured MinerU token, surface MinerU parse/load progress and errors in the UI, and automatically continue by loading the generated Markdown as the root article once parsing finishes.
+- Fixed MinerU PDF upload signing by removing the extra `Content-Type` header from the presigned OSS `PUT`, so article-mode PDF imports no longer fail immediately with `SignatureDoesNotMatch`.
+
 ## 2026-04-28
 
 - Replaced the per-article bubble Focus trigger with a global top-right `Focus` action that picks the bubble nearest the current canvas viewport center, opens Focus View on that bubble, and aligns the target bubble flush to the top of the reading surface.

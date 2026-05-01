@@ -6,10 +6,12 @@ import {
   AgentTurnEvent,
   AgentTurnInput,
   AgentTurnResult,
+  AppSettings,
   AssistantStreamBlock,
   AssistantStreamState,
   Branch,
   CompleteMachineJobInput,
+  CreateWorkspacePdfToMarkdownInput,
   CreateBranchInput,
   CreateBranchTurnInput,
   CreateMachineClaimJobInput,
@@ -28,6 +30,8 @@ import {
   ServerDiagnostics,
   TurnStreamEvent,
   UiConfig,
+  UpdateAppSettingsInput,
+  WorkspacePdfToMarkdownResult,
   WorkspaceDirectoryListing,
   WorkspaceFileContent,
   WorkspaceState,
@@ -42,6 +46,7 @@ import {
   createMachineJobEventInputSchema,
   createNetInputSchema,
   createMachineRegisterInputSchema,
+  createWorkspacePdfToMarkdownInputSchema,
   createBranchInputSchema,
   createRootArticleInputSchema,
   createBranchTurnInputSchema,
@@ -51,10 +56,12 @@ import {
   finalizeAssistantState,
   makeId,
   nowIso,
+  updateAppSettingsInputSchema,
   updateNetInputSchema,
   rootBranchId,
 } from "@netchat/shared";
 
+import { AppSettingsStore } from "./app-settings.js";
 import { ServerDiagnosticsStore } from "./diagnostics.js";
 import { MachineStore } from "./machine-store.js";
 import { loadLocalEnv } from "./load-env.js";
@@ -68,6 +75,7 @@ const app = Fastify({
   logger: false,
 });
 const store = new WorkspaceManagerStore();
+const appSettings = new AppSettingsStore();
 const machines = new MachineStore();
 const diagnostics = new ServerDiagnosticsStore({
   jobTimeoutMs: null,
@@ -112,6 +120,43 @@ app.get("/api/workspace/file", async (request, reply): Promise<WorkspaceFileCont
     return store.getWorkspaceFileContent(filePath);
   } catch (error) {
     diagnostics.log("warn", `Reading workspace file ${filePath || "."} failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.post("/api/workspace/pdf-to-markdown", async (request, reply): Promise<WorkspacePdfToMarkdownResult | void> => {
+  const input = createWorkspacePdfToMarkdownInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  const mineruApiToken = appSettings.getMineruApiToken();
+  if (!mineruApiToken) {
+    return reply.status(400).send({ message: "Set a MinerU API Token in Settings before choosing a PDF." });
+  }
+
+  try {
+    const result = await store.convertWorkspacePdfToMarkdown((input.data as CreateWorkspacePdfToMarkdownInput).filePath, mineruApiToken);
+    diagnostics.log("info", `Parsed PDF ${result.sourcePdfPath} through MinerU into ${result.markdownFilePath}.`);
+    return result;
+  } catch (error) {
+    diagnostics.log("warn", `MinerU PDF parsing failed: ${formatError(error)}`);
+    return reply.status(400).send({ message: formatError(error) });
+  }
+});
+
+app.get("/api/settings", async (): Promise<AppSettings> => appSettings.getPublicSettings());
+
+app.post("/api/settings", async (request, reply): Promise<AppSettings | void> => {
+  const input = updateAppSettingsInputSchema.safeParse(request.body);
+  if (!input.success) {
+    return reply.status(400).send({ error: input.error.flatten() });
+  }
+
+  try {
+    return appSettings.update(input.data as UpdateAppSettingsInput);
+  } catch (error) {
+    diagnostics.log("warn", `Updating app settings failed: ${formatError(error)}`);
     return reply.status(400).send({ message: formatError(error) });
   }
 });

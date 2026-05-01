@@ -103,6 +103,28 @@ export type WorkspaceFileContent = {
   content: string;
 };
 
+export type AppSettings = {
+  mineruApiTokenConfigured: boolean;
+  mineruApiToken: string;
+};
+
+export const updateAppSettingsInputSchema = z.object({
+  mineruApiToken: z.string().trim().max(512),
+});
+
+export type UpdateAppSettingsInput = z.infer<typeof updateAppSettingsInputSchema>;
+
+export type WorkspacePdfToMarkdownResult = {
+  sourcePdfPath: string;
+  markdownFilePath: string;
+};
+
+export const createWorkspacePdfToMarkdownInputSchema = z.object({
+  filePath: z.string().trim().min(1).max(4096),
+});
+
+export type CreateWorkspacePdfToMarkdownInput = z.infer<typeof createWorkspacePdfToMarkdownInputSchema>;
+
 export type UiConfig = {
   showSessionIds: boolean;
 };

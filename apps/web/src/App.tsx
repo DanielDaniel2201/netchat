@@ -38,10 +38,13 @@ import {
   MessageSquare,
   MoreHorizontal,
   Newspaper,
+  Eye,
+  EyeOff,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
   Scan,
+  Settings2,
   Trash2,
   X,
   ZoomOut,
@@ -50,6 +53,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import {
   AgentRuntimeKind,
   AgentRuntimeOption,
+  AppSettings,
   AssistantStreamState,
   AssistantStreamBlock,
   CreateBranchInput,
@@ -57,12 +61,15 @@ import {
   CreateNetInput,
   CreateRootArticleInput,
   CreateRootTurnInput,
+  CreateWorkspacePdfToMarkdownInput,
   GraphSnapshot,
   MachineWorkspacesState,
   MessageNode,
   PickWorkspaceFolderResult,
   TurnStreamEvent,
   UiConfig,
+  UpdateAppSettingsInput,
+  WorkspacePdfToMarkdownResult,
   WorkspaceDirectoryListing,
   WorkspaceExplorerEntry,
   WorkspaceFileContent,
@@ -248,6 +255,10 @@ type UiToast = {
   id: string;
   message: string;
   isVisible: boolean;
+};
+
+type PendingMineruPdfImport = {
+  sourcePdfPath: string;
 };
 
 type WorkspacePaneDragState =
@@ -552,6 +563,10 @@ function NetchatApp() {
   const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
   const [activeStreamedTurn, setActiveStreamedTurn] = useState<ActiveStreamedTurn | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [mineruApiTokenDraft, setMineruApiTokenDraft] = useState("");
+  const [isMineruApiTokenVisible, setIsMineruApiTokenVisible] = useState(false);
+  const [pendingMineruPdfImport, setPendingMineruPdfImport] = useState<PendingMineruPdfImport | null>(null);
   const liveAssistantStatesByMessageId = useLiveAssistantStateStore((state) => state.statesByMessageId);
   const clearLiveAssistantStates = useLiveAssistantStateStore((state) => state.clearStates);
   const pruneLiveAssistantStates = useLiveAssistantStateStore((state) => state.pruneStates);
@@ -572,6 +587,10 @@ function NetchatApp() {
   const uiConfigQuery = useQuery({
     queryKey: ["ui-config"],
     queryFn: () => request<UiConfig>("/api/ui-config"),
+  });
+  const appSettingsQuery = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: () => request<AppSettings>("/api/settings"),
   });
   const agentsQuery = useQuery({
     queryKey: ["agents"],
@@ -1128,6 +1147,7 @@ function NetchatApp() {
       setComposerValue("");
       setSelectionDraft(null);
       setStreamErrorMessage(null);
+      setPendingMineruPdfImport(null);
       clearBrowserSelection();
 
       const articleMessageId =
@@ -1140,8 +1160,52 @@ function NetchatApp() {
       await queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
     onError: (error) => {
+      setPendingMineruPdfImport(null);
       setStreamErrorMessage(formatErrorMessage(error) ?? "The article could not be loaded.");
       logWeb("error", `Seeding article mode failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const updateAppSettingsMutation = useMutation({
+    mutationFn: async (mineruApiToken: string) =>
+      request<AppSettings>("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({
+          mineruApiToken,
+        } satisfies UpdateAppSettingsInput),
+      }),
+    onSuccess: async (nextSettings) => {
+      queryClient.setQueryData(["app-settings"], nextSettings);
+      setMineruApiTokenDraft("");
+      setIsSettingsModalOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+      showUiToast(nextSettings.mineruApiTokenConfigured ? "MinerU token saved." : "MinerU token cleared.");
+    },
+    onError: (error) => {
+      logWeb("error", `Saving settings failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
+    },
+  });
+  const convertPdfToMarkdownMutation = useMutation({
+    mutationFn: async (filePath: string) => {
+      logWeb("info", `Parsing PDF ${filePath} through MinerU.`);
+      return request<WorkspacePdfToMarkdownResult>("/api/workspace/pdf-to-markdown", {
+        method: "POST",
+        body: JSON.stringify({
+          filePath,
+        } satisfies CreateWorkspacePdfToMarkdownInput),
+      });
+    },
+    onSuccess: async (result) => {
+      setPendingMineruPdfImport({
+        sourcePdfPath: result.sourcePdfPath,
+      });
+      setSelectedArticleFilePath(result.markdownFilePath);
+      await queryClient.invalidateQueries({ queryKey: ["workspace-explorer"] });
+      createRootArticleMutation.mutate(result.markdownFilePath);
+    },
+    onError: (error) => {
+      setPendingMineruPdfImport(null);
+      setStreamErrorMessage(formatErrorMessage(error) ?? "The PDF could not be parsed through MinerU.");
+      logWeb("error", `MinerU PDF parsing failed: ${formatErrorMessage(error) ?? "Unknown error"}`);
     },
   });
   const isThinking = activeStreamedTurn?.isPending ?? false;
@@ -1471,7 +1535,7 @@ function NetchatApp() {
   }
 
   function handleArticleFileSelect(filePath: string) {
-    if (createRootArticleMutation.isPending) {
+    if (createRootArticleMutation.isPending || convertPdfToMarkdownMutation.isPending) {
       return;
     }
 
@@ -1479,7 +1543,21 @@ function NetchatApp() {
     setSelectedArticleFilePath(filePath);
     setSelectionDraft(null);
     setStreamErrorMessage(null);
+    setPendingMineruPdfImport(null);
     clearBrowserSelection();
+
+    if (isPdfFilePath(filePath)) {
+      const mineruApiTokenConfigured = appSettingsQuery.data?.mineruApiTokenConfigured ?? false;
+      if (!mineruApiTokenConfigured) {
+        setIsSettingsModalOpen(true);
+        setStreamErrorMessage("Set a MinerU API Token in Settings before choosing a PDF.");
+        return;
+      }
+
+      convertPdfToMarkdownMutation.mutate(filePath);
+      return;
+    }
+
     createRootArticleMutation.mutate(filePath);
   }
 
@@ -2262,6 +2340,15 @@ function NetchatApp() {
   }, [knownWorkspaces, pendingWorkspaceDeletion]);
 
   useEffect(() => {
+    if (!isSettingsModalOpen) {
+      return;
+    }
+
+    setMineruApiTokenDraft(appSettingsQuery.data?.mineruApiToken ?? "");
+    setIsMineruApiTokenVisible(false);
+  }, [appSettingsQuery.data?.mineruApiToken, isSettingsModalOpen]);
+
+  useEffect(() => {
     if (!openNetMenuId) {
       return;
     }
@@ -2764,6 +2851,15 @@ function NetchatApp() {
   const workingDirectoryPath = formatWorkingDirectoryPath(workingDirectoryValue);
   const workspaceDisplayName = resolveWorkspaceName(workingDirectoryPath);
   const selectedWorkspaceFile = workspaceFileQuery.data ?? null;
+  const mineruApiTokenConfigured = appSettingsQuery.data?.mineruApiTokenConfigured ?? false;
+  const isArticleImportBusy = createRootArticleMutation.isPending || convertPdfToMarkdownMutation.isPending;
+  const articlePickerStatusLabel = convertPdfToMarkdownMutation.isPending
+    ? "Parsing PDF with MinerU..."
+    : createRootArticleMutation.isPending
+      ? pendingMineruPdfImport
+        ? "Loading parsed Markdown..."
+        : "Loading article..."
+      : null;
   const composerPlaceholder =
     !selectedMessage && !activeNet?.agentRuntimeId
       ? "Pick an agent below, then start the first turn..."
@@ -2809,6 +2905,7 @@ function NetchatApp() {
     label: selectedAgentOption?.runtimeLabel ?? activeAgentLabel,
     runtimeKind: selectedAgentOption?.runtimeKind ?? activeNet?.agentRuntimeKind ?? null,
   };
+  const settingsSaveErrorMessage = formatErrorMessage(updateAppSettingsMutation.error);
   const bubbleComposerAgentDisplay: AgentDisplayInfo = {
     label:
       sendTargetAgent?.runtimeLabel ??
@@ -2823,7 +2920,7 @@ function NetchatApp() {
         "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-none border border-[var(--node-border)] bg-[rgba(244,241,234,0.6)] text-[var(--text-main)] transition-colors hover:border-[var(--text-main)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.36)]",
         newRootComposerMode === "article" ? "border-[var(--text-main)] bg-[rgba(244,241,234,0.84)]" : "",
       )}
-      disabled={workspaceQuery.isLoading || !activeWorkspaceId || createRootArticleMutation.isPending}
+      disabled={workspaceQuery.isLoading || !activeWorkspaceId || isArticleImportBusy}
       title={newRootComposerMode === "article" ? "Switch back to conversation mode" : "Switch to article mode"}
       onClick={() => {
         setIsAgentDropdownOpen(false);
@@ -2940,7 +3037,7 @@ function NetchatApp() {
             isSidebarCollapsed ? "border-0 bg-transparent px-3 py-3" : "border-b border-[var(--text-main)] px-4 py-4",
           )}
         >
-          <div className={cn("flex shrink-0 gap-2", isSidebarCollapsed ? "items-center lg:flex-col" : "items-center justify-start")}>
+          <div className={cn("flex shrink-0 gap-2", isSidebarCollapsed ? "items-center lg:flex-col" : "items-center")}>
             <button
               type="button"
               className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
@@ -2964,13 +3061,35 @@ function NetchatApp() {
             </button>
             <button
               type="button"
-              className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-[var(--text-main)] text-white shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
-              disabled={isSwitchingNet || workspaceQuery.isLoading}
-              title="Create new net"
-              onClick={handleCreateNet}
+              className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-white text-[var(--text-main)] shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--bg-cream)]"
+              title="Settings"
+              onClick={() => setIsSettingsModalOpen(true)}
             >
-              {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+              <Settings2 className="size-4" />
             </button>
+            {isSidebarCollapsed ? (
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-[var(--text-main)] text-white shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                disabled={isSwitchingNet || workspaceQuery.isLoading}
+                title="Create new net"
+                onClick={handleCreateNet}
+              >
+                {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+              </button>
+            ) : (
+              <div className="ml-auto">
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 items-center justify-center border border-[var(--text-main)] bg-[var(--text-main)] text-white shadow-[6px_6px_0_rgba(26,26,26,0.06)] transition-colors hover:bg-[var(--block-slate)] disabled:cursor-not-allowed disabled:bg-[rgba(26,26,26,0.42)]"
+                  disabled={isSwitchingNet || workspaceQuery.isLoading}
+                  title="Create new net"
+                  onClick={handleCreateNet}
+                >
+                  {createNetMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+                </button>
+              </div>
+            )}
           </div>
 
         </div>
@@ -3389,8 +3508,11 @@ function NetchatApp() {
                     ) : (
                       <ArticleModeFilePicker
                         expandedDirectoryPaths={expandedExplorerDirectoryPaths}
-                        isBusy={createRootArticleMutation.isPending}
+                        isBusy={isArticleImportBusy}
+                        mineruApiTokenConfigured={mineruApiTokenConfigured}
+                        pendingPdfPath={pendingMineruPdfImport?.sourcePdfPath ?? null}
                         selectedFilePath={selectedArticleFilePath}
+                        statusLabel={articlePickerStatusLabel}
                         workspaceId={activeWorkspaceId}
                         onSelectFile={handleArticleFileSelect}
                         onToggleDirectory={toggleWorkspaceExplorerDirectory}
@@ -3644,6 +3766,27 @@ function NetchatApp() {
             onConfirm={confirmNetDeletion}
           />
         ) : null}
+
+        {isSettingsModalOpen ? (
+          <SettingsDialog
+            mineruApiTokenConfigured={mineruApiTokenConfigured}
+            mineruApiTokenValue={mineruApiTokenDraft}
+            isMineruApiTokenVisible={isMineruApiTokenVisible}
+            saveErrorMessage={settingsSaveErrorMessage}
+            isSaving={updateAppSettingsMutation.isPending}
+            onChangeMineruApiToken={setMineruApiTokenDraft}
+            onToggleMineruApiTokenVisibility={() => setIsMineruApiTokenVisible((current) => !current)}
+            onClose={() => {
+              if (updateAppSettingsMutation.isPending) {
+                return;
+              }
+
+              setIsSettingsModalOpen(false);
+              setIsMineruApiTokenVisible(false);
+            }}
+            onSave={() => updateAppSettingsMutation.mutate(mineruApiTokenDraft)}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -3681,6 +3824,9 @@ function ArticleModeFilePicker({
   expandedDirectoryPaths,
   selectedFilePath,
   isBusy,
+  statusLabel,
+  mineruApiTokenConfigured,
+  pendingPdfPath,
   onToggleDirectory,
   onSelectFile,
 }: {
@@ -3688,19 +3834,28 @@ function ArticleModeFilePicker({
   expandedDirectoryPaths: string[];
   selectedFilePath: string | null;
   isBusy: boolean;
+  statusLabel: string | null;
+  mineruApiTokenConfigured: boolean;
+  pendingPdfPath: string | null;
   onToggleDirectory: (directoryPath: string) => void;
   onSelectFile: (filePath: string) => void;
 }) {
   return (
-    <div className="pb-24">
+    <div className="pb-40">
       <div className="flex items-center justify-between gap-4 border-b border-[var(--node-border)] pb-3">
         <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">Select a file to start with</div>
         {isBusy ? (
           <div className="flex shrink-0 items-center gap-2 text-[12px] leading-5 text-[rgba(26,26,26,0.54)]">
             <LoaderCircle className="size-3.5 animate-spin" />
-            Loading article...
+            {statusLabel ?? "Loading article..."}
           </div>
         ) : null}
+      </div>
+
+      <div className="mt-4 border border-[var(--node-border)] bg-[rgba(244,241,234,0.38)] px-4 py-3 text-[13px] leading-6 text-[rgba(26,26,26,0.68)]">
+        PDFs are parsed just-in-time through MinerU, then their generated Markdown is loaded automatically.
+        {!mineruApiTokenConfigured ? " MinerU API Token is not configured yet." : ""}
+        {pendingPdfPath ? ` Parsing: ${pendingPdfPath}` : ""}
       </div>
 
       <div className="mt-4 max-h-[320px] overflow-y-auto border border-[var(--node-border)] bg-[rgba(244,241,234,0.3)] px-2 py-2">
@@ -4044,6 +4199,99 @@ function DeleteConfirmationDialog({
             onClick={onConfirm}
           >
             {isConfirming ? confirmPendingLabel : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsDialog({
+  mineruApiTokenConfigured,
+  mineruApiTokenValue,
+  isMineruApiTokenVisible,
+  saveErrorMessage,
+  isSaving,
+  onChangeMineruApiToken,
+  onToggleMineruApiTokenVisibility,
+  onClose,
+  onSave,
+}: {
+  mineruApiTokenConfigured: boolean;
+  mineruApiTokenValue: string;
+  isMineruApiTokenVisible: boolean;
+  saveErrorMessage: string | null;
+  isSaving: boolean;
+  onChangeMineruApiToken: (value: string) => void;
+  onToggleMineruApiTokenVisibility: () => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div
+      className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center bg-[rgba(26,26,26,0.2)] px-6"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-[520px] border border-[var(--text-main)] bg-white shadow-[14px_14px_0_rgba(26,26,26,0.1)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-[var(--node-border)] px-6 py-5">
+          <div className="text-[18px] font-medium leading-7 text-[var(--text-main)]">Settings</div>
+        </div>
+
+        <div className="px-6 py-5">
+          <label className="block">
+            <div className="text-[13px] font-medium uppercase tracking-[0.08em] text-[rgba(26,26,26,0.46)]">
+              MinerU API Token
+            </div>
+            <div className="relative mt-3">
+              <Input
+                autoFocus
+                className="h-12 rounded-none border-[var(--node-border)] px-4 pr-12 text-[15px] shadow-none focus:border-[var(--text-main)]"
+                placeholder={mineruApiTokenConfigured ? "Saved locally. Edit to replace, or clear it and save to remove it." : "Paste your MinerU API Token"}
+                type={isMineruApiTokenVisible ? "text" : "password"}
+                value={mineruApiTokenValue}
+                onChange={(event) => onChangeMineruApiToken(event.target.value)}
+              />
+              <button
+                type="button"
+                className="absolute inset-y-0 right-0 inline-flex w-12 items-center justify-center text-[rgba(26,26,26,0.5)] transition-colors hover:text-[var(--text-main)]"
+                title={isMineruApiTokenVisible ? "Hide token" : "Show token"}
+                onClick={onToggleMineruApiTokenVisibility}
+              >
+                {isMineruApiTokenVisible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+          </label>
+
+          <div className="mt-3 text-[13px] leading-6 text-[rgba(26,26,26,0.58)]">
+            PDFs selected in Article Mode are parsed with MinerU and loaded from the generated sibling Markdown file.
+          </div>
+
+          {saveErrorMessage ? (
+            <div className="mt-4 border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+              {saveErrorMessage}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid grid-cols-2 gap-px bg-[var(--node-border)]">
+          <button
+            type="button"
+            className="bg-white px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[var(--bg-cream)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+            disabled={isSaving}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="bg-[var(--bg-cream)] px-5 py-4 text-left text-[15px] font-medium text-[var(--text-main)] transition-colors hover:bg-[rgba(244,241,234,0.88)] disabled:cursor-not-allowed disabled:text-[rgba(26,26,26,0.38)]"
+            disabled={isSaving}
+            onClick={onSave}
+          >
+            {isSaving ? "Saving..." : "Save"}
           </button>
         </div>
       </div>
@@ -6957,6 +7205,10 @@ function splitWorkspaceFileContentLines(content: string) {
 function isMarkdownFilePath(filePath: string) {
   const normalizedPath = filePath.trim().toLowerCase();
   return normalizedPath.endsWith(".md") || normalizedPath.endsWith(".markdown");
+}
+
+function isPdfFilePath(filePath: string) {
+  return filePath.trim().toLowerCase().endsWith(".pdf");
 }
 
 function resolveWorkspacePaneLayout(input: {

@@ -34,6 +34,7 @@ import {
   WorkspaceStore,
 } from "./workspace-store.js";
 import { canPickWorkspaceFolder } from "./workspace-picker.js";
+import { convertPdfToMarkdownWithMineru } from "./mineru.js";
 
 type WorkspaceManifestSnapshot = {
   version?: unknown;
@@ -137,6 +138,34 @@ export class WorkspaceManagerStore {
       isBinary,
       truncated: targetStats.size > workspaceFilePreviewByteLimit,
       content: isBinary ? "" : previewBuffer.toString("utf8"),
+    };
+  }
+
+  async convertWorkspacePdfToMarkdown(filePath: string, token: string) {
+    const workspaceRootPath = this.activeStore.getWorkspaceState().workingDirectory;
+    const resolvedTarget = resolveWorkspaceTargetPath(workspaceRootPath, filePath);
+    const targetStats = statSync(resolvedTarget.absolutePath);
+    if (!targetStats.isFile()) {
+      throw new Error("The requested workspace path is not a file.");
+    }
+
+    if (path.extname(resolvedTarget.absolutePath).toLowerCase() !== ".pdf") {
+      throw new Error("Only PDF files can be parsed through MinerU.");
+    }
+
+    const result = await convertPdfToMarkdownWithMineru({
+      filePath: resolvedTarget.absolutePath,
+      token,
+    });
+    const markdownAbsolutePath = path.resolve(result.markdownFilePath);
+
+    if (!isWorkspaceDescendantPath(path.resolve(workspaceRootPath), markdownAbsolutePath)) {
+      throw new Error("The generated markdown path is outside the active workspace.");
+    }
+
+    return {
+      sourcePdfPath: resolvedTarget.relativePath,
+      markdownFilePath: normalizeWorkspaceRelativePath(path.relative(workspaceRootPath, markdownAbsolutePath)),
     };
   }
 
