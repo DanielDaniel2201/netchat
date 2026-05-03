@@ -117,6 +117,58 @@ textarea {
   user-select: none !important;
 }
 
+.selection-inline-trigger {
+  appearance: none;
+  border: 0;
+  border-bottom: 1.5px dashed rgba(194, 142, 85, 0.78);
+  border-radius: 0;
+  background: transparent;
+  color: transparent;
+  cursor: pointer !important;
+  padding: 0;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.selection-inline-trigger,
+.selection-inline-trigger * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+.netchat-flow .react-flow__node.message-node-shell .selection-inline-trigger,
+.netchat-flow .react-flow__node.message-node-shell .selection-inline-trigger * {
+  cursor: pointer !important;
+}
+
+.selection-inline-trigger:hover,
+.selection-inline-trigger-group:has(.selection-inline-trigger:hover) .selection-inline-trigger,
+.selection-inline-trigger:focus-visible {
+  border-bottom-color: var(--block-ochre);
+  background: rgba(194, 142, 85, 0.18);
+  box-shadow: none;
+  outline: none;
+}
+
+.selection-inline-trigger-expanded {
+  border-bottom-color: var(--text-main);
+  background: transparent;
+}
+
+.selection-inline-trigger-expanded:hover,
+.selection-inline-trigger-group:has(.selection-inline-trigger-expanded:hover) .selection-inline-trigger-expanded,
+.selection-inline-trigger-expanded:focus-visible {
+  border-bottom-color: var(--text-main);
+  background: rgba(194, 142, 85, 0.18);
+  box-shadow: none;
+}
+
+.selection-inline-trigger .react-flow__handle {
+  pointer-events: none;
+}
+
 .selection-toolbar {
   backdrop-filter: none;
 }

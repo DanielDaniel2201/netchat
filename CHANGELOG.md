@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-03
+
+- Replaced selection-branch gutter trigger pills with inline passage overlays on the selected source text, so clicking the dashed-underlined passage expands or collapses its branch without leaving the original UI style.
+- Merged inline branch trigger hitboxes by rendered line and ignored hidden KaTeX MathML text during anchor matching, so formula selections render as one clickable passage without spilling into following text.
+- Linked hover state across all line fragments for the same selected passage and added compact text matching for legacy KaTeX selections, so multi-line branch triggers highlight together and formula anchors resolve to the intended branch.
+
 ## 2026-05-01
 
 - Added a sidebar `Settings` action and modal with a persisted MinerU API token field, and rearranged the sidebar header so `Collapse`, `New workspace`, and `Settings` stay left-aligned while `New net` moves to the far right in expanded mode and becomes the fourth stacked icon in collapsed mode.

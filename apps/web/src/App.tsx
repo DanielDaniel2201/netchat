@@ -5314,17 +5314,17 @@ function SelectableMessage({
   );
   const scopedMarkdownComponents = useMemo(() => createMarkdownComponents({ sourcePath }), [sourcePath]);
   const hasAnchors = renderableAnchors.length > 0;
-  const [positionedAnchors, setPositionedAnchors] = useState<PositionedSelectionAnchor[]>([]);
+  const [inlineAnchorPlacements, setInlineAnchorPlacements] = useState<PositionedSelectionAnchor[]>([]);
 
   useEffect(() => {
     if (!hasAnchors || !contentRef.current) {
-      setPositionedAnchors((current) => (current.length === 0 ? current : []));
+      setInlineAnchorPlacements((current) => (current.length === 0 ? current : []));
       return;
     }
 
     const container = contentRef.current;
     const updateLayout = () => {
-      setPositionedAnchors((current) => {
+      setInlineAnchorPlacements((current) => {
         const previousLayoutById = new Map(
           current.map((anchor) => [
             anchor.id,
@@ -5334,7 +5334,7 @@ function SelectableMessage({
             },
           ]),
         );
-        const next = buildSelectionAnchorGutterLayout(container, renderableAnchors, previousLayoutById);
+        const next = buildSelectionAnchorInlineLayout(container, renderableAnchors, previousLayoutById);
         return arePositionedSelectionAnchorsEqual(current, next) ? current : next;
       });
     };
@@ -5353,28 +5353,9 @@ function SelectableMessage({
     };
   }, [hasAnchors, renderableAnchors]);
 
-  const positionedAnchorsById = useMemo(() => new Map(positionedAnchors.map((anchor) => [anchor.id, anchor])), [positionedAnchors]);
-  const anchorsForRender = useMemo(
-    () =>
-      renderableAnchors.map((anchor, index) => {
-        const positioned = positionedAnchorsById.get(anchor.id);
-        if (positioned) {
-          return positioned;
-        }
-
-        return {
-          ...anchor,
-          side: index % 2 === 0 ? ("left" as const) : ("right" as const),
-          top: 26 + index * 32,
-        };
-      }),
-    [positionedAnchorsById, renderableAnchors],
-  );
-  const leftAnchors = useMemo(() => anchorsForRender.filter((anchor) => anchor.side === "left"), [anchorsForRender]);
-  const rightAnchors = useMemo(() => anchorsForRender.filter((anchor) => anchor.side === "right"), [anchorsForRender]);
   const nodeInternalsSignature = useMemo(
-    () => JSON.stringify(anchorsForRender.map((anchor) => [anchor.id, anchor.handleId, anchor.side, anchor.top])),
-    [anchorsForRender],
+    () => JSON.stringify(inlineAnchorPlacements.map((anchor) => [anchor.id, anchor.handleId, anchor.side, anchor.top])),
+    [inlineAnchorPlacements],
   );
 
   useEffect(() => {
@@ -5475,55 +5456,7 @@ function SelectableMessage({
         });
       }}
     >
-      <div className={cn(hasAnchors ? "grid grid-cols-[116px_minmax(0,1fr)_116px] gap-2" : "")}>
-        {hasAnchors ? (
-          <div className="relative">
-            {leftAnchors.map((anchor) => (
-              <button
-                key={anchor.id}
-                type="button"
-                data-selection-anchor="true"
-                data-selection-anchor-id={anchor.id}
-                data-selection-anchor-side={anchor.side}
-                title={anchor.label}
-                className={cn(
-                  "nodrag nopan absolute left-1/2 z-10 inline-flex w-[112px] -translate-x-1/2 -translate-y-1/2 items-center justify-center border px-2 py-1 text-center text-[10px] leading-4 transition-colors",
-                  anchor.isExpanded
-                    ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
-                    : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
-                )}
-                style={{ top: anchor.top, minHeight: 26 }}
-                onMouseDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleAnchor(anchor);
-                }}
-              >
-                {renderAnchorHandles ? (
-                  <Handle
-                    id={anchor.handleId}
-                    type="source"
-                    position={anchor.side === "left" ? Position.Left : Position.Right}
-                    isConnectable={false}
-                    className={cn(
-                      "!h-1 !w-1 !border-0 !bg-transparent opacity-0",
-                      anchor.side === "left"
-                        ? "!left-0 !top-1/2 !-translate-x-0 !-translate-y-1/2"
-                        : "!right-0 !top-1/2 !translate-x-0 !-translate-y-1/2",
-                    )}
-                  />
-                ) : null}
-                <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-
+      <div className="relative min-w-0">
         <div ref={contentRef} data-selection-content="true" className="min-w-0">
           {renderMarkdown
             ? (
@@ -5540,55 +5473,66 @@ function SelectableMessage({
             : <div className="whitespace-pre-wrap break-words">{content}</div>}
         </div>
 
-        {hasAnchors ? (
-          <div className="relative">
-            {rightAnchors.map((anchor) => (
-              <button
-                key={anchor.id}
-                type="button"
-                data-selection-anchor="true"
-                data-selection-anchor-id={anchor.id}
-                data-selection-anchor-side={anchor.side}
-                title={anchor.label}
-                className={cn(
-                  "nodrag nopan absolute left-1/2 z-10 inline-flex w-[112px] -translate-x-1/2 -translate-y-1/2 items-center justify-center border px-2 py-1 text-center text-[10px] leading-4 transition-colors",
-                  anchor.isExpanded
-                    ? "border-[var(--text-main)] bg-[var(--text-main)] text-white"
-                    : "border-[var(--block-ochre)] bg-[rgba(255,249,242,0.98)] text-[var(--block-ochre)] hover:bg-[var(--block-ochre)] hover:text-white",
-                )}
-                style={{ top: anchor.top, minHeight: 26 }}
-                onMouseDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleAnchor(anchor);
-                }}
-              >
-                {renderAnchorHandles ? (
-                  <Handle
-                    id={anchor.handleId}
-                    type="source"
-                    position={anchor.side === "left" ? Position.Left : Position.Right}
-                    isConnectable={false}
-                    className={cn(
-                      "!h-1 !w-1 !border-0 !bg-transparent opacity-0",
-                      anchor.side === "left"
-                        ? "!left-0 !top-1/2 !-translate-x-0 !-translate-y-1/2"
-                        : "!right-0 !top-1/2 !translate-x-0 !-translate-y-1/2",
-                    )}
-                  />
-                ) : null}
-                <span className="line-clamp-2 whitespace-pre-wrap break-words">{anchor.label}</span>
-              </button>
+        {inlineAnchorPlacements.length > 0 ? (
+          <div className="pointer-events-none absolute inset-0 z-10">
+            {inlineAnchorPlacements.map((anchor) => (
+              <div key={anchor.id} className="selection-inline-trigger-group pointer-events-none absolute inset-0">
+                {anchor.rects.map((rect, rectIndex) => {
+                  const isPrimaryRect = rectIndex === 0;
+                  return (
+                    <button
+                      key={`${anchor.id}-${rectIndex}`}
+                      type="button"
+                      data-selection-anchor="true"
+                      data-selection-anchor-id={isPrimaryRect ? anchor.id : undefined}
+                      data-selection-anchor-side={isPrimaryRect ? anchor.side : undefined}
+                      aria-label={`${anchor.isExpanded ? "Collapse" : "Expand"} branch from selected passage`}
+                      aria-pressed={anchor.isExpanded}
+                      title={anchor.label}
+                      className={cn(
+                        "selection-inline-trigger nodrag nopan pointer-events-auto absolute",
+                        anchor.isExpanded ? "selection-inline-trigger-expanded" : "",
+                      )}
+                      style={{
+                        left: rect.left,
+                        top: rect.top,
+                        width: Math.max(rect.width, 8),
+                        height: Math.max(rect.height, 18),
+                      }}
+                      onMouseDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleAnchor(anchor);
+                      }}
+                    >
+                      {isPrimaryRect && renderAnchorHandles ? (
+                        <Handle
+                          id={anchor.handleId}
+                          type="source"
+                          position={anchor.side === "left" ? Position.Left : Position.Right}
+                          isConnectable={false}
+                          className={cn(
+                            "!h-1 !w-1 !border-0 !bg-transparent opacity-0",
+                            anchor.side === "left"
+                              ? "!left-0 !top-1/2 !-translate-x-0 !-translate-y-1/2"
+                              : "!right-0 !top-1/2 !translate-x-0 !-translate-y-1/2",
+                          )}
+                        />
+                      ) : null}
+                      <span className="sr-only">{anchor.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             ))}
           </div>
         ) : null}
       </div>
-      {hasAnchors ? <div className="mt-2 border-t border-[rgba(26,26,26,0.08)]" /> : null}
     </div>
   );
 }
@@ -5598,9 +5542,17 @@ type RenderableSelectionAnchor = MessageSelectionAnchor & {
   endOffset: number | null;
 };
 
+type InlineSelectionAnchorRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 type PositionedSelectionAnchor = RenderableSelectionAnchor & {
   side: "left" | "right";
   top: number;
+  rects: InlineSelectionAnchorRect[];
 };
 
 function getRenderableSelectionAnchors(content: string, anchors: MessageSelectionAnchor[]): RenderableSelectionAnchor[] {
@@ -5641,7 +5593,7 @@ function getRenderableSelectionAnchors(content: string, anchors: MessageSelectio
     });
 }
 
-function buildSelectionAnchorGutterLayout(
+function buildSelectionAnchorInlineLayout(
   container: HTMLElement,
   anchors: RenderableSelectionAnchor[],
   previousLayoutById?: Map<string, { side: "left" | "right"; top: number }>,
@@ -5650,69 +5602,45 @@ function buildSelectionAnchorGutterLayout(
   const fullText = textNodes.map((node) => node.textContent ?? "").join("");
   const totalLength = fullText.length;
   const containerRect = container.getBoundingClientRect();
+  const containerWidth = container.offsetWidth || Math.round(containerRect.width);
   const containerHeight = container.offsetHeight || Math.round(containerRect.height);
-  const verticalScale = containerHeight > 0 && containerRect.height > 0 ? containerRect.height / containerHeight : 1;
+  const horizontalScale = containerWidth > 0 && containerRect.width > 0 ? containerWidth / containerRect.width : 1;
+  const verticalScale = containerHeight > 0 && containerRect.height > 0 ? containerHeight / containerRect.height : 1;
   const maxTop = Math.max(20, containerHeight - 20);
 
   const positioned: PositionedSelectionAnchor[] = anchors.map((anchor, index) => {
-    const anchorRect = resolveSelectionAnchorRect(textNodes, fullText, totalLength, anchor);
+    const anchorRects = resolveSelectionAnchorRects(textNodes, fullText, totalLength, anchor);
+    const firstRect = anchorRects[0] ?? null;
     const previousLayout = previousLayoutById?.get(anchor.id);
-    const centerX = anchorRect ? anchorRect.left + anchorRect.width / 2 : containerRect.left + containerRect.width / 2;
+    const centerX = firstRect ? firstRect.left + firstRect.width / 2 : containerRect.left + containerRect.width / 2;
     const side: "left" | "right" =
       previousLayout?.side ?? (centerX <= containerRect.left + containerRect.width / 2 ? "left" : "right");
-    const baseTop = anchorRect
-      ? (anchorRect.top - containerRect.top + Math.max(anchorRect.height / 2, 10)) / verticalScale
+    const rects = anchorRects.map((rect) => {
+      const left = (rect.left - containerRect.left) * horizontalScale;
+      const top = (rect.top - containerRect.top) * verticalScale;
+      const width = rect.width * horizontalScale;
+      const height = rect.height * verticalScale;
+
+      return {
+        left: Math.round(clamp(left, 0, Math.max(0, containerWidth - 8))),
+        top: Math.round(clamp(top, 0, Math.max(0, containerHeight - 18))),
+        width: Math.round(clamp(width, 8, Math.max(8, containerWidth - left))),
+        height: Math.round(clamp(height, 18, 42)),
+      };
+    });
+    const baseTop = rects[0]
+      ? rects[0].top + Math.max(rects[0].height / 2, 10)
       : previousLayout?.top ?? 28 + index * 36;
 
     return {
       ...anchor,
       side,
       top: Math.round(clamp(baseTop, 20, maxTop)),
+      rects,
     };
   });
 
-  const left = normalizeGutterAnchorTops(positioned.filter((item) => item.side === "left"), containerHeight);
-  const right = normalizeGutterAnchorTops(positioned.filter((item) => item.side === "right"), containerHeight);
-  return [...left, ...right];
-}
-
-function normalizeGutterAnchorTops<T extends { id: string; top: number }>(items: T[], containerHeight: number): T[] {
-  if (items.length <= 1) {
-    return items;
-  }
-
-  const minTop = 20;
-  const maxTop = Math.max(minTop, containerHeight - 20);
-  const minGap = 30;
-  const sorted = [...items].sort((left, right) => {
-    if (left.top !== right.top) {
-      return left.top - right.top;
-    }
-
-    return left.id.localeCompare(right.id);
-  });
-
-  let cursor = minTop;
-  for (const item of sorted) {
-    item.top = clamp(item.top, cursor, maxTop);
-    cursor = item.top + minGap;
-  }
-
-  const overflow = cursor - minGap - maxTop;
-  if (overflow > 0) {
-    let carry = overflow;
-    for (let index = sorted.length - 1; index >= 0; index -= 1) {
-      const floor = index > 0 ? sorted[index - 1].top + minGap : minTop;
-      const nextTop = Math.max(floor, sorted[index].top - carry);
-      carry -= sorted[index].top - nextTop;
-      sorted[index].top = nextTop;
-      if (carry <= 0) {
-        break;
-      }
-    }
-  }
-
-  return sorted;
+  return positioned.filter((anchor) => anchor.rects.length > 0);
 }
 
 function arePositionedSelectionAnchorsEqual(
@@ -5740,7 +5668,33 @@ function arePositionedSelectionAnchorsEqual(
       leftAnchor.endOffset !== rightAnchor.endOffset ||
       leftAnchor.isExpanded !== rightAnchor.isExpanded ||
       leftAnchor.side !== rightAnchor.side ||
-      leftAnchor.top !== rightAnchor.top
+      leftAnchor.top !== rightAnchor.top ||
+      !areInlineSelectionAnchorRectsEqual(leftAnchor.rects, rightAnchor.rects)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function areInlineSelectionAnchorRectsEqual(left: InlineSelectionAnchorRect[], right: InlineSelectionAnchorRect[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftRect = left[index];
+    const rightRect = right[index];
+    if (!rightRect) {
+      return false;
+    }
+
+    if (
+      leftRect.left !== rightRect.left ||
+      leftRect.top !== rightRect.top ||
+      leftRect.width !== rightRect.width ||
+      leftRect.height !== rightRect.height
     ) {
       return false;
     }
@@ -5772,26 +5726,26 @@ function areMeasuredSelectionAnchorLayoutsEqual(
   return true;
 }
 
-function resolveSelectionAnchorRect(
+function resolveSelectionAnchorRects(
   textNodes: Text[],
   fullText: string,
   totalLength: number,
   anchor: RenderableSelectionAnchor,
 ) {
   if (textNodes.length === 0 || totalLength === 0) {
-    return null;
+    return [];
   }
 
   const resolvedOffsets = resolveSelectionAnchorOffsets(fullText, totalLength, anchor);
   if (!resolvedOffsets) {
-    return null;
+    return [];
   }
 
   const { startOffset: normalizedStart, endOffset: normalizedEnd } = resolvedOffsets;
   const startPosition = locateTextOffset(textNodes, normalizedStart);
   const endPosition = locateTextOffset(textNodes, normalizedEnd);
   if (!startPosition || !endPosition) {
-    return null;
+    return [];
   }
 
   const range = document.createRange();
@@ -5799,16 +5753,19 @@ function resolveSelectionAnchorRect(
     range.setStart(startPosition.node, startPosition.offset);
     range.setEnd(endPosition.node, endPosition.offset);
   } catch {
-    return null;
+    return [];
   }
 
-  const rangeRects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
-  const firstRect = rangeRects[0] ?? range.getBoundingClientRect();
-  if (!firstRect || (firstRect.width <= 0 && firstRect.height <= 0)) {
-    return null;
+  const rawRangeRects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+  const rangeRects = selectedTextNodesAllMatchSelector(textNodes, normalizedStart, normalizedEnd, ".katex")
+    ? mergeSelectionAnchorRectsToBoundingBox(rawRangeRects)
+    : mergeSelectionAnchorRectsByLine(rawRangeRects);
+  const fallbackRect = range.getBoundingClientRect();
+  if (rangeRects.length === 0 && fallbackRect.width > 0 && fallbackRect.height > 0) {
+    return [fallbackRect];
   }
 
-  return firstRect;
+  return rangeRects;
 }
 
 function resolveSelectionAnchorOffsets(
@@ -5836,15 +5793,12 @@ function resolveSelectionAnchorOffsets(
     return preferredMatch;
   }
 
-  const foundOffset = findClosestTextMatchOffset(fullText, normalizedLabel, preferredMatch?.startOffset ?? 0);
-  if (foundOffset < 0) {
+  const foundMatch = findClosestTextMatch(fullText, normalizedLabel, preferredMatch?.startOffset ?? 0);
+  if (!foundMatch) {
     return preferredMatch;
   }
 
-  return {
-    startOffset: foundOffset,
-    endOffset: foundOffset + normalizedLabel.length,
-  };
+  return foundMatch;
 }
 
 function areAnchorTextsEquivalent(left: string, right: string) {
@@ -5855,8 +5809,8 @@ function normalizeAnchorText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function findClosestTextMatchOffset(fullText: string, query: string, targetOffset: number) {
-  const matches: number[] = [];
+function findClosestTextMatch(fullText: string, query: string, targetOffset: number) {
+  const exactMatches: Array<{ startOffset: number; endOffset: number }> = [];
   let searchStart = 0;
 
   while (searchStart <= fullText.length) {
@@ -5865,25 +5819,262 @@ function findClosestTextMatchOffset(fullText: string, query: string, targetOffse
       break;
     }
 
-    matches.push(matchIndex);
+    exactMatches.push({
+      startOffset: matchIndex,
+      endOffset: matchIndex + query.length,
+    });
     searchStart = matchIndex + 1;
   }
 
-  if (matches.length === 0) {
-    return -1;
+  if (exactMatches.length > 0) {
+    return pickClosestTextMatch(exactMatches, targetOffset);
   }
 
+  const normalizedQuery = normalizeAnchorText(query);
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  const normalizedFullText = normalizeTextWithOffsetMap(fullText);
+  const normalizedMatches: Array<{ startOffset: number; endOffset: number }> = [];
+  let normalizedSearchStart = 0;
+
+  while (normalizedSearchStart <= normalizedFullText.text.length) {
+    const matchIndex = normalizedFullText.text.indexOf(normalizedQuery, normalizedSearchStart);
+    if (matchIndex < 0) {
+      break;
+    }
+
+    const startOffset = normalizedFullText.offsets[matchIndex];
+    const lastOffset = normalizedFullText.offsets[matchIndex + normalizedQuery.length - 1];
+    if (typeof startOffset === "number" && typeof lastOffset === "number") {
+      normalizedMatches.push({
+        startOffset,
+        endOffset: lastOffset + 1,
+      });
+    }
+    normalizedSearchStart = matchIndex + 1;
+  }
+
+  if (normalizedMatches.length > 0) {
+    return pickClosestTextMatch(normalizedMatches, targetOffset);
+  }
+
+  const compactQuery = compactAnchorText(query);
+  if (!compactQuery) {
+    return null;
+  }
+
+  const compactFullText = compactTextWithOffsetMap(fullText);
+  const compactMatches: Array<{ startOffset: number; endOffset: number }> = [];
+  let compactSearchStart = 0;
+
+  while (compactSearchStart <= compactFullText.text.length) {
+    const matchIndex = compactFullText.text.indexOf(compactQuery, compactSearchStart);
+    if (matchIndex < 0) {
+      break;
+    }
+
+    const startOffset = compactFullText.offsets[matchIndex];
+    const lastOffset = compactFullText.offsets[matchIndex + compactQuery.length - 1];
+    if (typeof startOffset === "number" && typeof lastOffset === "number") {
+      compactMatches.push({
+        startOffset,
+        endOffset: lastOffset + 1,
+      });
+    }
+    compactSearchStart = matchIndex + 1;
+  }
+
+  return compactMatches.length > 0 ? pickClosestTextMatch(compactMatches, targetOffset) : null;
+}
+
+function pickClosestTextMatch(
+  matches: Array<{ startOffset: number; endOffset: number }>,
+  targetOffset: number,
+) {
   return matches.reduce((bestMatch, currentMatch) =>
-    Math.abs(currentMatch - targetOffset) < Math.abs(bestMatch - targetOffset) ? currentMatch : bestMatch,
+    Math.abs(currentMatch.startOffset - targetOffset) < Math.abs(bestMatch.startOffset - targetOffset)
+      ? currentMatch
+      : bestMatch,
   );
 }
 
+function normalizeTextWithOffsetMap(value: string) {
+  let text = "";
+  const offsets: number[] = [];
+  let pendingWhitespaceOffset: number | null = null;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (/\s/.test(char)) {
+      if (text.length > 0 && pendingWhitespaceOffset === null) {
+        pendingWhitespaceOffset = index;
+      }
+      continue;
+    }
+
+    if (pendingWhitespaceOffset !== null && text.length > 0) {
+      text += " ";
+      offsets.push(pendingWhitespaceOffset);
+      pendingWhitespaceOffset = null;
+    }
+
+    text += char;
+    offsets.push(index);
+  }
+
+  return { text, offsets };
+}
+
+function compactAnchorText(value: string) {
+  return value.replace(/[\s\u200b-\u200d\ufeff]/g, "");
+}
+
+function compactTextWithOffsetMap(value: string) {
+  let text = "";
+  const offsets: number[] = [];
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (/[\s\u200b-\u200d\ufeff]/.test(char)) {
+      continue;
+    }
+
+    text += char;
+    offsets.push(index);
+  }
+
+  return { text, offsets };
+}
+
+function mergeSelectionAnchorRectsByLine(rects: DOMRect[]) {
+  if (rects.length <= 1) {
+    return rects;
+  }
+
+  type MutableRect = { left: number; top: number; right: number; bottom: number };
+  const sortedRects = [...rects].sort((left, right) => {
+    if (Math.abs(left.top - right.top) > 2) {
+      return left.top - right.top;
+    }
+
+    return left.left - right.left;
+  });
+  const mergedRects: MutableRect[] = [];
+
+  for (const rect of sortedRects) {
+    const lastRect = mergedRects.at(-1);
+    const overlapsPreviousLine =
+      lastRect &&
+      rect.top <= lastRect.bottom + 2 &&
+      rect.bottom >= lastRect.top - 2;
+
+    if (!lastRect || !overlapsPreviousLine) {
+      mergedRects.push({
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+      });
+      continue;
+    }
+
+    lastRect.left = Math.min(lastRect.left, rect.left);
+    lastRect.top = Math.min(lastRect.top, rect.top);
+    lastRect.right = Math.max(lastRect.right, rect.right);
+    lastRect.bottom = Math.max(lastRect.bottom, rect.bottom);
+  }
+
+  return mergedRects.map((rect) => DOMRect.fromRect({
+    x: rect.left,
+    y: rect.top,
+    width: rect.right - rect.left,
+    height: rect.bottom - rect.top,
+  }));
+}
+
+function mergeSelectionAnchorRectsToBoundingBox(rects: DOMRect[]) {
+  if (rects.length <= 1) {
+    return rects;
+  }
+
+  const bounds = rects.reduce(
+    (currentBounds, rect) => ({
+      left: Math.min(currentBounds.left, rect.left),
+      top: Math.min(currentBounds.top, rect.top),
+      right: Math.max(currentBounds.right, rect.right),
+      bottom: Math.max(currentBounds.bottom, rect.bottom),
+    }),
+    {
+      left: Number.POSITIVE_INFINITY,
+      top: Number.POSITIVE_INFINITY,
+      right: Number.NEGATIVE_INFINITY,
+      bottom: Number.NEGATIVE_INFINITY,
+    },
+  );
+
+  if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)) {
+    return [];
+  }
+
+  return [
+    DOMRect.fromRect({
+      x: bounds.left,
+      y: bounds.top,
+      width: bounds.right - bounds.left,
+      height: bounds.bottom - bounds.top,
+    }),
+  ];
+}
+
+function selectedTextNodesAllMatchSelector(
+  textNodes: Text[],
+  startOffset: number,
+  endOffset: number,
+  selector: string,
+) {
+  let cursor = 0;
+  let sawSelectedTextNode = false;
+
+  for (const node of textNodes) {
+    const nodeText = node.textContent ?? "";
+    const nodeStartOffset = cursor;
+    const nodeEndOffset = cursor + nodeText.length;
+    cursor = nodeEndOffset;
+
+    if (nodeEndOffset <= startOffset || nodeStartOffset >= endOffset || !nodeText.trim()) {
+      continue;
+    }
+
+    sawSelectedTextNode = true;
+    if (!node.parentElement?.closest(selector)) {
+      return false;
+    }
+  }
+
+  return sawSelectedTextNode;
+}
+
 function collectTextNodes(container: HTMLElement) {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!(node instanceof Text) || (node.textContent?.length ?? 0) === 0) {
+        return NodeFilter.FILTER_REJECT;
+      }
+
+      const parentElement = node.parentElement;
+      if (!parentElement || parentElement.closest(".katex-mathml, .sr-only, [hidden]")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
   const textNodes: Text[] = [];
   let current = walker.nextNode();
   while (current) {
-    if (current instanceof Text && (current.textContent?.length ?? 0) > 0) {
+    if (current instanceof Text) {
       textNodes.push(current);
     }
     current = walker.nextNode();
