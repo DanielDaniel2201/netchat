@@ -213,6 +213,8 @@ Update the changelog after each major code change
 
 ## Testing and Validation
 
-After implementing a new feature or fixing a bug, validate the result using the `agent-browser` CLI.
+After implementing a new feature or fixing a bug, choose the validation approach based on the task itself.
 
-If the new implementation is unrelated to agent runtime, use Claude Code by default.
+If user validation is likely faster, simpler, or more reliable, especially for subtle UX, visual polish, interaction feel, or subjective behavior, recommend that the user validate it directly and give concise verification steps.
+
+If agent-run validation is likely faster and sufficiently reliable, explain briefly how the agent plans to verify it using Claude Code and the `agent-browser` CLI. Only start automated validation after the user agrees.
